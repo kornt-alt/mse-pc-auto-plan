@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const sql = require('mssql');
+const mysql = require('mysql2/promise');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
@@ -16,22 +16,17 @@ app.use('/MECHATOOLINGPS', express.static(path.join(__dirname, 'build')));
 app.use('/MECHATOOLINGPS/static', express.static(path.join(__dirname, 'build/static')));
 
 // Database configuration
-const dbConfig = {
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  server: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT) || 1433,
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000,
-  },
-  options: {
-    encrypt: true,
-    trustServerCertificate: process.env.NODE_ENV !== 'production',
-  },
-};
+  port: parseInt(process.env.DB_PORT) || 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  charset: 'utf8mb4',
+});
 
 // JWT secret
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -40,12 +35,11 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
-// Connect to database
-const poolPromise = new sql.ConnectionPool(dbConfig)
-  .connect()
-  .then((pool) => {
-    console.log('Connected to SQL Server database');
-    return pool;
+// Verify DB connection at startup
+pool.getConnection()
+  .then((conn) => {
+    console.log('Connected to MariaDB database');
+    conn.release();
   })
   .catch((err) => {
     console.error('Database connection error:', err);
@@ -90,18 +84,10 @@ const logAction = async (action, targetId, targetType, comment) => {
       throw new Error('Action and targetType are required');
     }
 
-    const pool = await poolPromise;
-    const request = new sql.Request(pool);
-
-    await request
-      .input('action', sql.NVarChar, action)
-      .input('targetId', sql.NVarChar, String(targetId))
-      .input('targetType', sql.NVarChar, targetType)
-      .input('comment', sql.NVarChar, comment || null)
-      .query(
-        'INSERT INTO logs (action, target_id, target_type, comment, created_at) ' +
-        'VALUES (@action, @targetId, @targetType, @comment, GETDATE())'
-      );
+    await pool.execute(
+      'INSERT INTO logs (action, target_id, target_type, comment, created_at) VALUES (?, ?, ?, ?, NOW())',
+      [action, String(targetId), targetType, comment || null]
+    );
 
     return true;
   } catch (err) {
@@ -117,83 +103,48 @@ app.post('/api/register', async (req, res) => {
   try {
     const { userid, username, password, name, role, division } = req.body;
 
-    // Validate required fields
     if (!userid || !username || !password || !name) {
       return res.status(400).json({ message: 'User ID, username, password, name are required' });
     }
 
-    // Validate password length
     if (password.length < 6) {
       return res.status(400).json({ message: 'Password must be at least 6 characters long' });
     }
 
-    // Validate username length
     if (username.length < 3) {
       return res.status(400).json({ message: 'Username must be at least 3 characters long' });
     }
 
-    // Check for existing user
-    const pool = await poolPromise;
-    const request = pool.request();
-    const existingUser = await request
-      .input('checkUsername', sql.VarChar, username)
-      .input('checkUserid', sql.VarChar, userid)
-      .query('SELECT userid, username FROM Users WHERE username = @checkUsername OR userid = @checkUserid');
+    const [existing] = await pool.execute(
+      'SELECT userid, username FROM Users WHERE username = ? OR userid = ?',
+      [username, userid]
+    );
 
-    if (existingUser.recordset.length > 0) {
-      const existing = existingUser.recordset[0];
-      if (existing.username === username) {
+    if (existing.length > 0) {
+      if (existing[0].username === username) {
         return res.status(409).json({ message: 'Username already exists' });
       }
-      if (existing.userid === userid) {
+      if (existing[0].userid === userid) {
         return res.status(409).json({ message: 'User ID already exists' });
       }
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-    // Insert user into database
-    const insertRequest = pool.request();
-    await insertRequest
-      .input('userid', sql.VarChar, userid)
-      .input('username', sql.VarChar, username)
-      .input('password', sql.VarChar, hashedPassword)
-      .input('name', sql.NVarChar, name)
-      .input('role', sql.NVarChar, role)
-      .input('division', sql.NVarChar, division)
-      .query(
-        'INSERT INTO Users (userid, username, password, name, role, division) ' +
-        'VALUES (@userid, @username, @password, @name, @role, @division)'
-      );
-
-    // Log successful registration
-    await logAction(
-      'REGISTER',
-      userid,
-      'USER',
-      `User ${username} (${userid}) registered successfully with role(s): ${role}`
+    await pool.execute(
+      'INSERT INTO Users (userid, username, password, name, role, division) VALUES (?, ?, ?, ?, ?, ?)',
+      [userid, username, hashedPassword, name, role, division]
     );
 
-    // Send success response
+    await logAction('REGISTER', userid, 'USER', `User ${username} (${userid}) registered successfully with role(s): ${role}`);
+
     res.status(201).json({
       message: 'Registration successful',
-      user: {
-        userid,
-        username,
-        name,
-        role,
-        division
-      }
+      user: { userid, username, name, role, division },
     });
   } catch (err) {
     console.error('Register error:', err);
     await logAction('REGISTER_ERROR', null, 'USER', `Error during registration: ${err.message}`);
-
-    if (err.code === 'EREQUEST') {
-      return res.status(400).json({ message: 'Database validation error' });
-    }
-
     res.status(500).json({ message: 'Failed to register user' });
   }
 });
@@ -207,19 +158,14 @@ app.post('/api/login', async (req, res) => {
       return res.status(400).json({ message: 'Username and password are required' });
     }
 
-    const pool = await poolPromise;
-    const request = pool.request();
+    const [rows] = await pool.execute('SELECT * FROM Users WHERE username = ?', [username]);
 
-    const result = await request
-      .input('username', sql.VarChar, username)
-      .query('SELECT * FROM Users WHERE username = @username');
-
-    if (result.recordset.length === 0) {
+    if (rows.length === 0) {
       await logAction('LOGIN_ATTEMPT', username, 'USER', `Failed login attempt for username: ${username} - User not found`);
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
-    const user = result.recordset[0];
+    const user = rows[0];
 
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
@@ -228,12 +174,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign(
-      { 
-        userid: user.userid, 
-        username: user.username,
-        division: user.division, 
-        role: user.role
-      },
+      { userid: user.userid, username: user.username, division: user.division, role: user.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -242,13 +183,8 @@ app.post('/api/login', async (req, res) => {
 
     res.json({
       token,
-      user: { 
-        userid: user.userid, 
-        username: user.username,
-        name: user.name, 
-        role: user.role,
-      },
-      message: 'Login successful'
+      user: { userid: user.userid, username: user.username, name: user.name, role: user.role },
+      message: 'Login successful',
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -266,32 +202,24 @@ app.post('/api/login_rfid', async (req, res) => {
       return res.status(400).json({ message: 'User ID are required' });
     }
 
-    const pool = await poolPromise;
-    const request = pool.request();
+    const [rows] = await pool.execute('SELECT * FROM Users WHERE userid = ?', [userid]);
 
-    const result = await request
-      .input('userid', sql.VarChar, userid)
-      .query('SELECT * FROM Users WHERE userid = @userid');
-
-    if (result.recordset.length === 0) {
+    if (rows.length === 0) {
       await logAction('LOGIN_ATTEMPT', userid, 'USER', `Failed login for userid: ${userid}`);
       return res.status(401).json({ message: 'User not found' });
     }
 
-    const user = result.recordset[0];
+    const user = rows[0];
 
     const token = jwt.sign(
-      { userid: user.userid, role: user.role, name: user.name,},
+      { userid: user.userid, role: user.role, name: user.name },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     await logAction('LOGIN_SUCCESS', userid, 'USER', `User ${userid} logged in successfully`);
 
-    res.json({
-      token,
-      user: { userid: user.userid, name: user.name, role: user.role},
-    });
+    res.json({ token, user: { userid: user.userid, name: user.name, role: user.role } });
   } catch (err) {
     console.error('Login error:', err);
     await logAction('LOGIN_ERROR', null, 'USER', `Error during login: ${err.message}`);
@@ -304,42 +232,29 @@ app.get('/api/user/:cardId', verifyToken, async (req, res) => {
   try {
     const { cardId } = req.params;
 
-    if (!cardId) {
-      return res.status(400).json({ message: 'Card ID is required' });
-    }
+    const [rows] = await pool.execute(
+      'SELECT userid, username, name, division, role, org FROM Users WHERE userid = ?',
+      [cardId]
+    );
 
-    const pool = await poolPromise;
-    const request = pool.request();
-
-    const result = await request
-      .input('cardId', sql.VarChar, cardId)
-      .query('SELECT userid, username, name, division, role, org FROM Users WHERE userid = @cardId');
-
-    if (result.recordset.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: 'User not found for this Card ID' });
     }
 
-    const user = result.recordset[0];
-    res.json({
-      userid: user.userid,
-      username: user.username,
-      name: user.name,
-      division: user.division,
-      role: user.role,
-      org: user.org,
-    });
+    const user = rows[0];
+    res.json({ userid: user.userid, username: user.username, name: user.name, division: user.division, role: user.role, org: user.org });
   } catch (err) {
     console.error('Error fetching user by Card ID:', err);
     res.status(500).json({ message: 'Failed to fetch user information' });
   }
 });
 
-// New endpoint: Update user details
+// Update user details
 app.patch('/api/user/:userid', verifyToken, requireADMIN, async (req, res) => {
   try {
     const { userid } = req.params;
     const { username, division, name, role, password } = req.body;
-    
+
     if (!username || !name) {
       return res.status(400).json({ message: 'Username and name are required' });
     }
@@ -352,66 +267,41 @@ app.patch('/api/user/:userid', verifyToken, requireADMIN, async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 6 characters long' });
     }
 
-    const pool = await poolPromise;
-    const request = pool.request();
+    const [existingRows] = await pool.execute(
+      'SELECT userid FROM Users WHERE username = ? AND userid != ?',
+      [username, userid]
+    );
 
-    // ตรวจสอบ username ซ้ำ (ยกเว้นตัวเอง)
-    const existingUser = await request
-      .input('checkUsername', sql.VarChar, username)
-      .input('checkUserid', sql.VarChar, userid)
-      .query('SELECT userid FROM Users WHERE username = @checkUsername AND userid != @checkUserid');
-
-    if (existingUser.recordset.length > 0) {
+    if (existingRows.length > 0) {
       return res.status(409).json({ message: 'Username already exists' });
     }
 
-    // เริ่มสร้าง query
-    const updateFields = [];
-    const now = new Date();
-    const thaiTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const updateFields = ['username = ?', 'division = ?', 'name = ?', 'role = ?', 'updated_at = NOW()'];
+    const params = [username, division, name, role];
 
-    updateFields.push('username = @username');
-    updateFields.push('division = @division');
-    updateFields.push('name = @name');
-    updateFields.push('role = @role');
-    updateFields.push('updated_at = @updated_at');
-
-    request.input('username', sql.VarChar, username);
-    request.input('division', sql.NVarChar, division);
-    request.input('name', sql.NVarChar, name);
-    request.input('role', sql.NVarChar, role);
-    request.input('updated_at', sql.DateTime, thaiTime);
-    request.input('userid', sql.VarChar, userid);
-
-    // อัปเดตรหัสผ่านถ้ามี
     if (password) {
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-      updateFields.push('password = @password');
-      request.input('password', sql.VarChar, hashedPassword);
+      updateFields.push('password = ?');
+      params.push(hashedPassword);
     }
 
-    const query = `
-      UPDATE Users
-      SET ${updateFields.join(', ')}
-      WHERE userid = @userid;
+    params.push(userid);
 
-      SELECT userid, username, division, name, role, created_at, updated_at
-      FROM Users
-      WHERE userid = @userid;
-    `;
+    await pool.execute(
+      `UPDATE Users SET ${updateFields.join(', ')} WHERE userid = ?`,
+      params
+    );
 
-    const result = await request.query(query);
+    const [rows] = await pool.execute(
+      'SELECT userid, username, division, name, role, created_at, updated_at FROM Users WHERE userid = ?',
+      [userid]
+    );
 
-    if (result.recordset.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // ส่ง response กลับ
-    return res.json({
-      message: 'User updated successfully',
-      user: result.recordset[0]  // ส่ง user กลับไป
-    });
-
+    return res.json({ message: 'User updated successfully', user: rows[0] });
   } catch (err) {
     console.error('Error updating user:', err);
     await logAction('UPDATE_USER_ERROR', req.params.userid, 'USER', `Error updating user: ${err.message}`);
@@ -436,35 +326,27 @@ app.post('/api/log', verifyToken, async (req, res) => {
   }
 });
 
+// Get current user profile
 app.get('/api/profile', verifyToken, async (req, res) => {
   try {
-    const pool = await poolPromise;
-    const request = pool.request();
+    const [rows] = await pool.execute(
+      'SELECT userid, username, name, division, email, org, role FROM Users WHERE userid = ?',
+      [req.user.userid]
+    );
 
-    const result = await request
-      .input('userid', sql.VarChar, req.user.userid)
-      .query('SELECT userid, username, name, division, email, org, role FROM Users WHERE userid = @userid');
-
-    if (result.recordset.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const user = result.recordset[0];
-    res.json({
-      userid: user.userid,
-      username: user.username,
-      name: user.name,
-      division: user.division,
-      email: user.email,
-      org: user.org,
-      role: user.role
-    });
+    const user = rows[0];
+    res.json({ userid: user.userid, username: user.username, name: user.name, division: user.division, email: user.email, org: user.org, role: user.role });
   } catch (err) {
     console.error('Error fetching user profile:', err);
     res.status(500).json({ message: 'Failed to fetch user profile' });
   }
 });
 
+// Change password
 app.post('/api/change-password', verifyToken, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -477,31 +359,20 @@ app.post('/api/change-password', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'New password must be at least 6 characters long' });
     }
 
-    const pool = await poolPromise;
-    const request = pool.request();
+    const [rows] = await pool.execute('SELECT password FROM Users WHERE userid = ?', [req.user.userid]);
 
-    const userResult = await request
-      .input('userid', sql.VarChar, req.user.userid)
-      .query('SELECT password FROM Users WHERE userid = @userid');
-
-    if (userResult.recordset.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const user = userResult.recordset[0];
-
-    const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+    const passwordMatch = await bcrypt.compare(currentPassword, rows[0].password);
     if (!passwordMatch) {
       return res.status(401).json({ message: 'Current password is incorrect' });
     }
 
     const hashedNewPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
-    const updateRequest = pool.request();
-    await updateRequest
-      .input('userid', sql.VarChar, req.user.userid)
-      .input('newPassword', sql.VarChar, hashedNewPassword)
-      .query('UPDATE Users SET password = @newPassword WHERE userid = @userid');
+    await pool.execute('UPDATE Users SET password = ? WHERE userid = ?', [hashedNewPassword, req.user.userid]);
 
     await logAction('PASSWORD_CHANGE', req.user.userid, 'USER', `Password changed for user ${req.user.username}`);
 
@@ -513,15 +384,12 @@ app.post('/api/change-password', verifyToken, async (req, res) => {
   }
 });
 
-
 // ========== REACT ROUTER FALLBACK ==========
 app.get('/MECHATOOLINGPS/*', (req, res) => {
-  console.log('Serving React app for:', req.path);
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
 app.get('/MECHATOOLINGPS', (req, res) => {
-  console.log('Serving React app for root MECHATOOLINGPS');
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
