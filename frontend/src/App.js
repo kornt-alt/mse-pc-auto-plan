@@ -9,20 +9,6 @@ import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
 import Register from './components/manage_user/Register';
 
-import Add_Item_Master from './components/item-master/Add_Item_Master';
-import View_Item_Master from './components/item-master/View_item_master';
-
-
-import Receive from './components/Receive';
-import Storage from './components/Storage';
-import Issue from './components/Issue';
-import History from './components/History';
-
-
-import LocationOverview from './components/location/Location';
-import CabinetLevelView from './components/location/CabinetLevelView';
-import CabinetItemsView from './components/location/CabinetItemsView';
-import LocationLayout from './components/location/LocationLayout';
 
 import './index.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -104,39 +90,11 @@ const ConditionalNavbar = () => {
     <Navbar bg="dark" variant="dark" expand="lg" className="mb-4">
       <Container>
         <Navbar.Brand as={Link} to="/">
-          Purchase Tooling System
+          Purchase Chemimal System
         </Navbar.Brand>
         <Navbar.Toggle aria-controls="basic-navbar-nav" />
         <Navbar.Collapse id="basic-navbar-nav">
-          <Nav className="me-auto">
-            {canAccessItemMaster && (
-              <NavDropdown title="Item master" id="item-master-dropdown">
-                <NavDropdown.Item as={Link} to="/add-item-master">Add</NavDropdown.Item>
-                <NavDropdown.Item as={Link} to="/view-item-master">View</NavDropdown.Item>
-              </NavDropdown>
-            )}
-            {/* {user.role === 'ADMIN' && (
-              <>
-                <Nav.Link as={Link} to="/add-item-master">Add Item Master</Nav.Link>
-              </>
-            )} */}
-            {canAccessIssue && (
-              <Nav.Link as={Link} to="/receive">Receive</Nav.Link>
-            )}
-            {canAccessIssue && (
-              <Nav.Link as={Link} to="/issue">Issue</Nav.Link>
-            )}
-            <Nav.Link as={Link} to="/storage">Storage</Nav.Link>
-            <Nav.Link as={Link} to="/history">History</Nav.Link>
-            {canAccessLocation && (
-              <Nav.Link as={Link} to="/location">Location</Nav.Link>
-            )}
-            {/* {canAccessLocation && (
-              <NavDropdown title="Location" id="location-dropdown">
-                <NavDropdown.Item as={Link} to="/location">Add Location</NavDropdown.Item>
-                <NavDropdown.Item as={Link} to="/location-overview">Location Overview</NavDropdown.Item>
-              </NavDropdown>
-            )} */}
+          <Nav>
             {user.role === 'ADMIN' && (
               <>
                 <Nav.Link as={Link} to="/user">User</Nav.Link>
@@ -157,49 +115,12 @@ const App = () => {
   };
 
   return (
-    <Router basename="/MECHATOOLINGPS">
+    <Router basename="/MECHA-PS-CHEM">
       <ConditionalNavbar />
       <Routes>
         <Route path="/register" element={<Register onSuccess={handleSuccess} />} />
         <Route path="/login" element={<Login onLogin={handleSuccess} />} />
         <Route path="/logout" element={<Logout />} />
-        <Route
-          path="/add-item-master"
-          element={
-            <ProtectedRoute>
-              <Add_Item_Master user={JSON.parse(localStorage.getItem('user') || '{}')} />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/view-item-master"
-          element={
-            <ProtectedRoute>
-              <View_Item_Master user={JSON.parse(localStorage.getItem('user') || '{}')} />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/receive"
-          element={
-            <ProtectedRoute>
-              <Receive user={JSON.parse(localStorage.getItem('user') || '{}')} />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/location"
-          element={
-            <ProtectedRoute>
-              <LocationLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<LocationOverview />} />
-          <Route path=":cabinetName" element={<CabinetLevelView />} />
-          <Route path=":cabinetName/:level" element={<Navigate to=".." />} />
-          <Route path=":cabinetName/:level/:cabinetNo" element={<CabinetItemsView />} />
-        </Route>
         <Route
           path="/user"
           element={
@@ -209,55 +130,15 @@ const App = () => {
           }
         />
         <Route
-          path="/issue"
+          path="/about"
           element={
-            <ProtectedRoute>
-              <Issue user={JSON.parse(localStorage.getItem('user') || '{}')} />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/storage"
-          element={
-            <ProtectedRoute>
-              <Storage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/history"
-          element={
-            <ProtectedRoute>
-              <History />
-            </ProtectedRoute>
+              <About />
           }
         />
         <Route
           path="/about"
           element={
-            <ProtectedRoute>
               <About />
-            </ProtectedRoute>
-          }
-        />
-        {/* <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Navigate to="/about" replace />
-            </ProtectedRoute>
-          }
-        /> */}
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              {JSON.parse(localStorage.getItem('user') || '{}')?.role === 'ADMIN' ? (
-                <Navigate to="/location" replace />
-              ) : (
-                <Navigate to="/storage" replace />
-              )}
-            </ProtectedRoute>
           }
         />
         <Route path="*" element={<NotFound />} />

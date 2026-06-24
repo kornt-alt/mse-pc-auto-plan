@@ -87,7 +87,7 @@ const Login = ({ onLogin }) => {
           <Form.Group className="mb-3">
             <Form.Label>RFID (Card ID)</Form.Label>
             <Form.Control
-              type="text"
+              type="password"
               value={userid}
               onChange={(e) => setUserid(e.target.value)}
               placeholder="Scan Card or Enter ID"

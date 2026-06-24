@@ -12,8 +12,8 @@ app.use(express.json());
 app.use(cors());
 
 // ========== STATIC FILE SERVING ==========
-app.use('/MECHATOOLINGPS', express.static(path.join(__dirname, 'build')));
-app.use('/MECHATOOLINGPS/static', express.static(path.join(__dirname, 'build/static')));
+app.use('/MECHA-PS-CHEM', express.static(path.join(__dirname, 'build')));
+app.use('/MECHA-PS-CHEM/static', express.static(path.join(__dirname, 'build/static')));
 
 // Database configuration
 const pool = mysql.createPool({
@@ -385,11 +385,11 @@ app.post('/api/change-password', verifyToken, async (req, res) => {
 });
 
 // ========== REACT ROUTER FALLBACK ==========
-app.get('/MECHATOOLINGPS/*', (req, res) => {
+app.get('/MECHA-PS-CHEM/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-app.get('/MECHATOOLINGPS', (req, res) => {
+app.get('/MECHA-PS-CHEM', (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 

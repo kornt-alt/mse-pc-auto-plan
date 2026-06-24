@@ -23,7 +23,7 @@ const User = () => {
   // Predefined options
   // const divisions = ['Common', 'Common-M/P 1', 'Common-M/P 2', 'M/P 1', 'M/P 2'];
   const divisions = ['Common','M/P 1', 'M/P 2'];
-  const roles = ['Common', 'IQC', 'ADMIN'];
+  const roles = ['Common', 'PS', 'ADMIN'];
 
   useEffect(() => {
     const fetchUserData = async () => {
