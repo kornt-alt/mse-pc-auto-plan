@@ -98,6 +98,105 @@ const logAction = async (action, targetId, targetType, comment) => {
 
 // ========== API ROUTES ==========
 
+// ---- Chemical Management ----
+
+// Get all chemicals
+app.get('/api/chemical', verifyToken, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT * FROM chemicals ORDER BY chem_name ASC'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching chemicals:', err);
+    res.status(500).json({ message: 'Failed to fetch chemicals' });
+  }
+});
+
+// Create chemical
+app.post('/api/chemical', verifyToken, requireADMIN, async (req, res) => {
+  try {
+    const { chem_code, chem_name, unit, stock_qty, min_qty, location, supplier } = req.body;
+
+    if (!chem_code || !chem_name || !unit || stock_qty === undefined) {
+      return res.status(400).json({ message: 'รหัส, ชื่อ, หน่วย และจำนวนคงคลังห้ามว่าง' });
+    }
+
+    const [existing] = await pool.execute(
+      'SELECT chem_id FROM chemicals WHERE chem_code = ?',
+      [chem_code]
+    );
+    if (existing.length > 0) {
+      return res.status(409).json({ message: 'รหัสสารเคมีนี้มีอยู่แล้ว' });
+    }
+
+    const [result] = await pool.execute(
+      'INSERT INTO chemicals (chem_code, chem_name, unit, stock_qty, min_qty, location, supplier) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [chem_code, chem_name, unit, stock_qty, min_qty ?? null, location ?? null, supplier ?? null]
+    );
+
+    const [rows] = await pool.execute('SELECT * FROM chemicals WHERE chem_id = ?', [result.insertId]);
+    await logAction('ADD_CHEMICAL', result.insertId, 'CHEMICAL', `เพิ่มสารเคมี ${chem_name} (${chem_code})`);
+
+    res.status(201).json({ message: 'เพิ่มสารเคมีสำเร็จ', chemical: rows[0] });
+  } catch (err) {
+    console.error('Error creating chemical:', err);
+    res.status(500).json({ message: 'Failed to create chemical' });
+  }
+});
+
+// Update chemical
+app.patch('/api/chemical/:id', verifyToken, requireADMIN, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { chem_code, chem_name, unit, stock_qty, min_qty, location, supplier } = req.body;
+
+    if (!chem_code || !chem_name || !unit || stock_qty === undefined) {
+      return res.status(400).json({ message: 'รหัส, ชื่อ, หน่วย และจำนวนคงคลังห้ามว่าง' });
+    }
+
+    const [existing] = await pool.execute(
+      'SELECT chem_id FROM chemicals WHERE chem_code = ? AND chem_id != ?',
+      [chem_code, id]
+    );
+    if (existing.length > 0) {
+      return res.status(409).json({ message: 'รหัสสารเคมีนี้มีอยู่แล้ว' });
+    }
+
+    await pool.execute(
+      'UPDATE chemicals SET chem_code=?, chem_name=?, unit=?, stock_qty=?, min_qty=?, location=?, supplier=? WHERE chem_id=?',
+      [chem_code, chem_name, unit, stock_qty, min_qty ?? null, location ?? null, supplier ?? null, id]
+    );
+
+    const [rows] = await pool.execute('SELECT * FROM chemicals WHERE chem_id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ message: 'ไม่พบสารเคมีนี้' });
+
+    await logAction('UPDATE_CHEMICAL', id, 'CHEMICAL', `แก้ไขสารเคมี ${chem_name} (${chem_code})`);
+    res.json({ message: 'แก้ไขสำเร็จ', chemical: rows[0] });
+  } catch (err) {
+    console.error('Error updating chemical:', err);
+    res.status(500).json({ message: 'Failed to update chemical' });
+  }
+});
+
+// Delete chemical
+app.delete('/api/chemical/:id', verifyToken, requireADMIN, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await pool.execute('SELECT chem_name, chem_code FROM chemicals WHERE chem_id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ message: 'ไม่พบสารเคมีนี้' });
+
+    await pool.execute('DELETE FROM chemicals WHERE chem_id = ?', [id]);
+    await logAction('DELETE_CHEMICAL', id, 'CHEMICAL', `ลบสารเคมี ${rows[0].chem_name} (${rows[0].chem_code})`);
+
+    res.json({ message: 'ลบสารเคมีสำเร็จ' });
+  } catch (err) {
+    console.error('Error deleting chemical:', err);
+    res.status(500).json({ message: 'Failed to delete chemical' });
+  }
+});
+
 // Register endpoint
 app.post('/api/register', async (req, res) => {
   try {

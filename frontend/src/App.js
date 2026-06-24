@@ -8,6 +8,7 @@ import User from './components/manage_user/User'
 import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
 import Register from './components/manage_user/Register';
+import ChemicalManagement from './components/chemical/ChemicalManagement';
 
 
 import './index.css';
@@ -95,10 +96,9 @@ const ConditionalNavbar = () => {
         <Navbar.Toggle aria-controls="basic-navbar-nav" />
         <Navbar.Collapse id="basic-navbar-nav">
           <Nav>
+            <Nav.Link as={Link} to="/chemical">สารเคมี</Nav.Link>
             {user.role === 'ADMIN' && (
-              <>
-                <Nav.Link as={Link} to="/user">User</Nav.Link>
-              </>
+              <Nav.Link as={Link} to="/user">User</Nav.Link>
             )}
             <Nav.Link as={Link} to="/about">About</Nav.Link>
             <Nav.Link as={Link} to="/logout">Logout</Nav.Link>
@@ -121,6 +121,14 @@ const App = () => {
         <Route path="/register" element={<Register onSuccess={handleSuccess} />} />
         <Route path="/login" element={<Login onLogin={handleSuccess} />} />
         <Route path="/logout" element={<Logout />} />
+        <Route
+          path="/chemical"
+          element={
+            <ProtectedRoute>
+              <ChemicalManagement />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/user"
           element={
