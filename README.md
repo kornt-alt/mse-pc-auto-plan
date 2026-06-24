@@ -103,39 +103,103 @@ node index.js
 
 ---
 
-## Git Workflow (สำหรับ Dev ใหม่)
+## Git Workflow (การทำงานเป็นทีม)
 
-### ดึงโค้ดล่าสุดจาก GitHub
+**หลักการ:** ห้าม push ตรงเข้า `main` — ให้สร้าง branch แยกต่างหากทุกครั้ง แล้วค่อย merge กลับ
+
+---
+
+### เริ่มงานใหม่ — สร้าง Branch
 
 ```bash
+# 1. ดึงโค้ดล่าสุดของ main ก่อนเสมอ
+git checkout main
 git pull origin main
+
+# 2. สร้าง branch ใหม่จาก main ที่เป็นปัจจุบัน
+git checkout -b feature/ชื่อฟีเจอร์
+# ตัวอย่าง:
+#   git checkout -b feature/add-receive-page
+#   git checkout -b fix/login-rfid-bug
 ```
 
-> รันก่อนเริ่มทำงานทุกครั้ง เพื่อให้โค้ดเป็นเวอร์ชันล่าสุด
+---
 
-### บันทึกงานและ Push ขึ้น GitHub
+### ระหว่างทำงาน — บันทึกงานใน Branch ตัวเอง
 
 ```bash
-# 1. ดูว่าแก้ไขไฟล์อะไรไปบ้าง
+# ดูไฟล์ที่เปลี่ยนแปลง
 git status
 
-# 2. เพิ่มไฟล์ที่แก้ไขเข้า staging
-git add .
+# เพิ่มไฟล์เข้า staging (ระบุชื่อไฟล์ดีกว่า git add .)
+git add backend/index.js frontend/src/components/Receive.js
 
-# 3. Commit พร้อมข้อความอธิบาย
-git commit -m "feat: เพิ่มฟีเจอร์ X"
+# Commit
+git commit -m "feat: เพิ่มหน้า Receive"
 
-# 4. Push ขึ้น GitHub
+# Push branch ขึ้น GitHub
+git push origin feature/add-receive-page
+```
+
+---
+
+### อัปเดตโค้ดล่าสุดจาก main เข้า Branch ตัวเอง
+
+ทำทุกครั้งก่อนที่จะ merge หรือเมื่อ main มีการอัปเดต:
+
+```bash
+# ดึง main ล่าสุดลงมาก่อน
+git fetch origin
+
+# Merge main เข้า branch ตัวเอง
+git merge origin/main
+```
+
+> ถ้ามี **Conflict** จะขึ้นบอกให้แก้ไขไฟล์ที่ขัดแย้งกัน เปิดไฟล์นั้นแล้วเลือกว่าจะเก็บโค้ดฝั่งไหน จากนั้น `git add <ไฟล์>` แล้ว `git merge --continue`
+
+---
+
+### เสร็จงาน — Merge กลับเข้า main
+
+```bash
+# สลับไปที่ main
+git checkout main
+
+# ดึงโค้ดล่าสุดอีกครั้ง (กันคนอื่น push มาในระหว่างที่ทำงาน)
+git pull origin main
+
+# Merge branch ของตัวเองเข้า main
+git merge feature/add-receive-page
+
+# Push main ขึ้น GitHub
 git push origin main
+
+# ลบ branch ที่ merge แล้ว (ไม่บังคับ แต่ช่วยให้ repo สะอาด)
+git branch -d feature/add-receive-page
+git push origin --delete feature/add-receive-page
 ```
 
-### ตัวอย่างข้อความ Commit ที่ดี
+---
 
+### ดู Branch ทั้งหมด
+
+```bash
+# branch ในเครื่อง
+git branch
+
+# branch ทั้งหมด (รวม remote)
+git branch -a
 ```
-feat: เพิ่มฟังก์ชันค้นหาสินค้า
-fix: แก้ไขบัก login ด้วย RFID
-update: ปรับ UI หน้าคลังสินค้า
-```
+
+---
+
+### ตัวอย่างชื่อ Branch และ Commit ที่ดี
+
+| ประเภท | ชื่อ Branch | Commit Message |
+|--------|------------|----------------|
+| ฟีเจอร์ใหม่ | `feature/add-receive-page` | `feat: เพิ่มหน้า Receive` |
+| แก้บัก | `fix/login-rfid-bug` | `fix: แก้ไขบัก login ด้วย RFID` |
+| ปรับ UI | `update/storage-ui` | `update: ปรับ UI หน้าคลังสินค้า` |
 
 ---
 

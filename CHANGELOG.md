@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- อัปเดต README.md เพิ่มคำอธิบาย Git Workflow สำหรับทีม (สร้าง branch, อัปเดตโค้ดจาก main, merge กลับ)
+
 ### Added
 - เพิ่ม `GET /api/userall` endpoint สำหรับดึงรายชื่อ user ทั้งหมด (ADMIN only)
 
