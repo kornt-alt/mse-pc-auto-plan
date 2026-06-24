@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- เพิ่ม `GET /api/userall` endpoint สำหรับดึงรายชื่อ user ทั้งหมด (ADMIN only)
+
 ### Changed
 - เปลี่ยน database จาก Microsoft SQL Server เป็น MariaDB โดยใช้ `mysql2` แทน `mssql`
 - เปลี่ยน query syntax จาก named parameter (`@param`) เป็น positional `?` ของ mysql2

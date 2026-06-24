@@ -227,6 +227,19 @@ app.post('/api/login_rfid', async (req, res) => {
   }
 });
 
+// Get all users
+app.get('/api/userall', verifyToken, requireADMIN, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT userid, username, name, division, org, role, created_at, updated_at FROM Users ORDER BY created_at DESC'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching all users:', err);
+    res.status(500).json({ message: 'Failed to fetch users' });
+  }
+});
+
 // Get user by Card ID
 app.get('/api/user/:cardId', verifyToken, async (req, res) => {
   try {
