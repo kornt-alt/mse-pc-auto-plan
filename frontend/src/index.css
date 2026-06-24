@@ -1,0 +1,30 @@
+@import url('https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css');
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* ปรับแต่ง datalist dropdown */
+input[list]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+
+datalist {
+  font-size: 0.875rem;
+}
+
+/* ทำให้ placeholder ดูจาง */
+.form-control::placeholder {
+  color: #999;
+  opacity: 1;
+}
