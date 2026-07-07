@@ -8,14 +8,12 @@ import User from './components/manage_user/User'
 import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
 import Register from './components/manage_user/Register';
-import ChemicalManagement from './components/chemical/ChemicalManagement';
 
 
 import './index.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap/dist/js/bootstrap.bundle.min.js';
 
-// const API_BASE = 'http://10.121.1.85:3202/api';
 const API_BASE = 'http://localhost:5000/api';
 
 const apiCall = async (endpoint, options = {}) => {
@@ -91,12 +89,11 @@ const ConditionalNavbar = () => {
     <Navbar bg="dark" variant="dark" expand="lg" className="mb-4">
       <Container>
         <Navbar.Brand as={Link} to="/">
-          Purchase Chemimal System
+          PROJECT MANAGEMENT
         </Navbar.Brand>
         <Navbar.Toggle aria-controls="basic-navbar-nav" />
         <Navbar.Collapse id="basic-navbar-nav">
           <Nav>
-            <Nav.Link as={Link} to="/chemical">สารเคมี</Nav.Link>
             {user.role === 'ADMIN' && (
               <Nav.Link as={Link} to="/user">User</Nav.Link>
             )}
@@ -115,20 +112,12 @@ const App = () => {
   };
 
   return (
-    <Router basename="/MECHA-PS-CHEM">
+    <Router basename="/MECHA-PJM">
       <ConditionalNavbar />
       <Routes>
         <Route path="/register" element={<Register onSuccess={handleSuccess} />} />
         <Route path="/login" element={<Login onLogin={handleSuccess} />} />
         <Route path="/logout" element={<Logout />} />
-        <Route
-          path="/chemical"
-          element={
-            <ProtectedRoute>
-              <ChemicalManagement />
-            </ProtectedRoute>
-          }
-        />
         <Route
           path="/user"
           element={
