@@ -1,104 +1,86 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
-import { Navbar, Nav, Container, NavDropdown  } from 'react-bootstrap';
-import About from './components/About';
+import { Navbar, Nav, Container } from 'react-bootstrap';
 
+import ProtectedRoute from './auth/ProtectedRoute';
+import { isAuthenticated, getCurrentUser } from './api/client';
 
-import User from './components/manage_user/User'
 import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
-import Register from './components/manage_user/Register';
-
+import User from './components/manage_user/User';
 
 import './index.css';
+import './theme/theme.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap/dist/js/bootstrap.bundle.min.js';
 
-const API_BASE = 'http://localhost:5000/api';
+// เมนูตาม role (ตาม AppDrawer ของระบบเดิม)
+// ADMIN/PLANNER: ทุกเมนู / MFG: ไม่มี Orders, Calendar / OPERATOR: Shop Floor เท่านั้น
+const MENU = [
+  { path: '/shop-floor', label: 'Shop Floor', roles: ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'] },
+  { path: '/orders', label: 'Order Management', roles: ['ADMIN', 'PLANNER'] },
+  { path: '/planning', label: 'Planning View', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  { path: '/plan-actual', label: 'Plan & Actual', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  { path: '/wip', label: 'WIP', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  { path: '/daily-result', label: 'Daily Result', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  { path: '/calendar', label: 'Calendar', roles: ['ADMIN', 'PLANNER'] },
+  { path: '/routing-config', label: 'Routing Config', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  { path: '/settings', label: 'Import Data', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  { path: '/user', label: 'Users', roles: ['ADMIN'] },
+];
 
-const apiCall = async (endpoint, options = {}) => {
-  const token = localStorage.getItem('token');
-  const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-    },
-    ...options,
-  };
+const NotFound = () => (
+  <Container className="text-center mt-5">
+    <h2>404 - ไม่พบหน้านี้</h2>
+    <Link to="/">กลับหน้าหลัก</Link>
+  </Container>
+);
 
-  try {
-    const response = await fetch(`${API_BASE}${endpoint}`, config);
-    const data = await response.json();
+// หน้า placeholder ระหว่างที่ยัง migrate ไม่ครบ
+const ComingSoon = ({ title }) => (
+  <Container className="text-center mt-5">
+    <h3 className="text-mse">{title}</h3>
+    <p className="text-muted">อยู่ระหว่างการพัฒนา (กำลัง migrate จากระบบเดิม)</p>
+  </Container>
+);
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = 'login';
-        throw new Error('Session expired. Please log in again.');
-      }
-      throw new Error(data.message || 'Something went wrong');
-    }
-
-    return data;
-  } catch (error) {
-    throw error;
-  }
-};
-
-// ProtectedRoute component to guard routes
-const ProtectedRoute = ({ children }) => {
-  const isAuthenticated = !!localStorage.getItem('token');
-  const location = useLocation();
-
-  return isAuthenticated ? children : <Navigate to="/login" state={{ from: location }} replace />;
-};
-
-// Component for 404 page
-const NotFound = () => {
-  return (
-    <Container className="text-center mt-5">
-      <h2>404 - Page Not Found</h2>
-      <p>Sorry kub. Don't Have This Page eiei</p>
-      <Link to="/">Get back Get back</Link>
-    </Container>
-  );
-};
-
-// ConditionalNavbar component
 const ConditionalNavbar = () => {
   const location = useLocation();
-  const isAuthenticated = !!localStorage.getItem('token');
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const canAccessIssue = ['ADMIN', 'ISSUE'].includes(user.role);
-  const canAccessLocation = ['ADMIN', 'Common', 'IQC'].includes(user.role);
-  const canAccessItemMaster = user.role === 'ADMIN';
 
-  // Hide navbar on login and register pages
-  const hideNavbarPaths = ['/login', '/register'];
-  if (hideNavbarPaths.includes(location.pathname)) {
+  if (['/login'].includes(location.pathname) || !isAuthenticated()) {
     return null;
   }
 
-  // Only show navbar if authenticated
-  if (!isAuthenticated) {
-    return null;
-  }
+  const user = getCurrentUser();
+  const menuItems = MENU.filter((m) => m.roles.includes(user.role));
 
   return (
-    <Navbar bg="dark" variant="dark" expand="lg" className="mb-4">
-      <Container>
+    <Navbar variant="dark" expand="lg" className="mb-4 navbar-mse">
+      <Container fluid>
         <Navbar.Brand as={Link} to="/">
-          PROJECT MANAGEMENT
+          MSE Auto Plan
         </Navbar.Brand>
-        <Navbar.Toggle aria-controls="basic-navbar-nav" />
-        <Navbar.Collapse id="basic-navbar-nav">
+        <Navbar.Toggle aria-controls="main-navbar" />
+        <Navbar.Collapse id="main-navbar">
+          <Nav className="me-auto">
+            {menuItems.map((m) => (
+              <Nav.Link
+                key={m.path}
+                as={Link}
+                to={m.path}
+                active={location.pathname.startsWith(m.path)}
+              >
+                {m.label}
+              </Nav.Link>
+            ))}
+          </Nav>
           <Nav>
-            {user.role === 'ADMIN' && (
-              <Nav.Link as={Link} to="/user">User</Nav.Link>
-            )}
-            <Nav.Link as={Link} to="/about">About</Nav.Link>
-            <Nav.Link as={Link} to="/logout">Logout</Nav.Link>
+            <Navbar.Text className="me-3">
+              {user.username} ({user.role})
+            </Navbar.Text>
+            <Nav.Link as={Link} to="/logout">
+              Logout
+            </Nav.Link>
           </Nav>
         </Navbar.Collapse>
       </Container>
@@ -106,43 +88,107 @@ const ConditionalNavbar = () => {
   );
 };
 
-const App = () => {
-  const handleSuccess = () => {
-    console.log('Registration successful or login successful');
-  };
-
-  return (
-    <Router basename="/MSE-AUTO-PLAN">
-      <ConditionalNavbar />
-      <Routes>
-        <Route path="/register" element={<Register onSuccess={handleSuccess} />} />
-        <Route path="/login" element={<Login onLogin={handleSuccess} />} />
-        <Route path="/logout" element={<Logout />} />
-        <Route
-          path="/user"
-          element={
-            <ProtectedRoute>
-              <User />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/about"
-          element={
-              <About />
-          }
-        />
-        <Route
-          path="/about"
-          element={
-              <About />
-          }
-        />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    </Router>
-  );
+// หน้าแรกตาม role: OPERATOR → shop floor, อื่นๆ → orders/planning
+const HomeRedirect = () => {
+  if (!isAuthenticated()) return <Navigate to="/login" replace />;
+  const user = getCurrentUser();
+  if (user.role === 'OPERATOR') return <Navigate to="/shop-floor" replace />;
+  if (user.role === 'MFG') return <Navigate to="/planning" replace />;
+  return <Navigate to="/orders" replace />;
 };
 
+const App = () => (
+  <Router basename="/MSE-AUTO-PLAN">
+    <ConditionalNavbar />
+    <Routes>
+      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/logout" element={<Logout />} />
+
+      <Route
+        path="/shop-floor"
+        element={
+          <ProtectedRoute>
+            <ComingSoon title="Shop Floor Control" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/orders"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+            <ComingSoon title="Order Management" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/planning"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <ComingSoon title="Planning View" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/plan-actual"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <ComingSoon title="Plan & Actual" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/wip"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <ComingSoon title="WIP" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/daily-result"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <ComingSoon title="Production Daily Result" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/calendar"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+            <ComingSoon title="Calendar" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/routing-config"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <ComingSoon title="Routing & Machine Config" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <ComingSoon title="Import Data" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/user"
+        element={
+          <ProtectedRoute roles={['ADMIN']}>
+            <User />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  </Router>
+);
+
 export default App;
-export { apiCall, API_BASE };

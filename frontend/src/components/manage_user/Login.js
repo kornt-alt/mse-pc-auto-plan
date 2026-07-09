@@ -1,165 +1,129 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Container, Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
-import { AlertCircle, User, Eye, EyeOff } from 'lucide-react';
-import { apiCall } from '../../App';
+import { Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
+import { Factory, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { apiCall } from '../../api/client';
 
-const Login = ({ onLogin }) => {
-  const [formData, setFormData] = useState({
-    username: '',
-    password: ''
-  });
+const Login = () => {
+  const [formData, setFormData] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [userid, setUserid] = useState('');
-  
+
   const navigate = useNavigate();
   const location = useLocation();
-  
-  // Get the path user was trying to access, default to storage
-  const from = location.state?.from?.pathname || '/about';
+  const from = location.state?.from?.pathname || '/';
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.username || !formData.password) {
+      setError('กรุณากรอก Username และ Password');
+      return;
+    }
     setLoading(true);
     setError('');
 
     try {
-      let data;
-
-      if (userid) {
-        // RFID login
-        data = await apiCall('/login_rfid', {
-          method: 'POST',
-          body: JSON.stringify({ userid }),
-        });
-      } else if (formData.username && formData.password) {
-        // Username/password login
-        data = await apiCall('/login', {
-          method: 'POST',
-          body: JSON.stringify(formData),
-        });
-      } else {
-        setError('Please fill either RFID or Username and Password');
-        return;
-      }
+      const data = await apiCall('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: formData.username.trim(),
+          password: formData.password,
+        }),
+      });
 
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-
-      if (onLogin) onLogin();
-
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err.message || 'Login failed');
+      setError(err.message || 'เข้าสู่ระบบไม่สำเร็จ');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Container className="min-h-screen d-flex align-items-center justify-content-center p-4">
-      <Card className="w-100" style={{ maxWidth: '400px' }}>
-        <Card.Body>
+    <div
+      className="d-flex align-items-center justify-content-center p-4"
+      style={{ minHeight: '100vh', backgroundColor: '#f0f2f5' }}
+    >
+      <Card className="w-100 shadow" style={{ maxWidth: '400px', borderRadius: '12px' }}>
+        <Card.Body className="p-4">
           <div className="text-center mb-4">
-            <User className="mx-auto h-12 w-12 text-primary" />
-            <h2 className="text-2xl font-bold">Login</h2>
-            <p className="text-muted">Please Fill Username/Password or USE CardID (RFID)</p>
+            <Factory size={48} className="text-mse mb-2" />
+            <h2 className="fw-bold text-mse">MES System</h2>
+            <p className="text-muted">เข้าสู่ระบบเพื่อใช้งาน</p>
           </div>
 
           {error && (
-            <Alert variant="danger" className="d-flex align-items-center">
-              <AlertCircle className="h-4 w-4 mr-2" />
+            <Alert variant="danger" className="d-flex align-items-center py-2">
+              <AlertCircle size={16} className="me-2 flex-shrink-0" />
               {error}
             </Alert>
           )}
 
           <Form onSubmit={handleSubmit}>
-          <Form.Group className="mb-3">
-            <Form.Label>RFID (Card ID)</Form.Label>
-            <Form.Control
-              type="password"
-              value={userid}
-              onChange={(e) => setUserid(e.target.value)}
-              placeholder="Scan Card or Enter ID"
-            />
-          </Form.Group>
-
-          <hr />
-
-          <Form.Group className="mb-3">
-            <Form.Label>Username</Form.Label>
-            <Form.Control
-              type="text"
-              name="username"
-              value={formData.username}
-              onChange={handleInputChange}
-              placeholder="Enter your username"
-              autoComplete="username"
-            />
-          </Form.Group>
-
-          <Form.Group className="mb-3">
-            <Form.Label>Password</Form.Label>
-            <div className="position-relative">
+            <Form.Group className="mb-3">
+              <Form.Label>Username</Form.Label>
               <Form.Control
-                type={showPassword ? "text" : "password"}
-                name="password"
-                value={formData.password}
+                type="text"
+                name="username"
+                value={formData.username}
                 onChange={handleInputChange}
-                placeholder="Enter your password"
-                autoComplete="current-password"
+                placeholder="Username"
+                autoComplete="username"
+                autoFocus
               />
-              <Button
-                variant="outline-secondary"
-                size="sm"
-                className="position-absolute top-50 end-0 translate-middle-y me-2"
-                style={{ border: 'none', background: 'none' }}
-                onClick={() => setShowPassword(!showPassword)}
-                type="button"
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </Button>
-            </div>
-          </Form.Group>
+            </Form.Group>
 
-          <Button
-            type="submit"
-            variant="primary"
-            className="w-100"
-            disabled={loading}
-          >
-            {loading ? (
-              <>
-                <Spinner animation="border" size="sm" className="me-2" />
-                Logging in...
-              </>
-            ) : (
-              'Login'
-            )}
-          </Button>
-        </Form>
+            <Form.Group className="mb-4">
+              <Form.Label>Password</Form.Label>
+              <div className="position-relative">
+                <Form.Control
+                  type={showPassword ? 'text' : 'password'}
+                  name="password"
+                  value={formData.password}
+                  onChange={handleInputChange}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                />
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="position-absolute top-50 end-0 translate-middle-y me-1 text-muted"
+                  onClick={() => setShowPassword(!showPassword)}
+                  type="button"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </Button>
+              </div>
+            </Form.Group>
 
-          <div className="text-center mt-3">
             <Button
-              variant="link"
-              onClick={() => navigate('/register')}
+              type="submit"
+              className="w-100 btn-mse"
+              style={{ height: '48px' }}
+              disabled={loading}
             >
-              Don't have an account? Register
+              {loading ? (
+                <>
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  กำลังเข้าสู่ระบบ...
+                </>
+              ) : (
+                'เข้าสู่ระบบ'
+              )}
             </Button>
-          </div>
+          </Form>
         </Card.Body>
       </Card>
-    </Container>
+    </div>
   );
 };
 
