@@ -16,10 +16,6 @@ backend/build/
 *.log
 npm-debug.log*
 
-CLAUDE.md
-CHANGELOG.md
-.gitignore
-กลับมาทำต่อ
 
 # OS
 .DS_Store
