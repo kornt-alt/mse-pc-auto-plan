@@ -112,7 +112,7 @@ const App = () => {
   };
 
   return (
-    <Router basename="/MECHA-PJM">
+    <Router basename="/MSE-AUTO-PLAN">
       <ConditionalNavbar />
       <Routes>
         <Route path="/register" element={<Register onSuccess={handleSuccess} />} />
