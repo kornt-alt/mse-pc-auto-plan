@@ -21,7 +21,8 @@ if (env.DRAWINGS_DIR && fs.existsSync(env.DRAWINGS_DIR)) {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/system', require('./routes/system'));
-// Phase 1+: orders, schedule, calendar, uploads, seeds, production,
+app.use('/api/orders', require('./routes/orders'));
+// Phase 2+: schedule, calendar, uploads, seeds, production,
 // daily-result, wip, visualization, routing, alerts
 
 // ========== REACT ROUTER FALLBACK ==========

@@ -8,6 +8,7 @@ import { isAuthenticated, getCurrentUser } from './api/client';
 import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
 import User from './components/manage_user/User';
+import OrderControlTower from './pages/orders/OrderControlTower';
 
 import './index.css';
 import './theme/theme.css';
@@ -117,7 +118,7 @@ const App = () => (
         path="/orders"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
-            <ComingSoon title="Order Management" />
+            <OrderControlTower />
           </ProtectedRoute>
         }
       />
