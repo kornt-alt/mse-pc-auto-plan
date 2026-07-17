@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Container, Table, Button, Form, Modal, Spinner, Badge,
   Toast, ToastContainer, InputGroup,
@@ -16,6 +17,7 @@ import {
   AlertTriangle, Clock, MailCheck,
 } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import { usePlanData } from '../../context/PlanDataContext';
 import OrderFormDialog from './OrderFormDialog';
 import TrackingDialog from './TrackingDialog';
 import HistoryDialog from './HistoryDialog';
@@ -153,8 +155,15 @@ const OrderControlTower = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [timestamps, setTimestamps] = useState({ last_plan: '-', last_edit: '-' });
 
-  // snapshot สำหรับ Undo — จะถูกเก็บก่อนรัน Initial Plan/Replan (Phase 2)
+  // snapshot สำหรับ Undo — เก็บก่อนรัน Initial Plan/Replan
   const [previousOrderList, setPreviousOrderList] = useState(null);
+  // baseline = สภาพ orders ตอนโหลดครั้งแรก (deep copy) ใช้เป็น snapshot ของ Replan
+  // (order_management_screen.dart L122-123)
+  const baselineRef = useRef(null);
+  const [isPlanning, setIsPlanning] = useState(false);
+
+  const navigate = useNavigate();
+  const { setFromRunResponse } = usePlanData();
 
   const [formOrder, setFormOrder] = useState(undefined); // undefined=ปิด, null=สร้าง, object=แก้ไข
   const [trackingBatch, setTrackingBatch] = useState(null);
@@ -185,6 +194,9 @@ const OrderControlTower = () => {
     try {
       const data = await apiCall('/orders');
       setOrders(data);
+      if (!baselineRef.current || baselineRef.current.length === 0) {
+        baselineRef.current = JSON.parse(JSON.stringify(data));
+      }
     } catch (err) {
       showToast(err.message, 'danger');
     } finally {
@@ -322,18 +334,94 @@ const OrderControlTower = () => {
     });
   };
 
+  // ===== scheduler actions (Phase 2) =====
+  // 409 (มีการวางแผนซ้อน) → warning / อื่นๆ → danger
+  const planErrorToast = useCallback(
+    (err) => {
+      const msg = String(err.message || err);
+      showToast(msg, msg.includes('กำลังทำงานอยู่') ? 'warning' : 'danger');
+    },
+    [showToast],
+  );
+
+  // Initial Plan (order_management_screen.dart L332-383)
+  const runInitialPlan = async () => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(orders))); // snapshot ก่อนคำนวณ
+    setIsPlanning(true);
+    showToast('กำลังคำนวณ Initial Plan...', 'info');
+    try {
+      const decoded = await apiCall('/schedule/run', { method: 'POST' });
+      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
+      fetchTimestamps();
+      navigate('/planning');
+    } catch (err) {
+      planErrorToast(err);
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
+  const handleInitialPlan = () => {
+    // กล่องเตือนสีแดงเดิม (order_management_screen.dart L1064-1128)
+    setConfirm({
+      title: '⚠️ ยืนยันการรัน Initial Plan',
+      body: 'คุณต้องการล้างแผนการผลิตทั้งหมดใช่หรือไม่?',
+      confirmLabel: 'ยืนยัน (ล้างแผน)',
+      variant: 'danger',
+      onConfirm: runInitialPlan,
+    });
+  };
+
+  // Replan (order_management_screen.dart L386-442) — snapshot จาก baseline (deep copy)
+  const runReplan = async (saveHistory = true) => {
+    if (saveHistory) {
+      setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? [])));
+    }
+    setIsPlanning(true);
+    showToast('กำลังคำนวณ Replan (ล็อกเวลา FIXED)...', 'info');
+    try {
+      const decoded = await apiCall('/schedule/replan', { method: 'POST' });
+      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
+      fetchTimestamps();
+      navigate('/planning');
+    } catch (err) {
+      planErrorToast(err);
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
+  const handleReplan = () => {
+    // FIX: ของเก่ารันทันทีไม่มี confirm — user เลือกเพิ่ม dialog (2026-07-16)
+    setConfirm({
+      title: 'ยืนยันการรัน Replan',
+      body: 'ระบบจะคำนวณแผนการผลิตใหม่ทั้งหมด (ล็อกเวลาเฉพาะออเดอร์ FIXED)\n\nต้องการดำเนินการต่อหรือไม่?',
+      confirmLabel: 'ยืนยัน Replan',
+      variant: 'info',
+      onConfirm: () => runReplan(true),
+    });
+  };
+
+  // Undo (order_management_screen.dart L270-329): restore -> refetch -> auto-replan
   const handleUndo = async () => {
     if (!previousOrderList) return;
+    setIsPlanning(true);
     try {
       await apiCall('/orders/bulk/restore', {
         method: 'POST',
         body: JSON.stringify(previousOrderList),
       });
+      baselineRef.current = null; // ให้ fetchOrders จำ baseline ใหม่จากข้อมูลที่เพิ่ง restore
+      await fetchOrders();
       setPreviousOrderList(null);
-      showToast('⏪ โหลดแผนเดิมสำเร็จ');
-      fetchOrders();
+      showToast('⏪ โหลดแผนเดิมสำเร็จ! กำลังคำนวณตารางใหม่...', 'warning');
+      // หน่วงให้เห็นว่าตารางกลับเป็นของเดิมก่อน (เหมือนเดิม 1.5 วิ) แล้ว replan อัตโนมัติ
+      await new Promise((r) => setTimeout(r, 1500));
+      await runReplan(false); // auto-replan ไม่เก็บ history และไม่ต้อง confirm
     } catch (err) {
       showToast(err.message, 'danger');
+    } finally {
+      setIsPlanning(false);
     }
   };
 
@@ -388,27 +476,38 @@ const OrderControlTower = () => {
           <Button
             variant="secondary"
             size="sm"
-            disabled={!previousOrderList}
+            disabled={!previousOrderList || isPlanning}
             onClick={handleUndo}
-            style={previousOrderList ? { backgroundColor: '#f57c00', borderColor: '#f57c00' } : {}}
+            style={previousOrderList && !isPlanning ? { backgroundColor: '#f57c00', borderColor: '#f57c00' } : {}}
           >
             <Undo2 size={15} className="me-1" /> Undo
           </Button>
-          <Button variant="danger" size="sm" disabled title="รอ Phase 2 (Scheduler)">
-            <RotateCcw size={15} className="me-1" /> Initial Plan
+          <Button variant="danger" size="sm" disabled={isPlanning} onClick={handleInitialPlan}>
+            {isPlanning ? (
+              <Spinner animation="border" size="sm" className="me-1" />
+            ) : (
+              <RotateCcw size={15} className="me-1" />
+            )}
+            Initial Plan
           </Button>
           <Button
             variant="info"
             size="sm"
-            disabled
-            title="รอ Phase 2 (Scheduler)"
+            disabled={isPlanning}
             className="text-white"
+            onClick={handleReplan}
           >
-            <Wand2 size={15} className="me-1" /> Replan
+            {isPlanning ? (
+              <Spinner animation="border" size="sm" className="me-1" />
+            ) : (
+              <Wand2 size={15} className="me-1" />
+            )}
+            Replan
           </Button>
           <Button
             size="sm"
             style={{ backgroundColor: '#7b1fa2', borderColor: '#7b1fa2' }}
+            disabled={isPlanning}
             onClick={handleSortByDueDate}
           >
             <ArrowDownUp size={15} className="me-1" /> Sort by Due Date

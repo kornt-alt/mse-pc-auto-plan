@@ -1,0 +1,134 @@
+// Smoke test ของ engine — เคสมือเล็กๆ ตรวจ mechanics หลัก
+// (ความถูกต้องจริงยืนยันด้วย parity fixtures กับ Python engine)
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { SchedulerEngine, parseDdMmYyyy } = require('../engine');
+const { processRouting, processUnifiedMachineConfig } = require('../configProcessor');
+const { OrderManager } = require('../orderManager');
+
+const bkk = (iso) => new Date(`${iso}Z`);
+
+const routingRows = [
+  { Model: 'M1', FlowIndex: 1, StepIndex: 0, StepName: 'TURNING' },
+  { Model: 'M1', FlowIndex: 1, StepIndex: 1, StepName: 'MILLING' },
+];
+const machineRows = [
+  { Model: 'M1', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1' },
+  { Model: 'M1', FlowIndex: 1, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+];
+
+const makeCalendar = () => {
+  const cal = { 'MC-A': {}, 'MC-B': {} };
+  for (const d of ['2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24']) {
+    cal['MC-A'][d] = 1240;
+    cal['MC-B'][d] = 1240;
+  }
+  return cal;
+};
+
+const buildEngine = () => {
+  const routing = processRouting(routingRows);
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(machineRows);
+  return new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+};
+
+test('forward order: setup+run บนเครื่องแรก แล้วเปลี่ยนเครื่อง step ถัดไป +1 วัน (stickiness)', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B001', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+
+  assert.equal(totalPlanMap.get('B001').StatusLOT, 'Proceeding');
+  assert.equal(totalPlanMap.get('B001')._chosenFlow, 1);
+
+  // step 0: setup 30 นาที + รัน 100 ชิ้น × ct 2 = 200 นาที บน MC-A วันแรกของปฏิทิน
+  const setupRow = mainPlan.find((r) => r.isSetup);
+  assert.equal(setupRow.step, 'SETUP-TURNING');
+  assert.equal(setupRow.machine, 'MC-A');
+  assert.equal(setupRow.date, '2026-07-20');
+  assert.equal(setupRow.timeUsed_min, 30);
+
+  const turnRow = mainPlan.find((r) => r.step === 'TURNING');
+  assert.equal(turnRow.qty, 100);
+  assert.equal(turnRow.timeUsed_min, 200);
+  assert.equal(turnRow.date, '2026-07-20');
+
+  // step 1: เปลี่ยนเครื่อง MC-A → MC-B → เริ่ม +1 วัน
+  const millRow = mainPlan.find((r) => r.step === 'MILLING');
+  assert.equal(millRow.machine, 'MC-B');
+  assert.equal(millRow.date, '2026-07-21');
+  assert.equal(millRow.timeUsed_min, 100);
+
+  // ปฏิทินโดนหักจริง
+  assert.equal(engine.workingCalendar['MC-A']['2026-07-20'], 1240 - 230);
+  assert.equal(engine.workingCalendar['MC-B']['2026-07-21'], 1240 - 100);
+});
+
+test('backward order: วางจาก due date ถอยกลับ + StatusLOT Backward Planned', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B002', Model: 'M1', qty: 50, dueDate: '2026-07-24', priority: 1, planningMode: 'backward', planMode: 'NEW' },
+  ]);
+
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+
+  assert.equal(totalPlanMap.get('B002').StatusLOT, 'Backward Planned');
+  const rows = mainPlan.filter((r) => r.batch === 'B002' && !r.isSetup);
+  // MILLING (step สุดท้าย) ต้องจบก่อน due, TURNING อยู่ก่อนหน้า
+  const mill = rows.find((r) => r.step === 'MILLING');
+  const turn = rows.find((r) => r.step === 'TURNING');
+  assert.ok(mill.date <= '2026-07-24');
+  assert.ok(turn.date <= mill.date);
+  assert.equal(rows.every((r) => r.planningMode === 'backward'), true);
+});
+
+test('เวลาที่ผ่านไปของวันนี้ถูกหักจาก capacity (calendar cutoff)', () => {
+  const engine = buildEngine();
+  // 2026-07-20 เวลา 10:00 = ผ่านไป 180 นาทีจาก 07:00
+  engine.run([], null, null, null, null, bkk('2026-07-20T10:00:00'));
+  assert.equal(engine.workingCalendar['MC-A']['2026-07-20'], 1240 - 180);
+  assert.equal(engine.workingCalendar['MC-A']['2026-07-21'], 1240);
+});
+
+test('model ไม่มี routing → Config Missing + is_missing_routing', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B003', Model: 'NO-SUCH', qty: 10, dueDate: '2026-07-24', priority: 1, planMode: 'NEW' },
+  ]);
+  const { totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const entry = totalPlanMap.get('B003');
+  assert.equal(entry.StatusLOT, 'Config Missing');
+  assert.equal(entry.is_missing_routing, true);
+});
+
+test('FIXED order: คืน capacity แผนเดิม + lock แถวเข้า main_plan', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B004', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planMode: 'FIXED' },
+  ]);
+  const existingPlan = [
+    { Batch: 'B004', Model: 'M1', StepIndex: 0, ProcessName: 'TURNING', Machine: 'MC-A', DatePlan: '2026-07-21', TimeUsedMin: 200, QtyPlan: 100, Type: 'Run' },
+  ];
+  const { mainPlan, totalPlanMap } = engine.run(orders, existingPlan, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('B004').StatusLOT, 'FIXED (Locked)');
+  const locked = mainPlan.find((r) => r.batch === 'B004');
+  assert.equal(locked.date, '2026-07-21');
+  assert.equal(locked.isSetup, false);
+  // capacity คืนกลับ: 1240 + 200
+  assert.equal(engine.workingCalendar['MC-A']['2026-07-21'], 1240 + 200);
+});
+
+test('parseDdMmYyyy: quirk %d/%m/%Y', () => {
+  assert.equal(parseDdMmYyyy('16/07/2026'), '2026-07-16');
+  assert.equal(parseDdMmYyyy('1/7/2026'), '2026-07-01');
+  assert.equal(parseDdMmYyyy('2026-07-16'), '2026-07-16'); // ไม่ตรง format → คงเดิม
+  assert.equal(parseDdMmYyyy('32/13/2026'), '32/13/2026'); // ไม่ใช่วันจริง → คงเดิม
+});

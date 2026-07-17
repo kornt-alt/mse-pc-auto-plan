@@ -4,11 +4,13 @@ import { Navbar, Nav, Container } from 'react-bootstrap';
 
 import ProtectedRoute from './auth/ProtectedRoute';
 import { isAuthenticated, getCurrentUser } from './api/client';
+import { PlanDataProvider } from './context/PlanDataContext';
 
 import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
 import User from './components/manage_user/User';
 import OrderControlTower from './pages/orders/OrderControlTower';
+import PlanningView from './pages/planning/PlanningView';
 
 import './index.css';
 import './theme/theme.css';
@@ -100,6 +102,7 @@ const HomeRedirect = () => {
 
 const App = () => (
   <Router basename="/MSE-AUTO-PLAN">
+    <PlanDataProvider>
     <ConditionalNavbar />
     <Routes>
       <Route path="/" element={<HomeRedirect />} />
@@ -126,7 +129,7 @@ const App = () => (
         path="/planning"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
-            <ComingSoon title="Planning View" />
+            <PlanningView />
           </ProtectedRoute>
         }
       />
@@ -189,6 +192,7 @@ const App = () => (
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </PlanDataProvider>
   </Router>
 );
 

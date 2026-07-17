@@ -6,10 +6,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "node --test scheduler/__tests__/"
+    "test": "node --test \"scheduler/__tests__/*.test.js\""
   },
   "engines": {
-    "node": ">=18 <23"
+    "node": ">=21 <25"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
