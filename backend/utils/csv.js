@@ -50,6 +50,13 @@ const parseCsv = (input) => {
   });
 };
 
+// header row ของไฟล์ (เทียบ DictReader.fieldnames — ใช้เช็คคอลัมน์ก่อน parse ทั้งไฟล์)
+const csvHeaders = (input) => {
+  const text = stripBom(Buffer.isBuffer(input) ? input.toString('utf8') : input);
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim() !== '');
+  return firstLine ? parseLine(firstLine).map((h) => h.trim()) : [];
+};
+
 // อ่านค่าจาก row แบบ case-insensitive (port ของ get_value_strict)
 const getValueStrict = (row, key) => {
   if (key in row) return row[key];
@@ -60,4 +67,4 @@ const getValueStrict = (row, key) => {
   return undefined;
 };
 
-module.exports = { parseCsv, getValueStrict };
+module.exports = { parseCsv, csvHeaders, getValueStrict };

@@ -11,6 +11,8 @@ import Logout from './components/manage_user/Logout';
 import User from './components/manage_user/User';
 import OrderControlTower from './pages/orders/OrderControlTower';
 import PlanningView from './pages/planning/PlanningView';
+import CalendarPage from './pages/calendar/CalendarPage';
+import ImportPage from './pages/import/ImportPage';
 
 import './index.css';
 import './theme/theme.css';
@@ -28,7 +30,8 @@ const MENU = [
   { path: '/daily-result', label: 'Daily Result', roles: ['ADMIN', 'PLANNER', 'MFG'] },
   { path: '/calendar', label: 'Calendar', roles: ['ADMIN', 'PLANNER'] },
   { path: '/routing-config', label: 'Routing Config', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-  { path: '/settings', label: 'Import Data', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+  // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
+  { path: '/settings', label: 'Import Data', roles: ['ADMIN', 'PLANNER'] },
   { path: '/user', label: 'Users', roles: ['ADMIN'] },
 ];
 
@@ -161,7 +164,7 @@ const App = () => (
         path="/calendar"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
-            <ComingSoon title="Calendar" />
+            <CalendarPage />
           </ProtectedRoute>
         }
       />
@@ -176,8 +179,8 @@ const App = () => (
       <Route
         path="/settings"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
-            <ComingSoon title="Import Data" />
+          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+            <ImportPage />
           </ProtectedRoute>
         }
       />

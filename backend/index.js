@@ -23,8 +23,10 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/system', require('./routes/system'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/schedule', require('./routes/schedule'));
-// Phase 3+: calendar, uploads, seeds, production,
-// daily-result, wip, visualization, routing, alerts
+app.use('/api/seed', require('./routes/seeds'));
+app.use('/api', require('./routes/uploads')); // /upload/*, /product-master/upload-csv
+app.use('/api', require('./routes/calendar')); // /calendar*, /holiday*
+// Phase 4+: production, daily-result, wip, visualization, routing, alerts
 
 // ========== REACT ROUTER FALLBACK ==========
 app.get('/MSE-AUTO-PLAN', (req, res) => {
