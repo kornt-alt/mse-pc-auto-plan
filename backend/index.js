@@ -28,7 +28,9 @@ app.use('/api', require('./routes/uploads')); // /upload/*, /product-master/uplo
 app.use('/api', require('./routes/calendar')); // /calendar*, /holiday*
 app.use('/api/production', require('./routes/production'));
 app.use('/api/daily-result', require('./routes/dailyResult'));
-// Phase 5+: wip, visualization, routing, alerts
+app.use('/api', require('./routes/wip')); // /wip*, /wip-summary*
+app.use('/api/visualization', require('./routes/visualization'));
+// Phase 6+: routing, alerts
 
 // ========== REACT ROUTER FALLBACK ==========
 app.get('/MSE-AUTO-PLAN', (req, res) => {

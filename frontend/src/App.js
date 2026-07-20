@@ -15,6 +15,8 @@ import CalendarPage from './pages/calendar/CalendarPage';
 import ImportPage from './pages/import/ImportPage';
 import ShopFloorPage from './pages/shopFloor/ShopFloorPage';
 import DailyResultPage from './pages/dailyResult/DailyResultPage';
+import WipPage from './pages/wip/WipPage';
+import PlanActualPage from './pages/planActual/PlanActualPage';
 
 import './index.css';
 import './theme/theme.css';
@@ -142,7 +144,7 @@ const App = () => (
         path="/plan-actual"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
-            <ComingSoon title="Plan & Actual" />
+            <PlanActualPage />
           </ProtectedRoute>
         }
       />
@@ -150,7 +152,7 @@ const App = () => (
         path="/wip"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
-            <ComingSoon title="WIP" />
+            <WipPage />
           </ProtectedRoute>
         }
       />
