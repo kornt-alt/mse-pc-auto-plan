@@ -2,36 +2,33 @@ import React, { useState, useEffect } from 'react';
 import { Modal, Table, Button, Form, Spinner, Alert, InputGroup } from 'react-bootstrap';
 import { QrCode, Archive } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import useScanInput from '../../components/shared/useScanInput';
 
 // ประวัติจ๊อบที่ปิดแล้ว Top 20 + ช่องสแกน barcode เปิด tracking
 const HistoryDialog = ({ show, onHide, onOpenTracking }) => {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [scanValue, setScanValue] = useState('');
+
+  // สแกน barcode: ครบ 10 ตัวอักษรเปิด tracking ทันที (ตามหน้าจอเดิม)
+  const scan = useScanInput(10, (batch) => openTracking(batch));
 
   useEffect(() => {
     if (!show) return;
     setLoading(true);
     setError('');
-    setScanValue('');
+    scan.reset();
     apiCall('/orders/history')
       .then(setRows)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [show]);
 
-  const openTracking = (batch) => {
-    setScanValue('');
+  function openTracking(batch) {
+    scan.reset();
     onOpenTracking(batch);
-  };
-
-  // สแกน barcode: ครบ 10 ตัวอักษรเปิด tracking ทันที (ตามหน้าจอเดิม)
-  const handleScanChange = (e) => {
-    const value = e.target.value;
-    setScanValue(value);
-    if (value.length === 10) openTracking(value);
-  };
+  }
 
   const rowStyle = (color) => {
     if (color === 'RED') return { backgroundColor: '#ffcdd2' };
@@ -54,11 +51,9 @@ const HistoryDialog = ({ show, onHide, onOpenTracking }) => {
           </InputGroup.Text>
           <Form.Control
             placeholder="สแกน Batch Barcode"
-            value={scanValue}
-            onChange={handleScanChange}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && scanValue.trim()) openTracking(scanValue.trim());
-            }}
+            value={scan.value}
+            onChange={scan.onChange}
+            onKeyDown={scan.onKeyDown}
             autoFocus
           />
         </InputGroup>

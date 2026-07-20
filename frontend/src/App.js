@@ -13,6 +13,8 @@ import OrderControlTower from './pages/orders/OrderControlTower';
 import PlanningView from './pages/planning/PlanningView';
 import CalendarPage from './pages/calendar/CalendarPage';
 import ImportPage from './pages/import/ImportPage';
+import ShopFloorPage from './pages/shopFloor/ShopFloorPage';
+import DailyResultPage from './pages/dailyResult/DailyResultPage';
 
 import './index.css';
 import './theme/theme.css';
@@ -116,7 +118,7 @@ const App = () => (
         path="/shop-floor"
         element={
           <ProtectedRoute>
-            <ComingSoon title="Shop Floor Control" />
+            <ShopFloorPage />
           </ProtectedRoute>
         }
       />
@@ -156,7 +158,7 @@ const App = () => (
         path="/daily-result"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
-            <ComingSoon title="Production Daily Result" />
+            <DailyResultPage />
           </ProtectedRoute>
         }
       />

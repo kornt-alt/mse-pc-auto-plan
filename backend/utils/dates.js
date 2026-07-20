@@ -73,9 +73,34 @@ const nowBangkokString = () => {
   );
 };
 
+// ===== Formatters สำหรับค่า DATETIME ที่อ่านจาก DB (wall-clock ไทยอยู่แล้ว) =====
+// ต่างจาก helpers ข้างบน: อ่านด้วย local getters เพราะ driver คืน Date แบบ wall-clock
+// ห้ามใช้กับ Date จาก nowBangkok() (อันนั้นต้องอ่านด้วย getUTC*)
+
+// production_records.timestamp (DATETIME) → "dd/mm/yyyy HH:MM[:SS]"
+const formatThaiTimestamp = (d, withSeconds = false) => {
+  if (!d) return '-';
+  const dt = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(dt.getTime())) return '-';
+  const base = `${pad2(dt.getDate())}/${pad2(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+  return withSeconds ? `${base}:${pad2(dt.getSeconds())}` : base;
+};
+
+// timestamp → 'YYYY-MM-DD' (เทียบ lexicographic ได้)
+const dateOnly = (d) => {
+  if (!d) return null;
+  if (typeof d === 'string') return d.slice(0, 10);
+  const dt = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+};
+
 module.exports = {
   nowBangkok,
   nowBangkokString,
+  pad2,
+  formatThaiTimestamp,
+  dateOnly,
   toDateString,
   parseDate,
   addDays,

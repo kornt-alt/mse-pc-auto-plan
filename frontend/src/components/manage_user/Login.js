@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
-import { Factory, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { Factory, AlertCircle, Eye, EyeOff, QrCode } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import useScanInput from '../shared/useScanInput';
 
 const Login = () => {
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [scanMode, setScanMode] = useState(false); // โหมดสแกนรหัสพนักงาน (OPERATOR)
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -18,6 +20,29 @@ const Login = () => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
+
+  // สแกนรหัสพนักงาน 5 ตัว → login-scan อัตโนมัติ (HomeRedirect พา OPERATOR ไป /shop-floor)
+  const scan = useScanInput(5, (code) => handleScanLogin(code));
+
+  async function handleScanLogin(code) {
+    if (loading) return;
+    setLoading(true);
+    setError('');
+    try {
+      const data = await apiCall('/auth/login-scan', {
+        method: 'POST',
+        body: JSON.stringify({ code: code.trim() }),
+      });
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      navigate(from, { replace: true });
+    } catch (err) {
+      setError(err.message || 'เข้าสู่ระบบไม่สำเร็จ');
+      scan.reset();
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -67,6 +92,38 @@ const Login = () => {
             </Alert>
           )}
 
+          {scanMode ? (
+            <>
+              <Form.Group className="mb-4">
+                <Form.Label>รหัสพนักงาน (สแกน/พิมพ์)</Form.Label>
+                <Form.Control
+                  type="password"
+                  value={scan.value}
+                  onChange={scan.onChange}
+                  onKeyDown={scan.onKeyDown}
+                  placeholder="สแกนรหัสพนักงาน 5 ตัว"
+                  autoFocus
+                  disabled={loading}
+                />
+              </Form.Group>
+              {loading && (
+                <div className="text-center mb-3">
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  กำลังเข้าสู่ระบบ...
+                </div>
+              )}
+              <Button
+                variant="link"
+                className="w-100 text-mse"
+                onClick={() => {
+                  setScanMode(false);
+                  setError('');
+                }}
+              >
+                เข้าสู่ระบบด้วย Username / Password
+              </Button>
+            </>
+          ) : (
           <Form onSubmit={handleSubmit}>
             <Form.Group className="mb-3">
               <Form.Label>Username</Form.Label>
@@ -120,7 +177,20 @@ const Login = () => {
                 'เข้าสู่ระบบ'
               )}
             </Button>
+            <Button
+              variant="link"
+              className="w-100 text-mse mt-2"
+              type="button"
+              onClick={() => {
+                setScanMode(true);
+                setError('');
+              }}
+            >
+              <QrCode size={16} className="me-1" />
+              เข้าสู่ระบบด้วยรหัสพนักงาน (สแกน)
+            </Button>
           </Form>
+          )}
         </Card.Body>
       </Card>
     </div>
