@@ -25,6 +25,16 @@ const toFloat = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// jig_id ที่สั้นกว่า 2 ตัวอักษร → gen "{model}-{machine}-{step}" ให้ unique ต่อ step
+// port จาก routing_config_screen.dart L911-914 (insert step) และ L1302-1308 (insert alt)
+// สำคัญ: ถ้าปล่อย jig ว่าง configProcessor จะแปลงเป็น '-' แล้ว engine.getSmartSetupTime()
+// จะมองว่างานคนละตัวใช้ jig เดียวกัน → คิด MINOR_SETUP แทน setup เต็ม (แผนเพี้ยนแบบเงียบ)
+// หมายเหตุ: dialog แก้ไข (edit) ส่งค่าดิบตามระบบเดิม (dart L499) — ไม่ใช้ helper นี้
+const resolveJigId = (jig, model, machine, stepIndex) => {
+  const j = String(jig ?? '').trim();
+  return j.length < 2 ? `${model}-${machine}-${toInt(stepIndex)}` : j;
+};
+
 // ===== แก้ไข Routing step (PUT /routing_config/:id) =====
 export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
   const [form, setForm] = useState({ flow_index: 0, step_index: 0, step_name: '', setup_group: '' });
@@ -273,7 +283,7 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
           machine: form.machine,
           cycle_time: toFloat(form.cycle_time),
           setup_time: toFloat(form.setup_time),
-          jig_id: form.jig_id,
+          jig_id: resolveJigId(form.jig_id, model, form.machine, form.step_index),
         }),
       });
       onSaved('✅ แทรก Step สำเร็จ!');
@@ -388,7 +398,7 @@ export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, 
           machine: form.machine,
           cycle_time: toFloat(form.cycle_time),
           setup_time: toFloat(form.setup_time),
-          jig_id: form.jig_id,
+          jig_id: resolveJigId(form.jig_id, model, form.machine, step?.step_index),
         }),
       });
       onSaved('✅ เพิ่มเครื่องสำรองสำเร็จ!');

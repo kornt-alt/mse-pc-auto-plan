@@ -44,6 +44,12 @@ app.get('/MSE-AUTO-PLAN/*', (req, res) => {
 // ========== START ==========
 getPool()
   .then(() => {
+    // เตือนตอน start ถ้า SMTP ไม่ครบ — ไม่ exit (dev ที่ไม่ใช้เมลต้องรันได้)
+    if (!env.isMailConfigured()) {
+      console.warn(
+        'WARNING: SMTP ไม่ครบใน .env (SMTP_HOST/SMTP_USER/SMTP_PASS) — อีเมลแจ้งเตือน missing routing จะใช้ไม่ได้'
+      );
+    }
     app.listen(env.PORT, () => {
       console.log(`MSE Auto Plan server running on port ${env.PORT}`);
     });

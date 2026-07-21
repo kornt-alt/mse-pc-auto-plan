@@ -8,6 +8,7 @@
 //   - เดิมไม่มี auth → recipient CRUD = ADMIN/PLANNER, ส่งอีเมล = ADMIN/PLANNER/MFG
 //     (เรียกได้ทั้งหน้า Orders และ Routing missing-models board)
 const express = require('express');
+const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendMail } = require('../services/mailer');
@@ -16,7 +17,15 @@ const router = express.Router();
 const sendRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
 const adminRoles = requireRole('ADMIN', 'PLANNER');
 
+// อ่านค่าจาก DB — fallback เป็น TO กัน row เก่า/ค่าเพี้ยนทำให้ query พัง
 const normType = (v) => (String(v ?? '').trim().toUpperCase() === 'CC' ? 'CC' : 'TO');
+
+// อ่านค่าจาก client — รับเฉพาะ TO/CC เท่านั้น, นอกนั้นคืน null ให้ route ตอบ 400
+// (เดิม normType ใช้กับ input ด้วย ทำให้ค่าเพี้ยน/ไม่ส่ง กลายเป็น TO เงียบ ๆ = ผู้รับหลักโดยไม่ตั้งใจ)
+const parseType = (v) => {
+  const t = String(v ?? '').trim().toUpperCase();
+  return t === 'TO' || t === 'CC' ? t : null;
+};
 
 // ================================================================
 // GET /api/alert/recipients — รายชื่อผู้รับทั้งหมด (จัดการหน้าเว็บ)
@@ -41,10 +50,14 @@ router.post('/alert/recipients', verifyToken, adminRoles, async (req, res) => {
     if (!email || !String(email).trim()) {
       return res.status(400).json({ message: 'กรุณาระบุอีเมล' });
     }
+    const type = parseType(recipient_type ?? 'TO');
+    if (!type) {
+      return res.status(400).json({ message: "ประเภทผู้รับต้องเป็น 'TO' หรือ 'CC' เท่านั้น" });
+    }
     await execute(
       `INSERT INTO alert_recipients (email, recipient_type, is_active, label)
        VALUES (@email, @type, 1, @label)`,
-      { email: String(email).trim(), type: normType(recipient_type), label: label ?? null }
+      { email: String(email).trim(), type, label: label ?? null }
     );
     res.json({ message: 'เพิ่มผู้รับสำเร็จ' });
   } catch (err) {
@@ -65,8 +78,12 @@ router.put('/alert/recipients/:id', verifyToken, adminRoles, async (req, res) =>
       params.email = String(email).trim();
     }
     if (recipient_type !== undefined) {
+      const type = parseType(recipient_type);
+      if (!type) {
+        return res.status(400).json({ message: "ประเภทผู้รับต้องเป็น 'TO' หรือ 'CC' เท่านั้น" });
+      }
       sets.push('recipient_type = @type');
-      params.type = normType(recipient_type);
+      params.type = type;
     }
     if (is_active !== undefined) {
       sets.push('is_active = @active');
@@ -110,6 +127,12 @@ router.delete('/alert/recipients/:id', verifyToken, adminRoles, async (req, res)
 router.post('/alert/missing-routing', verifyToken, sendRoles, async (req, res) => {
   const { batch_id, model_name } = req.body;
   try {
+    // เช็ค SMTP ก่อนแตะ DB — ถ้า .env บน server ไม่ครบ ให้บอกตรง ๆ แทน error ดิบของ nodemailer
+    if (!env.isMailConfigured()) {
+      return res.status(503).json({
+        message: 'ยังไม่ได้ตั้งค่า SMTP ในไฟล์ .env ของ server (SMTP_HOST/SMTP_USER/SMTP_PASS)',
+      });
+    }
     const rows = await query(
       'SELECT email, recipient_type FROM alert_recipients WHERE is_active = 1'
     );
@@ -120,10 +143,15 @@ router.post('/alert/missing-routing', verifyToken, sendRoles, async (req, res) =
     }
 
     // subject/body ไทยตามเดิม (L3050-3062)
+    // batch_id ว่าง/'-' = แจ้งจากกระดานงานด่วนหน้า Routing Config ซึ่งไม่มี batch อ้างอิง
+    const batchRef =
+      batch_id && String(batch_id).trim() && String(batch_id).trim() !== '-'
+        ? `อ้างอิง Batch ID: ${String(batch_id).trim()}`
+        : 'แจ้งจากหน้า Routing Config — ไม่ระบุ Batch';
     const subject = `🚨 [Action Required] แจ้งเตือน: ยังไม่มี Routing Master สำหรับ Model ${model_name}`;
     const text = `สวัสดีครับ Engineer / ผู้รับผิดชอบ,
 
-ระบบ Planning ตรวจพบว่า Model: ${model_name} (อ้างอิง Batch ID: ${batch_id})
+ระบบ Planning ตรวจพบว่า Model: ${model_name} (${batchRef})
 ยังไม่มีข้อมูล Routing & Machine Config ในระบบ ทำให้ Planner ไม่สามารถรันแผนการผลิตได้ครับ
 
 รบกวนดำเนินการเพิ่มข้อมูล Master data ให้ด้วยครับ
