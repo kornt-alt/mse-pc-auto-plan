@@ -29,14 +29,12 @@ const env = {
   SAP_SCRIPT_PATH: process.env.SAP_SCRIPT_PATH || '',
   SAP_TIMEOUT_MS: parseInt(process.env.SAP_TIMEOUT_MS) || 300000,
 
-  // Mail
+  // Mail — ผู้รับ (To/CC) เก็บในตาราง alert_recipients ไม่ใช่ .env (Phase 6)
   SMTP_HOST: process.env.SMTP_HOST || '',
   SMTP_PORT: parseInt(process.env.SMTP_PORT) || 587,
   SMTP_USER: process.env.SMTP_USER || '',
   SMTP_PASS: process.env.SMTP_PASS || '',
   MAIL_FROM: process.env.MAIL_FROM || '',
-  ALERT_ENGINEER_EMAIL: process.env.ALERT_ENGINEER_EMAIL || '',
-  ALERT_CC_LIST: (process.env.ALERT_CC_LIST || '').split(',').map((s) => s.trim()).filter(Boolean),
 
   // App config
   DEFAULT_CALENDAR_MINUTES: parseFloat(process.env.DEFAULT_CALENDAR_MINUTES) || 1240,

@@ -118,8 +118,8 @@ const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTrackin
               variant="link"
               size="sm"
               className="p-0 ms-1"
-              title="แจ้ง Engineer (เปิดใช้งาน Phase 6)"
-              onClick={onMissingAlert}
+              title="แจ้ง Engineer ว่ายังไม่มี Routing"
+              onClick={() => onMissingAlert(order)}
             >
               ❓
             </Button>
@@ -273,6 +273,19 @@ const OrderControlTower = () => {
         }
       },
     });
+  };
+
+  // Phase 6: แจ้ง Engineer ว่า model นี้ยังไม่มี Routing (ผู้รับ resolve จาก DB ฝั่ง backend)
+  const handleMissingAlert = async (order) => {
+    try {
+      const res = await apiCall('/alert/missing-routing', {
+        method: 'POST',
+        body: JSON.stringify({ batch_id: order.batch, model_name: order.model }),
+      });
+      showToast(res.message || '✅ ส่งอีเมลแจ้ง Engineer แล้ว');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    }
   };
 
   const handleDeleteOrder = (order) => {
@@ -562,9 +575,7 @@ const OrderControlTower = () => {
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
                       onTracking={(batch) => setTrackingBatch(batch)}
-                      onMissingAlert={() =>
-                        showToast('ระบบส่งอีเมลแจ้ง Engineer จะเปิดใช้งานใน Phase 6', 'warning')
-                      }
+                      onMissingAlert={handleMissingAlert}
                     />
                   ))}
                 </tbody>

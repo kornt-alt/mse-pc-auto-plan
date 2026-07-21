@@ -30,7 +30,8 @@ app.use('/api/production', require('./routes/production'));
 app.use('/api/daily-result', require('./routes/dailyResult'));
 app.use('/api', require('./routes/wip')); // /wip*, /wip-summary*
 app.use('/api/visualization', require('./routes/visualization'));
-// Phase 6+: routing, alerts
+app.use('/api', require('./routes/routingConfig')); // /routing_machine_config, /routing_config/*, /machine_config/*, /routing/*
+app.use('/api', require('./routes/alerts')); // /alert/*
 
 // ========== REACT ROUTER FALLBACK ==========
 app.get('/MSE-AUTO-PLAN', (req, res) => {

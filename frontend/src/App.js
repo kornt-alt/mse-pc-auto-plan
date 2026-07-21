@@ -17,6 +17,8 @@ import ShopFloorPage from './pages/shopFloor/ShopFloorPage';
 import DailyResultPage from './pages/dailyResult/DailyResultPage';
 import WipPage from './pages/wip/WipPage';
 import PlanActualPage from './pages/planActual/PlanActualPage';
+import RoutingConfigPage from './pages/routingConfig/RoutingConfigPage';
+import AlertSettingsPage from './pages/alertSettings/AlertSettingsPage';
 
 import './index.css';
 import './theme/theme.css';
@@ -36,6 +38,7 @@ const MENU = [
   { path: '/routing-config', label: 'Routing Config', roles: ['ADMIN', 'PLANNER', 'MFG'] },
   // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
   { path: '/settings', label: 'Import Data', roles: ['ADMIN', 'PLANNER'] },
+  { path: '/alert-settings', label: 'ตั้งค่าแจ้งเตือน', roles: ['ADMIN', 'PLANNER'] },
   { path: '/user', label: 'Users', roles: ['ADMIN'] },
 ];
 
@@ -43,14 +46,6 @@ const NotFound = () => (
   <Container className="text-center mt-5">
     <h2>404 - ไม่พบหน้านี้</h2>
     <Link to="/">กลับหน้าหลัก</Link>
-  </Container>
-);
-
-// หน้า placeholder ระหว่างที่ยัง migrate ไม่ครบ
-const ComingSoon = ({ title }) => (
-  <Container className="text-center mt-5">
-    <h3 className="text-mse">{title}</h3>
-    <p className="text-muted">อยู่ระหว่างการพัฒนา (กำลัง migrate จากระบบเดิม)</p>
   </Container>
 );
 
@@ -176,7 +171,7 @@ const App = () => (
         path="/routing-config"
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
-            <ComingSoon title="Routing & Machine Config" />
+            <RoutingConfigPage />
           </ProtectedRoute>
         }
       />
@@ -185,6 +180,14 @@ const App = () => (
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
             <ImportPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/alert-settings"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+            <AlertSettingsPage />
           </ProtectedRoute>
         }
       />
