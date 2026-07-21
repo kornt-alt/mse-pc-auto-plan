@@ -103,7 +103,7 @@ const HomeRedirect = () => {
 };
 
 const App = () => (
-  <Router basename="/MSE-AUTO-PLAN">
+  <Router basename="/MSE-PC-AUTO-PLAN">
     <PlanDataProvider>
     <ConditionalNavbar />
     <Routes>

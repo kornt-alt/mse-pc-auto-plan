@@ -1,5 +1,7 @@
 // API client — API_BASE จาก .env (REACT_APP_API_BASE)
-export const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
+// export const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
+export const API_BASE = '/MSE-PC-AUTO-PLAN/api';
+// export const API_BASE = 'http://localhost:5000/api'
 
 export const apiCall = async (endpoint, options = {}) => {
   const token = localStorage.getItem('token');
