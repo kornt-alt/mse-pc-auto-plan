@@ -1,0 +1,41 @@
+// API client — API_BASE จาก .env (REACT_APP_API_BASE)
+export const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
+
+export const apiCall = async (endpoint, options = {}) => {
+  const token = localStorage.getItem('token');
+  const isFormData = options.body instanceof FormData;
+  const config = {
+    ...options,
+    headers: {
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(token && { Authorization: `Bearer ${token}` }),
+      ...options.headers,
+    },
+  };
+
+  const response = await fetch(`${API_BASE}${endpoint}`, config);
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = `${process.env.PUBLIC_URL || ''}/login`;
+      throw new Error('Session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+    }
+    throw new Error(data.message || 'เกิดข้อผิดพลาด');
+  }
+
+  return data;
+};
+
+// ข้อมูล user ปัจจุบันจาก localStorage
+export const getCurrentUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user') || '{}');
+  } catch {
+    return {};
+  }
+};
+
+export const isAuthenticated = () => !!localStorage.getItem('token');

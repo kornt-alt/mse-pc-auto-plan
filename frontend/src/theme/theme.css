@@ -1,0 +1,40 @@
+/* MSE Auto Plan — brand theme (สีหลักจากระบบเดิม #154395) */
+:root {
+  --mse-primary: #154395;
+  --mse-primary-dark: #0e2f6b;
+  --mse-accent: #ff9800;
+}
+
+.navbar-mse {
+  background-color: var(--mse-primary) !important;
+}
+
+.btn-mse {
+  background-color: var(--mse-primary);
+  border-color: var(--mse-primary);
+  color: #fff;
+}
+
+.btn-mse:hover,
+.btn-mse:focus {
+  background-color: var(--mse-primary-dark);
+  border-color: var(--mse-primary-dark);
+  color: #fff;
+}
+
+.text-mse {
+  color: var(--mse-primary);
+}
+
+/* ตารางกว้าง — เลื่อนแนวนอนในกรอบตัวเอง */
+.matrix-scroll {
+  overflow-x: auto;
+}
+
+/* คอลัมน์ซ้ายตรึงสำหรับ matrix tables */
+.sticky-col {
+  position: sticky;
+  left: 0;
+  background-color: #fff;
+  z-index: 2;
+}

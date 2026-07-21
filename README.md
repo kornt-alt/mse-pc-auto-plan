@@ -1,6 +1,6 @@
-# Purchase Chemical Request
+# MSE Auto Plainning
 
-ระบบร้องขอและจัดการสารเคมี
+ระบบจัดการการผลิตอัตโนมัติ
 
 ---
 
@@ -19,7 +19,7 @@
 ### 1. Clone โปรเจกต์ลงเครื่อง
 
 ```bash
-git clone https://github.com/kornt-alt/mecha-ps-chemical-system
+git clone https://github.com/kornt-alt/mse-pc-auto-plan
 ```
 
 > ถ้ายังไม่มี Git ให้ติดตั้งก่อน แล้วรันคำสั่งนี้ใน Terminal (Command Prompt / PowerShell / Git Bash)

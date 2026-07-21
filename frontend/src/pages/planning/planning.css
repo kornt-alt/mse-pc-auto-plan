@@ -1,0 +1,103 @@
+/* Planning View — heat matrix / ตารางแผน (port จาก overview_tab.dart) */
+
+.planning-filterbar {
+  background: #e3f2fd; /* blue[50] */
+  padding: 8px 12px;
+}
+
+.planning-matrix-wrap {
+  overflow: auto;
+  border: 1px solid #bdbdbd;
+  max-height: calc(100vh - 260px);
+  background: #fff;
+}
+
+.planning-matrix {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: max-content;
+}
+
+.planning-matrix th,
+.planning-matrix td {
+  border-right: 1px solid #e0e0e0;
+  border-bottom: 1px solid #eeeeee;
+  padding: 0 4px;
+  font-size: 11px;
+  height: 28px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background-clip: padding-box;
+}
+
+.planning-matrix thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 45px;
+  background: #e0e0e0; /* grey[300] */
+  font-weight: bold;
+  font-size: 12px;
+  border-right: 1px solid #bdbdbd;
+  border-bottom: 1px solid #bdbdbd;
+}
+
+/* 3 คอลัมน์ซ้าย frozen: Machine 70 / Batch 110 / Process 90 */
+.planning-matrix .frozen-0 { position: sticky; left: 0; width: 70px; min-width: 70px; max-width: 70px; z-index: 1; background: #fff; }
+.planning-matrix .frozen-1 { position: sticky; left: 70px; width: 110px; min-width: 110px; max-width: 110px; z-index: 1; background: #fff; }
+.planning-matrix .frozen-2 { position: sticky; left: 180px; width: 90px; min-width: 90px; max-width: 90px; z-index: 1; background: #fff; border-right: 1px solid #bdbdbd; }
+.planning-matrix thead .frozen-0,
+.planning-matrix thead .frozen-1,
+.planning-matrix thead .frozen-2 { z-index: 3; background: #e0e0e0; }
+
+.planning-matrix .frozen-setup { background: #fff3e0; } /* orange[50] */
+
+.planning-matrix .date-col { width: 85px; min-width: 85px; max-width: 85px; text-align: center; }
+
+.planning-chip {
+  display: block;
+  border-radius: 2px;
+  font-size: 10px;
+  color: #212121;
+  text-align: center;
+  line-height: 22px;
+  margin: 1px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.planning-chip-run { background: #b3e5fc; } /* lightBlue[100] */
+.planning-chip-setup { background: #ffb74d; } /* orange[300] */
+
+/* ตาราง Detailed / Report */
+.planning-table-wrap {
+  overflow: auto;
+  max-height: calc(100vh - 260px);
+  border: 1px solid #bdbdbd;
+  background: #fff;
+}
+.planning-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+}
+.planning-table th,
+.planning-table td {
+  border-right: 1px solid #e0e0e0;
+  border-bottom: 1px solid #eeeeee;
+  padding: 0 8px;
+  height: 35px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.planning-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #e0e0e0;
+  font-weight: bold;
+}

@@ -1,0 +1,1821 @@
+{
+ "name": "minor_setup_jig",
+ "current_time": "2026-07-17T10:00:00",
+ "is_replan": false,
+ "routing_config": [
+  {
+   "model": "MODEL-A",
+   "flow_index": 1,
+   "step_index": 0,
+   "step_name": "TURNING",
+   "setup_group": "SG-ALPHA"
+  },
+  {
+   "model": "MODEL-A",
+   "flow_index": 1,
+   "step_index": 1,
+   "step_name": "MILLING",
+   "setup_group": "SG-ALPHA"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "flow_index": 1,
+   "step_index": 0,
+   "step_name": "TURNING",
+   "setup_group": "SG-HEAT"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "flow_index": 1,
+   "step_index": 1,
+   "step_name": "HEAT-TREATMENT",
+   "setup_group": "SG-HEAT"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "flow_index": 1,
+   "step_index": 2,
+   "step_name": "FINISH-MILL",
+   "setup_group": "SG-HEAT"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 1,
+   "step_index": 0,
+   "step_name": "TURNING",
+   "setup_group": "SG-MULTI"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 1,
+   "step_index": 1,
+   "step_name": "MILLING",
+   "setup_group": "SG-MULTI"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 2,
+   "step_index": 0,
+   "step_name": "TURNING-ALT",
+   "setup_group": "SG-MULTI"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 2,
+   "step_index": 1,
+   "step_name": "MILLING",
+   "setup_group": "SG-MULTI"
+  },
+  {
+   "model": "MODEL-JIG",
+   "flow_index": 1,
+   "step_index": 0,
+   "step_name": "GRINDING",
+   "setup_group": "SG-JIG1"
+  },
+  {
+   "model": "MODEL-JIG2",
+   "flow_index": 1,
+   "step_index": 0,
+   "step_name": "GRINDING",
+   "setup_group": "SG-JIG2"
+  },
+  {
+   "model": "MODEL-FIX",
+   "flow_index": 1,
+   "step_index": 0,
+   "step_name": "TURNING-F",
+   "setup_group": "SG-FIX"
+  },
+  {
+   "model": "MODEL-FIX",
+   "flow_index": 1,
+   "step_index": 1,
+   "step_name": "MILLING",
+   "setup_group": "SG-FIX"
+  }
+ ],
+ "machine_config": [
+  {
+   "model": "MODEL-A",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-A",
+   "cycle_time": 2.0,
+   "setup_time": 30.0,
+   "jig_id": "J-A"
+  },
+  {
+   "model": "MODEL-A",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 1,
+   "machine": "MC-B",
+   "cycle_time": 2.5,
+   "setup_time": 35.0,
+   "jig_id": "J-A"
+  },
+  {
+   "model": "MODEL-A",
+   "flow_index": 1,
+   "step_index": 1,
+   "alternative_index": 0,
+   "machine": "MC-C",
+   "cycle_time": 1.0,
+   "setup_time": 20.0,
+   "jig_id": "-"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-A",
+   "cycle_time": 1.5,
+   "setup_time": 25.0,
+   "jig_id": "J-H"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "flow_index": 1,
+   "step_index": 1,
+   "alternative_index": 0,
+   "machine": "OUTSOURCE-HEAT",
+   "cycle_time": 3.0,
+   "setup_time": 0.0,
+   "jig_id": "-"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "flow_index": 1,
+   "step_index": 2,
+   "alternative_index": 0,
+   "machine": "MC-C",
+   "cycle_time": 1.0,
+   "setup_time": 20.0,
+   "jig_id": "-"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-A",
+   "cycle_time": 3.0,
+   "setup_time": 30.0,
+   "jig_id": "J-M"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 1,
+   "step_index": 1,
+   "alternative_index": 0,
+   "machine": "MC-C",
+   "cycle_time": 1.0,
+   "setup_time": 15.0,
+   "jig_id": "-"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 2,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-B",
+   "cycle_time": 1.0,
+   "setup_time": 20.0,
+   "jig_id": "J-M2"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "flow_index": 2,
+   "step_index": 1,
+   "alternative_index": 0,
+   "machine": "MC-C",
+   "cycle_time": 1.0,
+   "setup_time": 15.0,
+   "jig_id": "-"
+  },
+  {
+   "model": "MODEL-JIG",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-A",
+   "cycle_time": 1.0,
+   "setup_time": 60.0,
+   "jig_id": "J-SHARE"
+  },
+  {
+   "model": "MODEL-JIG2",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-A",
+   "cycle_time": 1.0,
+   "setup_time": 60.0,
+   "jig_id": "J-SHARE"
+  },
+  {
+   "model": "MODEL-FIX",
+   "flow_index": 1,
+   "step_index": 0,
+   "alternative_index": 0,
+   "machine": "MC-B",
+   "cycle_time": 2.0,
+   "setup_time": 30.0,
+   "jig_id": "J-F"
+  },
+  {
+   "model": "MODEL-FIX",
+   "flow_index": 1,
+   "step_index": 1,
+   "alternative_index": 0,
+   "machine": "MC-C",
+   "cycle_time": 1.0,
+   "setup_time": 20.0,
+   "jig_id": "-"
+  }
+ ],
+ "calendar": [
+  {
+   "machine": "MC-A",
+   "date": "2026-07-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-19",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-19",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-19",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-19",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-26",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-26",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-26",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-26",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-07-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-07-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-07-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-07-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-02",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-02",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-02",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-02",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-06",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-06",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-06",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-06",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-09",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-09",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-09",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-09",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-13",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-13",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-13",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-13",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-16",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-16",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-16",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-16",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-20",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-23",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-23",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-23",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-23",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-27",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-30",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-30",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-30",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-30",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-08-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-08-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-08-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-08-31",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-01",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-02",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-02",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-02",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-02",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-03",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-04",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-05",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-06",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-06",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-06",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-06",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-07",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-08",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-09",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-09",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-09",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-09",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-10",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-11",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-12",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-13",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-13",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-13",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-13",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-14",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-15",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-16",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-16",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-16",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-16",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-17",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-18",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-19",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-20",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-20",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-20",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-20",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-21",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-22",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-23",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-24",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-25",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-26",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-27",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-27",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-27",
+   "available_time": 0.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-27",
+   "available_time": 0.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-28",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-29",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-A",
+   "date": "2026-09-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-B",
+   "date": "2026-09-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "MC-C",
+   "date": "2026-09-30",
+   "available_time": 1240.0
+  },
+  {
+   "machine": "OUTSOURCE-HEAT",
+   "date": "2026-09-30",
+   "available_time": 1240.0
+  }
+ ],
+ "orders": [
+  {
+   "batch": "2600000601",
+   "model": "MODEL-JIG",
+   "due_date": "2026-08-05",
+   "priority": 1,
+   "qty": 300.0,
+   "plan_mode": "NEW",
+   "wip_flow_index": null,
+   "wip_start_step_index": null,
+   "wip_finish_date": null,
+   "wip_machine": null,
+   "planning_mode": "forward",
+   "release_date": null
+  },
+  {
+   "batch": "2600000602",
+   "model": "MODEL-JIG2",
+   "due_date": "2026-08-10",
+   "priority": 2,
+   "qty": 400.0,
+   "plan_mode": "NEW",
+   "wip_flow_index": null,
+   "wip_start_step_index": null,
+   "wip_finish_date": null,
+   "wip_machine": null,
+   "planning_mode": "forward",
+   "release_date": null
+  }
+ ],
+ "product_master": [
+  {
+   "model": "MODEL-A",
+   "setup_group": "SG-ALPHA"
+  },
+  {
+   "model": "MODEL-HEAT",
+   "setup_group": "SG-HEAT"
+  },
+  {
+   "model": "MODEL-MULTI",
+   "setup_group": null
+  },
+  {
+   "model": "MODEL-JIG",
+   "setup_group": "SG-JIG1"
+  },
+  {
+   "model": "MODEL-JIG2",
+   "setup_group": "SG-JIG2"
+  },
+  {
+   "model": "MODEL-FIX",
+   "setup_group": "SG-FIX"
+  }
+ ],
+ "production_records": [],
+ "batch_step_status": [],
+ "schedule_results": []
+}
