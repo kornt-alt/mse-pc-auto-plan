@@ -15,7 +15,7 @@ const emptyMachine = () => ({
   machine: '',
   cycle_time: 1,
   setup_time: 1,
-  jig_id: '',
+  jig_id: '1', // default ตาม wizard เดิม (dart L2617/L2731) — ห้ามเป็น '' เพราะ engine จะมองเป็น jig '-' ร่วมกัน
 });
 const toInt = (v) => parseInt(v, 10) || 0;
 const toFloat = (v) => {
@@ -114,7 +114,7 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
             machine: m.machine ?? '',
             cycle_time: m.cycle_time ?? 1,
             setup_time: m.setup_time ?? 1,
-            jig_id: m.jig_id ?? '',
+            jig_id: m.jig_id ?? '1', // ตาม wizard เดิม L2830 (row ที่ไม่มี jig → '1')
           }))
         );
       } catch (err) {
@@ -151,7 +151,8 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
             machine: m.machine,
             cycle_time: toFloat(m.cycle_time),
             setup_time: toFloat(m.setup_time),
-            jig_id: m.jig_id,
+            // กัน jig ว่างหลุดลง DB (ว่าง → engine มองเป็น '-' ร่วมกันทุกงาน → setup เพี้ยน)
+            jig_id: String(m.jig_id ?? '').trim() || '1',
           })),
         }),
       });

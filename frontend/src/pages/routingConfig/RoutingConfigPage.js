@@ -167,7 +167,8 @@ const RoutingConfigPage = () => {
     try {
       const res = await apiCall('/alert/missing-routing', {
         method: 'POST',
-        body: JSON.stringify({ batch_id: '-', model_name: modelName }),
+        // ไม่มี batch อ้างอิงจากกระดานงานด่วน — backend จะใส่ข้อความ "ไม่ระบุ Batch" ให้เอง
+        body: JSON.stringify({ batch_id: null, model_name: modelName }),
       });
       showToast(res.message || '✅ ส่งอีเมลแล้ว');
     } catch (err) {

@@ -11,7 +11,8 @@ const getTransporter = () => {
     transporter = nodemailer.createTransport({
       host: env.SMTP_HOST,
       port: env.SMTP_PORT,
-      secure: false, // STARTTLS บน 587 (ตรงกับ smtplib starttls เดิม)
+      // 465 = implicit TLS, อื่น ๆ (587) = STARTTLS ตรงกับ smtplib starttls เดิม
+      secure: env.SMTP_PORT === 465,
       auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
     });
   }

@@ -40,4 +40,8 @@ const env = {
   DEFAULT_CALENDAR_MINUTES: parseFloat(process.env.DEFAULT_CALENDAR_MINUTES) || 1240,
 };
 
+// SMTP ไม่อยู่ใน required (dev ที่ไม่ใช้เมลต้องรัน server ได้) — ใช้ helper นี้เช็คแทน
+// index.js เตือนตอน start, routes/alerts.js คืน 503 พร้อมข้อความไทยแทน error ดิบของ nodemailer
+env.isMailConfigured = () => Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+
 module.exports = env;

@@ -10,7 +10,7 @@ app.use(express.json());
 app.use(cors());
 
 // ========== STATIC FILES ==========
-app.use('/MSE-AUTO-PLAN', express.static(path.join(__dirname, 'build')));
+app.use('/MSE-PC-AUTO-PLAN', express.static(path.join(__dirname, 'build')));
 
 // Drawing PDFs สำหรับ Shop Floor (path จาก .env)
 if (env.DRAWINGS_DIR && fs.existsSync(env.DRAWINGS_DIR)) {
@@ -34,16 +34,22 @@ app.use('/api', require('./routes/routingConfig')); // /routing_machine_config, 
 app.use('/api', require('./routes/alerts')); // /alert/*
 
 // ========== REACT ROUTER FALLBACK ==========
-app.get('/MSE-AUTO-PLAN', (req, res) => {
+app.get('/MSE-PC-AUTO-PLAN', (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
-app.get('/MSE-AUTO-PLAN/*', (req, res) => {
+app.get('/MSE-PC-AUTO-PLAN/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
 // ========== START ==========
 getPool()
   .then(() => {
+    // เตือนตอน start ถ้า SMTP ไม่ครบ — ไม่ exit (dev ที่ไม่ใช้เมลต้องรันได้)
+    if (!env.isMailConfigured()) {
+      console.warn(
+        'WARNING: SMTP ไม่ครบใน .env (SMTP_HOST/SMTP_USER/SMTP_PASS) — อีเมลแจ้งเตือน missing routing จะใช้ไม่ได้'
+      );
+    }
     app.listen(env.PORT, () => {
       console.log(`MSE Auto Plan server running on port ${env.PORT}`);
     });
