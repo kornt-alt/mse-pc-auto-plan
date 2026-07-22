@@ -8,6 +8,7 @@ import { PlanDataProvider } from './context/PlanDataContext';
 
 import Login from './components/manage_user/Login';
 import Logout from './components/manage_user/Logout';
+import Register from './components/manage_user/Register';
 import User from './components/manage_user/User';
 import OrderControlTower from './pages/orders/OrderControlTower';
 import PlanningView from './pages/planning/PlanningView';
@@ -86,7 +87,7 @@ const NotFound = () => (
 const ConditionalNavbar = () => {
   const location = useLocation();
 
-  if (['/login'].includes(location.pathname) || !isAuthenticated()) {
+  if (['/login', '/register'].includes(location.pathname) || !isAuthenticated()) {
     return null;
   }
 
@@ -191,6 +192,7 @@ const App = () => (
     <Routes>
       <Route path="/" element={<HomeRedirect />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
       <Route path="/logout" element={<Logout />} />
 
       <Route

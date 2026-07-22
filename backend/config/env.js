@@ -35,6 +35,8 @@ const env = {
   SMTP_USER: process.env.SMTP_USER || '',
   SMTP_PASS: process.env.SMTP_PASS || '',
   MAIL_FROM: process.env.MAIL_FROM || '',
+  // URL หน้าเว็บสำหรับใส่ลิงก์ในอีเมล เช่น http://plbsg04/MSE-PC-AUTO-PLAN (ไม่ตั้งก็ได้ — เมลจะไม่มีลิงก์)
+  APP_URL: (process.env.APP_URL || '').replace(/\/+$/, ''),
 
   // App config
   DEFAULT_CALENDAR_MINUTES: parseFloat(process.env.DEFAULT_CALENDAR_MINUTES) || 1240,

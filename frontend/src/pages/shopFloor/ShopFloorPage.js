@@ -9,7 +9,7 @@ import {
   InputGroup,
   Badge,
 } from 'react-bootstrap';
-import { apiCall } from '../../api/client';
+import { apiCall, getCurrentUser } from '../../api/client';
 import PageHeader from '../../components/shared/PageHeader';
 import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import useScanInput from '../../components/shared/useScanInput';
@@ -28,6 +28,12 @@ const calcWorkingDate = () => {
   if (now.getHours() < 7) now.setDate(now.getDate() - 1);
   const pad2 = (n) => String(n).padStart(2, '0');
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+};
+
+// รหัสพนักงานตั้งต้นของช่องสแกน — ผู้ใช้เดิมที่ยังไม่มี employee_code จะได้ username แทน
+const defaultEmpCode = () => {
+  const user = getCurrentUser();
+  return user.employee_code || user.username || '';
 };
 
 const ShopFloorPage = () => {
@@ -58,7 +64,9 @@ const ShopFloorPage = () => {
   }, []);
 
   // ===== operator login (ไม่มี API — แค่เก็บรหัสไว้ส่งตอนบันทึก ตามเดิม) =====
-  const empScan = useScanInput(5, (code) => doLogin(code));
+  // เติมรหัสพนักงานของคนที่ล็อกอินอยู่ให้เลย (คนที่เข้าด้วยการกรอกรหัส/แตะบัตรจะได้ไม่ต้องกรอกซ้ำ)
+  // ยังต้องเลือกกะแล้วกด "เข้าใช้งาน" เองเหมือนเดิม และแก้รหัสในช่องได้ถ้าเปลี่ยนคนทำงาน
+  const empScan = useScanInput(5, (code) => doLogin(code), undefined, defaultEmpCode());
 
   function doLogin(code) {
     const c = (code ?? empScan.value).trim();
@@ -219,7 +227,7 @@ const ShopFloorPage = () => {
                     value={empScan.value}
                     onChange={empScan.onChange}
                     onKeyDown={empScan.onKeyDown}
-                    placeholder="รหัสพนักงาน 5 ตัว"
+                    placeholder="สแกน/พิมพ์รหัสพนักงาน"
                     autoFocus
                   />
                 </InputGroup>
