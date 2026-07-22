@@ -23,8 +23,8 @@ const cleanText = (v) => {
     .trim();
 };
 
-// username / employee_code — อังกฤษ ตัวเลข . _ - เท่านั้น ยาว 3-20
-const IDENTIFIER_RE = /^[A-Za-z0-9._-]{3,20}$/;
+// username / employee_code — อังกฤษ ตัวเลข . _ - เท่านั้น ยาว 3-10
+const IDENTIFIER_RE = /^[A-Za-z0-9._-]{3,10}$/;
 const isIdentifier = (v) => IDENTIFIER_RE.test(cleanText(v));
 
 // ชื่อ-นามสกุล / แผนก — ไทยหรือภาษาอื่นได้หมด แค่บีบช่องว่างซ้ำและตัดความยาว

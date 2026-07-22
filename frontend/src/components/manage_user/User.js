@@ -379,11 +379,21 @@ const User = () => {
             <Col md={6}>
               <Form.Group className="mb-3">
                 <Form.Label>แผนก</Form.Label>
-                <Form.Control
+                {/* <Form.Control
                   value={form.department}
                   onChange={(e) => setField('department', e.target.value)}
                   placeholder="ภาษาไทยได้"
-                />
+                /> */}
+                <Form.Select
+                  name="department"
+                  value={form.department}
+                  onChange={(e) => setField('department', e.target.value)}
+                >
+                  <option value="">-- กรุณาเลือกแผนก --</option>
+                  <option value="MSE">MSE</option>
+                  <option value="MECHA2">MECHA2</option>
+                  <option value="MECHA1">MECHA1</option>
+                </Form.Select>
               </Form.Group>
             </Col>
             <Col md={6}>

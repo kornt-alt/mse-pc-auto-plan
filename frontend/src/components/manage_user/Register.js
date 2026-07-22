@@ -6,7 +6,7 @@ import useCardScan from '../shared/useCardScan';
 
 // สมัครใช้งานเอง — บัญชีที่ได้ยังเข้าระบบไม่ได้จนกว่า ADMIN จะอนุมัติและกำหนด role
 // ตรวจฝั่งนี้ให้ผู้ใช้รู้ตัวเร็ว แต่ backend (routes/auth.js + utils/validate.js) คือด่านจริง
-const IDENTIFIER_RE = /^[A-Za-z0-9._-]{3,20}$/;
+const IDENTIFIER_RE = /^[A-Za-z0-9._-]{3,10}$/;
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 const emptyForm = {
@@ -16,7 +16,7 @@ const emptyForm = {
   full_name: '',
   email: '',
   employee_code: '',
-  department: '',
+  department: 'MSE',
   phone: '',
   card_uid: '',
 };
@@ -36,7 +36,7 @@ const Register = () => {
 
   const validate = () => {
     if (!IDENTIFIER_RE.test(form.username.trim())) {
-      return 'Username ต้องเป็นภาษาอังกฤษ ตัวเลข หรือ . _ - ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)';
+      return 'Username ต้องเป็นภาษาอังกฤษ ตัวเลข หรือ . _ - ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)';
     }
     if (form.password.length < 4) {
       return 'รหัสผ่านต้องยาวอย่างน้อย 4 ตัวอักษร';
@@ -51,7 +51,7 @@ const Register = () => {
       return 'รูปแบบอีเมลไม่ถูกต้อง';
     }
     if (!IDENTIFIER_RE.test(form.employee_code.trim())) {
-      return 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)';
+      return 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)';
     }
     return '';
   };
@@ -247,20 +247,24 @@ const Register = () => {
           <Col md={6}>
             <Form.Group className="mb-3">
               <Form.Label>แผนก</Form.Label>
-              <Form.Control
+              <Form.Select
                 name="department"
                 value={form.department}
                 onChange={handleChange}
-                placeholder="ภาษาไทยได้"
-              />
+              >
+                <option value="">-- กรุณาเลือกแผนก --</option>
+                <option value="MSE">MSE</option>
+                <option value="MECHA2">MECHA2</option>
+                <option value="MECHA1">MECHA1</option>
+              </Form.Select>
             </Form.Group>
           </Col>
-          <Col md={6}>
+          {/* <Col md={6}>
             <Form.Group className="mb-3">
               <Form.Label>เบอร์โทร</Form.Label>
               <Form.Control name="phone" value={form.phone} onChange={handleChange} />
             </Form.Group>
-          </Col>
+          </Col> */}
         </Row>
 
         <Form.Group className="mb-4">

@@ -33,11 +33,12 @@ test('cleanText: ไม่ทำลายอักษรไทย (สระ/ว
   assert.strictEqual(cleanText('ฝ่ายผลิต'), 'ฝ่ายผลิต');
 });
 
-test('isIdentifier: รับเฉพาะอังกฤษ/ตัวเลข/._- ยาว 3-20', () => {
+test('isIdentifier: รับเฉพาะอังกฤษ/ตัวเลข/._- ยาว 3-10', () => {
   assert.ok(isIdentifier('12345'));
   assert.ok(isIdentifier('korn.t'));
   assert.ok(isIdentifier('EMP_001'));
   assert.ok(isIdentifier('  A1234  ')); // clean ก่อนเทียบ
+  assert.ok(isIdentifier('a'.repeat(10)), 'ยาว 10 พอดีต้องผ่าน');
 });
 
 test('isIdentifier: ปฏิเสธไทย/ช่องว่าง/อักขระแปลก/ความยาวผิด', () => {
@@ -45,7 +46,7 @@ test('isIdentifier: ปฏิเสธไทย/ช่องว่าง/อั�
   assert.ok(!isIdentifier('emp 001'), 'ช่องว่างกลางคำไม่ผ่าน');
   assert.ok(!isIdentifier('emp@001'));
   assert.ok(!isIdentifier('ab'), 'สั้นกว่า 3');
-  assert.ok(!isIdentifier('a'.repeat(21)), 'ยาวเกิน 20');
+  assert.ok(!isIdentifier('a'.repeat(11)), 'ยาวเกิน 10');
   assert.ok(!isIdentifier(''));
   assert.ok(!isIdentifier(null));
 });

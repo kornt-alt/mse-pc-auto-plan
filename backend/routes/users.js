@@ -57,12 +57,12 @@ router.post('/', verifyToken, requireRole('ADMIN'), async (req, res) => {
     // identifier ห้ามไทย/เว้นวรรค (ค่านี้ไปอยู่บนบาร์โค้ดและ production_records.employee)
     if (!isIdentifier(username)) {
       return res.status(400).json({
-        message: 'Username ต้องเป็นภาษาอังกฤษ ตัวเลข หรือ . _ - ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
+        message: 'Username ต้องเป็นภาษาอังกฤษ ตัวเลข หรือ . _ - ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
       });
     }
     if (employeeCode && !isIdentifier(employeeCode)) {
       return res.status(400).json({
-        message: 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
+        message: 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
       });
     }
     if (email && !isValidEmail(email)) {
@@ -187,7 +187,7 @@ router.patch('/:id', verifyToken, requireRole('ADMIN'), async (req, res) => {
       const empCode = cleanText(req.body.employee_code);
       if (empCode && !isIdentifier(empCode)) {
         return res.status(400).json({
-          message: 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
+          message: 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
         });
       }
       sets.push('employee_code = @employee_code');

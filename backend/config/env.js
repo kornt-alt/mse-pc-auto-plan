@@ -40,6 +40,10 @@ const env = {
 
   // App config
   DEFAULT_CALENDAR_MINUTES: parseFloat(process.env.DEFAULT_CALENDAR_MINUTES) || 1240,
+
+  // กรอกรหัสพนักงานแล้วเข้าหน้าไลน์ผลิตได้แม้ไม่มีบัญชีใน users (ได้สิทธิ์ OPERATOR เท่านั้น)
+  // ตั้ง ALLOW_GUEST_SCAN=false เพื่อกลับไปบังคับว่าต้องมีบัญชีในระบบก่อน
+  ALLOW_GUEST_SCAN: process.env.ALLOW_GUEST_SCAN !== 'false',
 };
 
 // SMTP ไม่อยู่ใน required (dev ที่ไม่ใช้เมลต้องรัน server ได้) — ใช้ helper นี้เช็คแทน

@@ -5,17 +5,19 @@ import { apiCall } from '../../api/client';
 import useScanInput from '../shared/useScanInput';
 import useCardScan from '../shared/useCardScan';
 
-// 3 วิธีเข้าสู่ระบบ:
-//   password — Username/Password (ทุก role)
-//   card     — แตะบัตร RFID (เฉพาะ OPERATOR/MFG — backend เป็นคนตัดสิน)
-//   code     — กรอกรหัสพนักงาน แล้วเด้งไปหน้า Shop Floor เลย
+// 3 วิธีเข้าสู่ระบบ แต่มี 2 หน้าจอ:
+//   mode = 'password' — แตะบัตร RFID (อยู่บนสุด เครื่องอ่านจ่ออยู่แล้วต้องแตะได้ทันที)
+//                       คั่นด้วย "หรือ" แล้วตามด้วย Username/Password
+//   mode = 'code'     — กรอกรหัสพนักงาน แล้วเด้งไปหน้า Shop Floor เลย (ไม่มีบัญชีก็เข้าได้)
 const Login = () => {
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  // ระบุด้วยว่ากำลังยิงทางไหนอยู่ — สปินเนอร์จะได้ขึ้นที่เดียว (ช่องบัตรไม่มีปุ่มของตัวเอง)
+  const [busy, setBusy] = useState(''); // '' | 'card' | 'password' | 'code'
   const [showPassword, setShowPassword] = useState(false);
   const [mode, setMode] = useState('password');
 
+  const loading = Boolean(busy);
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from?.pathname || '/';
@@ -48,7 +50,7 @@ const Login = () => {
         setError('กรุณากรอกรหัสพนักงาน');
         return;
       }
-      setLoading(true);
+      setBusy('code');
       setError('');
       try {
         const data = await apiCall('/auth/login-scan', {
@@ -60,7 +62,7 @@ const Login = () => {
       } catch (err) {
         setError(err.message || 'เข้าสู่ระบบไม่สำเร็จ');
       } finally {
-        setLoading(false);
+        setBusy('');
       }
     },
     [finishLogin]
@@ -72,7 +74,7 @@ const Login = () => {
   // ===== แตะบัตร =====
   const handleCardLogin = useCallback(
     async (uid) => {
-      setLoading(true);
+      setBusy('card');
       setError('');
       try {
         const data = await apiCall('/auth/login-card', {
@@ -83,7 +85,7 @@ const Login = () => {
       } catch (err) {
         setError(err.message || 'เข้าสู่ระบบไม่สำเร็จ');
       } finally {
-        setLoading(false);
+        setBusy('');
       }
     },
     [finishLogin, from]
@@ -94,10 +96,11 @@ const Login = () => {
   const codeReset = codeScan.reset;
 
   // เข้าไม่สำเร็จ → ล้างช่องให้ว่าง ไม่งั้นการแตะบัตร/กรอกรหัสรอบถัดไปจะไปต่อท้ายค่าเดิม
+  // ช่องบัตรอยู่คู่กับฟอร์ม Username/Password แล้ว จึงล้างทุกครั้งที่ไม่ได้อยู่หน้ากรอกรหัสพนักงาน
   useEffect(() => {
     if (!error) return;
-    if (mode === 'card') cardReset();
     if (mode === 'code') codeReset();
+    else cardReset();
   }, [error, mode, cardReset, codeReset]);
 
   const handleSubmit = async (e) => {
@@ -106,7 +109,7 @@ const Login = () => {
       setError('กรุณากรอก Username และ Password');
       return;
     }
-    setLoading(true);
+    setBusy('password');
     setError('');
 
     try {
@@ -121,16 +124,9 @@ const Login = () => {
     } catch (err) {
       setError(err.message || 'เข้าสู่ระบบไม่สำเร็จ');
     } finally {
-      setLoading(false);
+      setBusy('');
     }
   };
-
-  const loadingRow = loading && (
-    <div className="text-center mb-3">
-      <Spinner animation="border" size="sm" className="me-2" />
-      กำลังเข้าสู่ระบบ...
-    </div>
-  );
 
   return (
     <div
@@ -163,17 +159,18 @@ const Login = () => {
             </Alert>
           )}
 
-          {mode === 'card' && (
+          {mode === 'password' && (
             <>
+              {/* บล็อกแตะบัตร — อยู่นอก <Form> ไม่งั้น Enter ที่เครื่องอ่านเคาะท้าย UID จะไป submit ฟอร์มรหัสผ่าน */}
               <div className="text-center mb-3">
                 <i
                   className="bi bi-credit-card-2-front text-mse"
-                  style={{ fontSize: '3rem' }}
+                  style={{ fontSize: '2.5rem' }}
                   aria-hidden="true"
                 />
-                <div className="mt-2">แตะบัตรที่เครื่องอ่านได้เลย</div>
+                <div className="mt-1">แตะบัตรที่เครื่องอ่านได้เลย</div>
               </div>
-              <Form.Group className="mb-4">
+              <Form.Group className="mb-2">
                 <Form.Label>รหัสบัตร</Form.Label>
                 <Form.Control
                   type="password"
@@ -186,23 +183,97 @@ const Login = () => {
                   disabled={loading}
                 />
               </Form.Group>
-              {loadingRow}
-              <Button
-                variant="link"
-                className="w-100 text-mse"
-                onClick={() => {
-                  cardReset();
-                  switchMode('password');
-                }}
-              >
-                เข้าสู่ระบบด้วย Username / Password
-              </Button>
+
+              {busy === 'card' && (
+                <div className="text-center mb-2">
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  กำลังเข้าสู่ระบบ...
+                </div>
+              )}
+
+              <div className="d-flex align-items-center my-3 text-muted small">
+                <hr className="flex-grow-1 my-0" />
+                <span className="mx-2">หรือ</span>
+                <hr className="flex-grow-1 my-0" />
+              </div>
+
+              <Form onSubmit={handleSubmit}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Username</Form.Label>
+                  <Form.Control
+                    type="text"
+                    name="username"
+                    value={formData.username}
+                    onChange={handleInputChange}
+                    placeholder="Username"
+                    autoComplete="username"
+                    disabled={loading}
+                  />
+                </Form.Group>
+
+                <Form.Group className="mb-4">
+                  <Form.Label>Password</Form.Label>
+                  <div className="position-relative">
+                    <Form.Control
+                      type={showPassword ? 'text' : 'password'}
+                      name="password"
+                      value={formData.password}
+                      onChange={handleInputChange}
+                      placeholder="Password"
+                      autoComplete="current-password"
+                      disabled={loading}
+                    />
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="position-absolute top-50 end-0 translate-middle-y me-1 text-muted"
+                      onClick={() => setShowPassword(!showPassword)}
+                      type="button"
+                      tabIndex={-1}
+                      aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+                    >
+                      <i className={`bi ${showPassword ? 'bi-eye-slash' : 'bi-eye'}`} aria-hidden="true" />
+                    </Button>
+                  </div>
+                </Form.Group>
+
+                <Button type="submit" className="w-100 btn-mse touch-target" disabled={loading}>
+                  {busy === 'password' ? (
+                    <>
+                      <Spinner animation="border" size="sm" className="me-2" />
+                      กำลังเข้าสู่ระบบ...
+                    </>
+                  ) : (
+                    'เข้าสู่ระบบ'
+                  )}
+                </Button>
+
+                <div className="d-grid mt-2">
+                  <Button
+                    variant="link"
+                    className="text-mse"
+                    type="button"
+                    onClick={() => switchMode('code')}
+                  >
+                    <i className="bi bi-person-badge me-1" aria-hidden="true" />
+                    กรอกรหัสพนักงาน (เข้าหน้าไลน์ผลิต)
+                  </Button>
+                </div>
+
+                <hr className="my-3" />
+                <div className="text-center small">
+                  ยังไม่มีบัญชี?{' '}
+                  <Link to="/register" className="text-mse fw-bold">
+                    สมัครใช้งาน
+                  </Link>
+                </div>
+              </Form>
             </>
           )}
 
           {mode === 'code' && (
             <>
-              <Form.Group className="mb-3">
+              <Form.Group className="mb-1">
                 <Form.Label>รหัสพนักงาน</Form.Label>
                 <InputGroup>
                   <InputGroup.Text>
@@ -220,6 +291,9 @@ const Login = () => {
                   />
                 </InputGroup>
               </Form.Group>
+              <div className="text-muted small mb-3">
+                ยังไม่มีบัญชีในระบบก็เข้าใช้งานหน้าไลน์ผลิตได้
+              </div>
               <Button
                 className="w-100 btn-mse touch-target mb-2"
                 disabled={loading}
@@ -238,95 +312,13 @@ const Login = () => {
                 variant="link"
                 className="w-100 text-mse"
                 onClick={() => {
-                  codeScan.reset();
+                  codeReset();
                   switchMode('password');
                 }}
               >
                 เข้าสู่ระบบด้วย Username / Password
               </Button>
             </>
-          )}
-
-          {mode === 'password' && (
-            <Form onSubmit={handleSubmit}>
-              <Form.Group className="mb-3">
-                <Form.Label>Username</Form.Label>
-                <Form.Control
-                  type="text"
-                  name="username"
-                  value={formData.username}
-                  onChange={handleInputChange}
-                  placeholder="Username"
-                  autoComplete="username"
-                  autoFocus
-                />
-              </Form.Group>
-
-              <Form.Group className="mb-4">
-                <Form.Label>Password</Form.Label>
-                <div className="position-relative">
-                  <Form.Control
-                    type={showPassword ? 'text' : 'password'}
-                    name="password"
-                    value={formData.password}
-                    onChange={handleInputChange}
-                    placeholder="Password"
-                    autoComplete="current-password"
-                  />
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="position-absolute top-50 end-0 translate-middle-y me-1 text-muted"
-                    onClick={() => setShowPassword(!showPassword)}
-                    type="button"
-                    tabIndex={-1}
-                    aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
-                  >
-                    <i className={`bi ${showPassword ? 'bi-eye-slash' : 'bi-eye'}`} aria-hidden="true" />
-                  </Button>
-                </div>
-              </Form.Group>
-
-              <Button type="submit" className="w-100 btn-mse touch-target" disabled={loading}>
-                {loading ? (
-                  <>
-                    <Spinner animation="border" size="sm" className="me-2" />
-                    กำลังเข้าสู่ระบบ...
-                  </>
-                ) : (
-                  'เข้าสู่ระบบ'
-                )}
-              </Button>
-
-              <div className="d-grid mt-2">
-                <Button
-                  variant="link"
-                  className="text-mse"
-                  type="button"
-                  onClick={() => switchMode('card')}
-                >
-                  <i className="bi bi-credit-card-2-front me-1" aria-hidden="true" />
-                  แตะบัตรเพื่อเข้าสู่ระบบ
-                </Button>
-                <Button
-                  variant="link"
-                  className="text-mse"
-                  type="button"
-                  onClick={() => switchMode('code')}
-                >
-                  <i className="bi bi-person-badge me-1" aria-hidden="true" />
-                  กรอกรหัสพนักงาน (เข้าหน้าไลน์ผลิต)
-                </Button>
-              </div>
-
-              <hr className="my-3" />
-              <div className="text-center small">
-                ยังไม่มีบัญชี?{' '}
-                <Link to="/register" className="text-mse fw-bold">
-                  สมัครใช้งาน
-                </Link>
-              </div>
-            </Form>
           )}
         </Card.Body>
       </Card>

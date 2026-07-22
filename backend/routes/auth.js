@@ -18,8 +18,9 @@ const router = express.Router();
 const SALT_ROUNDS = 10;
 const MIN_PASSWORD_LENGTH = 4; // เกณฑ์เดียวกับ /change-password เดิม
 
-// role ที่เข้าระบบได้โดย "ไม่ต้องใส่รหัสผ่าน" — แตะบัตร RFID หรือกรอกรหัสพนักงาน
+// role ที่ได้ "session เต็มของบัญชีตัวเอง" โดยไม่ต้องใส่รหัสผ่าน — แตะบัตร RFID หรือกรอกรหัสพนักงาน
 // บัตร RFID ก๊อปได้ และรหัสพนักงานเป็นเลขที่คนอื่นเดา/เห็นได้ จึงเปิดเฉพาะ role ที่แก้ข้อมูลหลักไม่ได้
+// (role อื่นที่กรอกรหัสพนักงานจะตกไปเป็น guest = OPERATOR แทน ดู /login-scan)
 // เผื่อไว้: ถ้าจะให้ ADMIN/PLANNER แตะบัตรได้ด้วย ให้ปลดคอมเมนต์บรรทัดล่าง
 const PASSWORDLESS_LOGIN_ROLES = [
   'OPERATOR',
@@ -34,6 +35,21 @@ const signToken = (user) =>
     env.JWT_SECRET,
     { expiresIn: env.JWT_EXPIRES_IN }
   );
+
+// ===== บัญชีชั่วคราว (guest) จากการกรอกรหัสพนักงาน =====
+// พนักงานหน้าไลน์ที่ยังไม่มีบัญชีในตาราง users ต้องบันทึกยอดผลิตได้ (ระบบเดิมไม่มี auth เลย
+// ใครก็เดินมาใช้หน้าไลน์ได้) จึงออก session ให้โดยไม่ต้องมีแถวใน users
+// ขอบเขต: role เป็น OPERATOR เสมอ — **ยกระดับสิทธิ์ไม่ได้** กรอกรหัสของ ADMIN ก็ยังได้แค่ OPERATOR
+// id = 0 (ไม่ใช่ null) เผื่อมีเส้นทางไหนเผลอเอาไปเป็นพารามิเตอร์ SQL — null ทำให้ driver เดาชนิดไม่ออก
+const GUEST_ROLE = 'OPERATOR';
+const guestSession = (code) => {
+  const guest = { id: 0, username: code, role: GUEST_ROLE, guest: true };
+  return {
+    token: jwt.sign(guest, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN }),
+    user: { ...guest, full_name: null, employee_code: code },
+    message: 'เข้าสู่ระบบชั่วคราวด้วยรหัสพนักงาน',
+  };
+};
 
 // ข้อมูล user ที่ส่งกลับให้หน้าเว็บเก็บใน localStorage
 // full_name/employee_code ใช้โชว์ชื่อบน navbar และเติมรหัสพนักงานให้หน้า Shop Floor
@@ -106,35 +122,53 @@ router.post('/login-scan', async (req, res) => {
       return res.status(400).json({ message: 'กรุณากรอกรหัสพนักงาน' });
     }
 
+    // รหัสนี้ถูกเขียนลง production_records.employee ตรง ๆ และหน้า Daily Result/WIP เอาไป match ต่อ
+    // ถ้ามีอักษรไทย/ช่องว่างปนเข้าไปจะหายอดไม่เจอแบบเงียบ ๆ จึงกันตั้งแต่ประตูเข้า
+    if (!isIdentifier(empCode)) {
+      return res.status(400).json({
+        message: 'รหัสพนักงานต้องเป็นตัวอักษร/ตัวเลขภาษาอังกฤษ 3-10 ตัว',
+      });
+    }
+
     // match ทั้ง employee_code (คอลัมน์ใหม่) และ username (ผู้ใช้เดิมที่ยังไม่ได้ backfill)
     const rows = await query(
       'SELECT * FROM users WHERE employee_code = @code OR username = @code',
       { code: empCode }
     );
 
-    if (rows.length === 0) {
-      return res.status(401).json({ message: 'ไม่พบรหัสพนักงานนี้ในระบบ' });
+    const user = rows[0];
+
+    // มีบัญชีจริง + ใช้งานได้ + เป็น role ที่เข้าแบบไม่ใส่รหัสผ่านได้ → session เต็มของเจ้าของบัญชี
+    if (user && !accountBlockedMessage(user) && PASSWORDLESS_LOGIN_ROLES.includes(user.role)) {
+      return res.json({
+        token: signToken(user),
+        user: publicUser(user),
+        message: 'เข้าสู่ระบบสำเร็จ',
+      });
     }
 
-    const user = rows[0];
+    // นอกนั้นทั้งหมด (ไม่พบรหัส / รออนุมัติ / ถูกระงับ / เป็น ADMIN,PLANNER) → บัญชีชั่วคราว
+    //
+    // ตั้งใจ ไม่ใช่ช่องโหว่ที่หลุด: หน้าไลน์ผลิตต้องใช้งานได้ก่อนที่ IT จะสร้างบัญชีให้ครบ (ระบบเดิม
+    // ไม่มี auth เลย ใครก็ใช้ได้) การกันเฉพาะรหัสที่มีบัญชีจึงไม่ได้กันอะไรจริง — พิมพ์เลขอื่นก็เข้าได้อยู่ดี
+    // สิ่งที่ยังกันอยู่คือ "การยกระดับสิทธิ์": guest ได้ OPERATOR เสมอ เข้าได้แค่หน้า Shop Floor
+    // ส่วน ADMIN/PLANNER/MFG ต้องใช้ Username/Password ถึงจะได้สิทธิ์ของตัวเอง
+    // ปิดพฤติกรรมนี้ได้ด้วย ALLOW_GUEST_SCAN=false แล้วจะกลับไปตอบ error ชุดเดิมข้างล่างนี้
+    if (env.ALLOW_GUEST_SCAN) {
+      return res.json(guestSession(empCode));
+    }
+
+    if (!user) {
+      return res.status(401).json({ message: 'ไม่พบรหัสพนักงานนี้ในระบบ' });
+    }
 
     const blocked = accountBlockedMessage(user);
     if (blocked) {
       return res.status(403).json({ message: blocked });
     }
 
-    // FIX (ต่างจากระบบเดิม): เดิมกรอก username ของใครก็ได้ "โดยไม่ต้องใส่รหัสผ่าน" แล้วได้ JWT
-    // เต็มสิทธิ์ — พิมพ์รหัสพนักงานของ ADMIN ก็เข้าเป็น ADMIN ได้ จึงจำกัดเหลือ role หน้างาน
-    if (!PASSWORDLESS_LOGIN_ROLES.includes(user.role)) {
-      return res.status(403).json({
-        message: 'สิทธิ์นี้ต้องเข้าสู่ระบบด้วย Username / Password',
-      });
-    }
-
-    res.json({
-      token: signToken(user),
-      user: publicUser(user),
-      message: 'เข้าสู่ระบบสำเร็จ',
+    res.status(403).json({
+      message: 'สิทธิ์นี้ต้องเข้าสู่ระบบด้วย Username / Password',
     });
   } catch (err) {
     console.error('Login-scan error:', err);
@@ -201,12 +235,12 @@ router.post('/register', async (req, res) => {
     // --- validate: identifier ห้ามไทย/ช่องว่าง, display field ไทยได้ ---
     if (!isIdentifier(username)) {
       return res.status(400).json({
-        message: 'Username ต้องเป็นภาษาอังกฤษ ตัวเลข หรือ . _ - ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
+        message: 'Username ต้องเป็นภาษาอังกฤษ ตัวเลข หรือ . _ - ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
       });
     }
     if (!isIdentifier(employeeCode)) {
       return res.status(400).json({
-        message: 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-20 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
+        message: 'รหัสพนักงานต้องเป็นภาษาอังกฤษหรือตัวเลข ยาว 3-10 ตัว (ห้ามภาษาไทยและเว้นวรรค)',
       });
     }
     if (!password || password.length < MIN_PASSWORD_LENGTH) {
@@ -356,6 +390,11 @@ router.post('/create-default-users', verifyToken, requireRole('ADMIN'), async (r
 // เปลี่ยนรหัสผ่านตัวเอง
 router.post('/change-password', verifyToken, async (req, res) => {
   try {
+    // guest ไม่มีแถวใน users (id=0) — ตัดตั้งแต่ต้นทางไม่ให้ไปยิง DB ด้วย id ที่ไม่มีจริง
+    if (req.user.guest) {
+      return res.status(403).json({ message: 'บัญชีชั่วคราวเปลี่ยนรหัสผ่านไม่ได้' });
+    }
+
     const { currentPassword, newPassword } = req.body;
 
     if (!currentPassword || !newPassword) {

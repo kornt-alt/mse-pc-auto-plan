@@ -222,7 +222,7 @@ const ShopFloorPage = () => {
                     <i className="bi bi-upc-scan" aria-hidden="true" />
                   </InputGroup.Text>
                   <Form.Control
-                    type="password"
+                    type="text"
                     className="touch-target"
                     value={empScan.value}
                     onChange={empScan.onChange}
