@@ -14,8 +14,29 @@ import {
 import { apiCall } from '../../api/client';
 import PageHeader from '../../components/shared/PageHeader';
 import ToastHost, { useToast } from '../../components/shared/ToastHost';
+import useTableFilter from '../../components/shared/useTableFilter';
+import TableFilterBar from '../../components/shared/TableFilterBar';
+import TablePagination from '../../components/shared/TablePagination';
 
 const emptyForm = () => ({ email: '', recipient_type: 'TO', label: '' });
+
+// ค่าใน DB เป็น TO/CC และ 0/1 — แปลงเป็นคำที่โชว์ในตารางก่อนกรอง จะได้ตรงกับที่ผู้ใช้เห็น
+const typeLabel = (r) => (String(r.recipient_type).toUpperCase() === 'CC' ? 'CC' : 'To');
+const activeLabel = (r) => (r.is_active ? 'ใช้งานอยู่' : 'ปิดใช้งาน');
+
+const FILTER_FIELDS = [
+  { key: 'email', label: 'Email', type: 'text', width: 220 },
+  { key: 'label', label: 'ชื่อ/แผนก', type: 'text', width: 180 },
+  { key: 'type_label', label: 'ประเภท', type: 'select', options: ['To', 'CC'], value: typeLabel, width: 130 },
+  {
+    key: 'active_label',
+    label: 'ใช้งาน',
+    type: 'select',
+    options: ['ใช้งานอยู่', 'ปิดใช้งาน'],
+    value: activeLabel,
+    width: 140,
+  },
+];
 
 const AlertSettingsPage = () => {
   const [recipients, setRecipients] = useState([]);
@@ -102,7 +123,10 @@ const AlertSettingsPage = () => {
     }
   };
 
+  // คิดจากผู้รับทั้งชุดเสมอ — ถ้าคิดจากชุดที่กรองแล้ว พอกรองเป็น CC จะขึ้นคำเตือนผิด
   const activeTo = recipients.filter((r) => r.is_active && String(r.recipient_type).toUpperCase() === 'TO').length;
+
+  const table = useTableFilter(recipients, FILTER_FIELDS, { pageSize: 20 });
 
   return (
     <Container className="pb-4" style={{ maxWidth: 900 }}>
@@ -121,9 +145,23 @@ const AlertSettingsPage = () => {
         </div>
       )}
 
+      <TableFilterBar
+        id="alert-filter"
+        fields={FILTER_FIELDS}
+        filters={table.filters}
+        options={table.options}
+        activeCount={table.activeCount}
+        onChange={table.setFilter}
+        onReset={table.resetFilters}
+      />
+
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
-          <span className="fw-bold">ผู้รับทั้งหมด ({recipients.length})</span>
+          <span className="fw-bold">
+            {table.activeCount > 0
+              ? `ผู้รับที่ตรงฟิลเตอร์ (${table.filteredCount} จาก ${table.total})`
+              : `ผู้รับทั้งหมด (${table.total})`}
+          </span>
           <Button size="sm" className="btn-mse" onClick={openAdd}>
             <i className="bi bi-plus-lg me-1" aria-hidden="true" />
             เพิ่มผู้รับ
@@ -146,20 +184,20 @@ const AlertSettingsPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {recipients.length === 0 ? (
+                {table.rows.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center text-muted py-3">
-                      ยังไม่มีผู้รับ — กด "เพิ่มผู้รับ"
+                      {table.activeCount > 0
+                        ? 'ไม่มีผู้รับตรงกับฟิลเตอร์ที่เลือก'
+                        : 'ยังไม่มีผู้รับ — กด "เพิ่มผู้รับ"'}
                     </td>
                   </tr>
                 ) : (
-                  recipients.map((r) => (
+                  table.rows.map((r) => (
                     <tr key={r.id}>
                       <td>{r.email}</td>
                       <td>
-                        <Badge bg={String(r.recipient_type).toUpperCase() === 'CC' ? 'secondary' : 'primary'}>
-                          {String(r.recipient_type).toUpperCase() === 'CC' ? 'CC' : 'To'}
-                        </Badge>
+                        <Badge bg={typeLabel(r) === 'CC' ? 'secondary' : 'primary'}>{typeLabel(r)}</Badge>
                       </td>
                       <td className="text-muted">{r.label || '-'}</td>
                       <td className="text-center">
@@ -199,6 +237,22 @@ const AlertSettingsPage = () => {
           )}
         </Card.Body>
       </Card>
+
+      {!loading && table.filteredCount > 0 && (
+        <TablePagination
+          id="alert"
+          unit="ราย"
+          page={table.page}
+          pageCount={table.pageCount}
+          pageSize={table.pageSize}
+          onPageChange={table.setPage}
+          onPageSizeChange={table.setPageSize}
+          from={table.from}
+          to={table.to}
+          filteredCount={table.filteredCount}
+          total={table.total}
+        />
+      )}
 
       {/* add/edit modal */}
       <Modal show={!!editing} onHide={() => setEditing(null)} centered>

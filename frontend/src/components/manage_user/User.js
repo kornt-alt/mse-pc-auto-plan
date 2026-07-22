@@ -14,9 +14,11 @@ import {
 } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import PageHeader from '../shared/PageHeader';
-import Toolbar from '../shared/Toolbar';
 import ConfirmModal from '../shared/ConfirmModal';
 import useCardScan from '../shared/useCardScan';
+import useTableFilter from '../shared/useTableFilter';
+import TableFilterBar from '../shared/TableFilterBar';
+import TablePagination from '../shared/TablePagination';
 
 const ROLES = ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'];
 
@@ -37,15 +39,52 @@ const roleBadge = (role) =>
   role === 'ADMIN' ? 'danger' : role === 'PLANNER' ? 'primary' : role === 'MFG' ? 'info' : 'secondary';
 
 // สถานะรวม status + is_active ไว้ที่เดียว: รออนุมัติ ต้องเด่นกว่าอย่างอื่นเพราะเป็นงานที่ ADMIN ต้องทำ
-const StatusChip = ({ user }) => {
-  if (user.status === 'PENDING') return <span className="chip chip-warn">รออนุมัติ</span>;
-  if (user.status === 'REJECTED') return <span className="chip chip-ng">ปฏิเสธแล้ว</span>;
-  return user.is_active ? (
-    <span className="chip chip-ok">ใช้งานอยู่</span>
-  ) : (
-    <span className="chip chip-muted">ระงับ</span>
-  );
+// ฟิลเตอร์สถานะใช้ฟังก์ชันตัวนี้ด้วย — ป้ายในตารางกับตัวเลือกในฟิลเตอร์จะได้ไม่หลุดจากกัน
+const PENDING = 'รออนุมัติ';
+const statusLabel = (user) => {
+  if (user.status === 'PENDING') return PENDING;
+  if (user.status === 'REJECTED') return 'ปฏิเสธแล้ว';
+  return user.is_active ? 'ใช้งานอยู่' : 'ระงับ';
 };
+const STATUS_CHIP = {
+  [PENDING]: 'chip-warn',
+  'ปฏิเสธแล้ว': 'chip-ng',
+  'ใช้งานอยู่': 'chip-ok',
+  'ระงับ': 'chip-muted',
+};
+
+const StatusChip = ({ user }) => {
+  const label = statusLabel(user);
+  return <span className={`chip ${STATUS_CHIP[label]}`}>{label}</span>;
+};
+
+// ตัวเลือกที่ต้องมีครบเสมอ (สถานะ/Role/บัตร) เขียนไว้ตรง ๆ — ถ้าไล่จากข้อมูล
+// ตัวเลือกที่ยังไม่มีใครตรงจะหายไป (ไม่มีใครถูกปฏิเสธ = เลือก "ปฏิเสธแล้ว" ไม่ได้)
+// ส่วน "แผนก" ปล่อยให้ไล่จากข้อมูลเอง เพราะแถวเก่าอาจมีค่านอกเหนือจาก 3 ตัวในฟอร์ม
+const FILTER_FIELDS = [
+  { key: 'username', label: 'Username', type: 'text', width: 150 },
+  { key: 'full_name', label: 'ชื่อ-นามสกุล', type: 'text', width: 180 },
+  { key: 'employee_code', label: 'รหัสพนักงาน', type: 'text', width: 140 },
+  { key: 'email', label: 'อีเมล', type: 'text', width: 180 },
+  { key: 'department', label: 'แผนก', type: 'select', width: 140 },
+  { key: 'role', label: 'Role', type: 'select', options: ROLES, width: 130 },
+  {
+    key: 'status_label',
+    label: 'สถานะ',
+    type: 'select',
+    options: [PENDING, 'ใช้งานอยู่', 'ระงับ', 'ปฏิเสธแล้ว'],
+    value: statusLabel,
+    width: 140,
+  },
+  {
+    key: 'card',
+    label: 'บัตร',
+    type: 'select',
+    options: ['มีบัตร', 'ไม่มีบัตร'],
+    value: (u) => (u.card_uid ? 'มีบัตร' : 'ไม่มีบัตร'),
+    width: 130,
+  },
+];
 
 const User = () => {
   const [users, setUsers] = useState([]);
@@ -55,7 +94,6 @@ const User = () => {
   const [editUser, setEditUser] = useState(null); // null = สร้างใหม่
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [onlyPending, setOnlyPending] = useState(false);
   const [approveUser, setApproveUser] = useState(null);
   const [approveRole, setApproveRole] = useState('OPERATOR');
   const [confirm, setConfirm] = useState(null);
@@ -77,11 +115,13 @@ const User = () => {
     fetchUsers();
   }, [fetchUsers]);
 
+  // นับจากผู้ใช้ทั้งชุดเสมอ ไม่ใช่ชุดที่กรองแล้ว — เป็นตัวเลขงานค้างของ ADMIN
   const pendingCount = useMemo(
     () => users.filter((u) => u.status === 'PENDING').length,
     [users]
   );
-  const visibleUsers = onlyPending ? users.filter((u) => u.status === 'PENDING') : users;
+
+  const table = useTableFilter(users, FILTER_FIELDS, { pageSize: 20 });
 
   const setField = (name, value) => setForm((prev) => ({ ...prev, [name]: value }));
 
@@ -198,9 +238,17 @@ const User = () => {
         subtitle="อนุมัติคำขอ กำหนดสิทธิ์ และลงทะเบียนบัตรเข้าใช้งาน"
         status={
           pendingCount > 0 ? (
-            <Badge bg="warning" text="dark">
+            // กดแล้วกรองเฉพาะที่รออนุมัติ — แทนสวิตช์เดิมที่ถอดออกไปเพราะฟิลเตอร์สถานะครอบคลุมแล้ว
+            <Button
+              variant="warning"
+              size="sm"
+              className="py-0"
+              title="กรองเฉพาะที่รออนุมัติ"
+              aria-label={`กรองเฉพาะผู้ใช้ที่รออนุมัติ ${pendingCount} คน`}
+              onClick={() => table.setFilter('status_label', PENDING)}
+            >
               รออนุมัติ {pendingCount} คน
-            </Badge>
+            </Button>
           ) : null
         }
         actions={
@@ -210,15 +258,15 @@ const User = () => {
         }
       />
 
-      <Toolbar>
-        <Form.Check
-          type="switch"
-          id="only-pending"
-          label="แสดงเฉพาะที่รออนุมัติ"
-          checked={onlyPending}
-          onChange={(e) => setOnlyPending(e.target.checked)}
-        />
-      </Toolbar>
+      <TableFilterBar
+        id="user-filter"
+        fields={FILTER_FIELDS}
+        filters={table.filters}
+        options={table.options}
+        activeCount={table.activeCount}
+        onChange={table.setFilter}
+        onReset={table.resetFilters}
+      />
 
       {error && <Alert variant="danger">{error}</Alert>}
 
@@ -226,12 +274,28 @@ const User = () => {
         <div className="text-center py-5">
           <Spinner animation="border" />
         </div>
-      ) : visibleUsers.length === 0 ? (
+      ) : table.rows.length === 0 ? (
         <div className="empty-state">
           <i className="bi bi-people" aria-hidden="true" />
-          <div>ไม่มีผู้ใช้ตามเงื่อนไขที่เลือก</div>
+          {table.activeCount > 0 ? (
+            <>
+              <div>ไม่มีผู้ใช้ตรงกับฟิลเตอร์ที่เลือก</div>
+              <Button
+                size="sm"
+                variant="outline-secondary"
+                className="mt-2"
+                onClick={table.resetFilters}
+              >
+                <i className="bi bi-x-circle me-1" aria-hidden="true" />
+                ล้างฟิลเตอร์
+              </Button>
+            </>
+          ) : (
+            <div>ยังไม่มีผู้ใช้ในระบบ</div>
+          )}
         </div>
       ) : (
+        <>
         <Table striped bordered hover responsive>
           <thead>
             <tr>
@@ -247,7 +311,7 @@ const User = () => {
             </tr>
           </thead>
           <tbody>
-            {visibleUsers.map((u) => (
+            {table.rows.map((u) => (
               <tr key={u.id}>
                 <td className="num">{u.username}</td>
                 <td>{u.full_name || '-'}</td>
@@ -314,6 +378,20 @@ const User = () => {
             ))}
           </tbody>
         </Table>
+        <TablePagination
+          id="user"
+          unit="คน"
+          page={table.page}
+          pageCount={table.pageCount}
+          pageSize={table.pageSize}
+          onPageChange={table.setPage}
+          onPageSizeChange={table.setPageSize}
+          from={table.from}
+          to={table.to}
+          filteredCount={table.filteredCount}
+          total={table.total}
+        />
+        </>
       )}
 
       {/* ===== เพิ่ม / แก้ไขผู้ใช้ ===== */}
