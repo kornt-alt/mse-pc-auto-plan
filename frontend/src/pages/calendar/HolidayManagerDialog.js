@@ -3,7 +3,6 @@
 // + รายการวันหยุดพร้อมปุ่มลบ
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, Form, Button, Row, Col, Spinner, ListGroup } from 'react-bootstrap';
-import { CalendarCheck, Trash2 } from 'lucide-react';
 import { apiCall } from '../../api/client';
 
 const HolidayManagerDialog = ({ show, onHide, onError }) => {
@@ -65,12 +64,18 @@ const HolidayManagerDialog = ({ show, onHide, onError }) => {
   return (
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
-        <Modal.Title style={{ fontSize: '1.1rem' }}>🎉 จัดการวันหยุดประจำปี</Modal.Title>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>
+          <i className="bi bi-calendar-event me-2" aria-hidden="true" />
+          จัดการวันหยุดประจำปี
+        </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         {/* ฟอร์มเพิ่มวันหยุด */}
-        <div className="border rounded p-3 mb-3" style={{ background: '#fff8ee' }}>
-          <div className="fw-bold text-warning-emphasis mb-2">➕ เพิ่มวันหยุดใหม่</div>
+        <div className="border rounded p-3 mb-3" style={{ background: 'var(--mse-warn-bg)' }}>
+          <div className="fw-bold text-warning-emphasis mb-2">
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" />
+            เพิ่มวันหยุดใหม่
+          </div>
           <Row className="g-2 mb-2">
             <Col>
               <Form.Control type="date" value={date} onChange={handleDateChange} />
@@ -94,7 +99,7 @@ const HolidayManagerDialog = ({ show, onHide, onError }) => {
         </div>
 
         {/* รายการวันหยุด */}
-        <div className="fw-bold mb-2">🗓️ รายการวันหยุดที่บันทึกไว้</div>
+        <div className="fw-bold mb-2">รายการวันหยุดที่บันทึกไว้</div>
         <div style={{ maxHeight: 360, overflowY: 'auto' }}>
           {holidays === null ? (
             <div className="text-center py-4">
@@ -110,14 +115,20 @@ const HolidayManagerDialog = ({ show, onHide, onError }) => {
                   className="d-flex align-items-center justify-content-between py-2"
                 >
                   <div className="d-flex align-items-center gap-2">
-                    <CalendarCheck size={18} className="text-success" />
+                    <i className="bi bi-calendar-check text-success" aria-hidden="true" />
                     <div>
                       <div className="fw-bold">{h.description}</div>
                       <div className="text-muted small">{h.date}</div>
                     </div>
                   </div>
-                  <Button size="sm" variant="outline-danger" onClick={() => handleDelete(h.id)}>
-                    <Trash2 size={15} />
+                  <Button
+                    size="sm"
+                    variant="outline-danger"
+                    title="ลบวันหยุด"
+                    aria-label={`ลบวันหยุด ${h.description}`}
+                    onClick={() => handleDelete(h.id)}
+                  >
+                    <i className="bi bi-trash" aria-hidden="true" />
                   </Button>
                 </ListGroup.Item>
               ))}

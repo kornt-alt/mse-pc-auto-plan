@@ -13,12 +13,12 @@ import {
   InputGroup,
   Badge,
   Spinner,
-  Toast,
-  ToastContainer,
   Modal,
 } from 'react-bootstrap';
-import { Search, Plus, Pencil, Trash2, AlertTriangle, Mail, X, RefreshCw } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import PageHeader from '../../components/shared/PageHeader';
+import Toolbar from '../../components/shared/Toolbar';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import NewModelWizardDialog from './NewModelWizardDialog';
 import {
   EditRoutingDialog,
@@ -43,10 +43,7 @@ const RoutingConfigPage = () => {
   const [showUrgent, setShowUrgent] = useState(false);
   const [machines, setMachines] = useState([]);
 
-  const [toast, setToast] = useState(null); // {message, variant}
-  const showToast = useCallback((message, variant = 'success') => {
-    setToast({ message, variant });
-  }, []);
+  const { toast, showToast, hideToast } = useToast();
   const onSaved = useCallback(
     (msg) => {
       showToast(msg);
@@ -136,7 +133,7 @@ const RoutingConfigPage = () => {
     setConfirmBusy(true);
     try {
       await confirm.run();
-      onSaved(confirm.successMsg || '✅ ลบสำเร็จ');
+      onSaved(confirm.successMsg || 'ลบสำเร็จ');
       setConfirm(null);
       refresh();
     } catch (err) {
@@ -150,7 +147,7 @@ const RoutingConfigPage = () => {
     setConfirm({
       title: 'ลบ Step',
       message: `ยืนยันลบ Step "${row.step_name}" (Flow ${row.flow_index}, Step ${row.step_index})? เครื่องของ Step นี้จะถูกลบด้วย`,
-      successMsg: '✅ ลบ Step สำเร็จ',
+      successMsg: 'ลบ Step แล้ว',
       run: () => apiCall(`/routing_config/${row.id}`, { method: 'DELETE' }),
     });
 
@@ -158,7 +155,7 @@ const RoutingConfigPage = () => {
     setConfirm({
       title: 'ลบเครื่อง',
       message: `ยืนยันลบเครื่อง "${row.machine}" (Flow ${row.flow_index}, Step ${row.step_index}, Alt ${row.alternative_index})?`,
-      successMsg: '✅ ลบเครื่องสำเร็จ',
+      successMsg: 'ลบเครื่องแล้ว',
       run: () => apiCall(`/machine_config/${row.id}`, { method: 'DELETE' }),
     });
 
@@ -170,7 +167,7 @@ const RoutingConfigPage = () => {
         // ไม่มี batch อ้างอิงจากกระดานงานด่วน — backend จะใส่ข้อความ "ไม่ระบุ Batch" ให้เอง
         body: JSON.stringify({ batch_id: null, model_name: modelName }),
       });
-      showToast(res.message || '✅ ส่งอีเมลแล้ว');
+      showToast(res.message || 'ส่งอีเมลแจ้ง Engineer แล้ว');
     } catch (err) {
       showToast(err.message, 'danger');
     }
@@ -178,60 +175,53 @@ const RoutingConfigPage = () => {
 
   return (
     <Container fluid className="pb-4">
-      <h4 className="text-mse fw-bold mb-3">Routing &amp; Machine Configuration</h4>
-
-      {/* ===== toolbar ===== */}
-      <Row className="g-2 align-items-center mb-3">
-        <Col xs="auto">
-          <InputGroup style={{ width: 320 }}>
-            <Form.Control
-              placeholder="ค้นหา Model เช่น KT16184-3..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runSearch(searchInput)}
-            />
-            <Button className="btn-mse" onClick={() => runSearch(searchInput)}>
-              <Search size={16} className="me-1" />
-              ค้นหา
-            </Button>
-          </InputGroup>
-        </Col>
-        <Col xs="auto">
-          <Button
-            variant="success"
-            onClick={() => setShowWizard(true)}
-          >
-            <Plus size={16} className="me-1" />
-            เพิ่ม Model ใหม่
-          </Button>
-        </Col>
-        {missingModels.length > 0 && (
-          <Col xs="auto">
+      <PageHeader
+        icon="bi-signpost-split"
+        title="Routing Config"
+        subtitle="ขั้นตอนการผลิตและเครื่องจักรที่ใช้ได้ของแต่ละ Model"
+        actions={
+          missingModels.length > 0 && (
             <Button variant="outline-danger" onClick={() => setShowUrgent(true)}>
-              <AlertTriangle size={16} className="me-1" />
+              <i className="bi bi-exclamation-triangle-fill me-1" aria-hidden="true" />
               งานด่วน
               <Badge bg="danger" pill className="ms-1">
                 {missingModels.length}
               </Badge>
             </Button>
-          </Col>
-        )}
+          )
+        }
+      />
+
+      {/* ===== toolbar ===== */}
+      <Toolbar>
+        <InputGroup style={{ width: 320 }}>
+          <Form.Control
+            placeholder="ค้นหา Model เช่น KT16184-3..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && runSearch(searchInput)}
+          />
+          <Button className="btn-mse" onClick={() => runSearch(searchInput)}>
+            <i className="bi bi-search me-1" aria-hidden="true" />
+            ค้นหา
+          </Button>
+        </InputGroup>
+        <Button variant="success" onClick={() => setShowWizard(true)}>
+          <i className="bi bi-plus-lg me-1" aria-hidden="true" />
+          เพิ่ม Model ใหม่
+        </Button>
         {searchModel && (
-          <Col xs="auto">
-            <Button variant="outline-secondary" size="sm" onClick={clearSearch}>
-              <X size={14} className="me-1" />
+          <>
+            <Button variant="outline-secondary" onClick={clearSearch}>
+              <i className="bi bi-x-lg me-1" aria-hidden="true" />
               ล้างค่า
             </Button>
-          </Col>
-        )}
-        {searchModel && (
-          <Col xs="auto">
-            <Button variant="outline-secondary" size="sm" onClick={refresh} title="รีเฟรช">
-              <RefreshCw size={14} />
+            <Button variant="outline-secondary" onClick={refresh} title="รีเฟรช" aria-label="รีเฟรช">
+              <i className="bi bi-arrow-clockwise" aria-hidden="true" />
             </Button>
-          </Col>
+          </>
         )}
-      </Row>
+      </Toolbar>
 
       {loading && (
         <div className="text-center my-3">
@@ -243,8 +233,8 @@ const RoutingConfigPage = () => {
       {!hasSearched && !loading && missingModels.length > 0 && (
         <Card className="mb-4 border-danger" style={{ maxWidth: 900 }}>
           <Card.Header className="bg-danger text-white fw-bold">
-            <AlertTriangle size={18} className="me-2" />
-            🚨 URGENT: Model รอสร้าง Routing Master ({missingModels.length})
+            <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
+            งานด่วน: Model ที่ยังไม่มี Routing Master ({missingModels.length})
           </Card.Header>
           <Card.Body className="p-0">
             <Table hover className="mb-0 align-middle">
@@ -273,7 +263,7 @@ const RoutingConfigPage = () => {
                         จัดการ Master
                       </Button>
                       <Button size="sm" variant="outline-danger" onClick={() => notifyEngineer(m.model)}>
-                        <Mail size={14} className="me-1" />
+                        <i className="bi bi-envelope me-1" aria-hidden="true" />
                         แจ้ง Engineer
                       </Button>
                     </td>
@@ -287,8 +277,10 @@ const RoutingConfigPage = () => {
 
       {/* ===== ผลค้นหา ===== */}
       {hasSearched && !loading && routing.length === 0 && machine.length === 0 && (
-        <div className="text-center text-danger fw-bold my-4">
-          ไม่พบ Model "{searchModel}" ในระบบ ❌ — กด "เพิ่ม Model ใหม่" เพื่อสร้าง
+        <div className="empty-state">
+          <i className="bi bi-search" aria-hidden="true" />
+          <div className="fw-bold text-danger">ไม่พบ Model &quot;{searchModel}&quot; ในระบบ</div>
+          <div className="small">กดปุ่ม &quot;เพิ่ม Model ใหม่&quot; เพื่อสร้าง Routing</div>
         </div>
       )}
 
@@ -304,13 +296,13 @@ const RoutingConfigPage = () => {
                     Setup Group
                   </Button>
                   <Button size="sm" variant="outline-success" onClick={() => setDialog({ type: 'insertStep' })}>
-                    <Plus size={12} /> Step
+                    <i className="bi bi-plus-lg me-1" aria-hidden="true" /> Step
                   </Button>
                   <Button size="sm" variant="outline-success" onClick={() => setDialog({ type: 'addFlow' })}>
-                    <Plus size={12} /> Flow
+                    <i className="bi bi-plus-lg me-1" aria-hidden="true" /> Flow
                   </Button>
                   <Button size="sm" variant="outline-danger" onClick={() => setDialog({ type: 'deleteFlow' })}>
-                    <Trash2 size={12} /> Flow
+                    <i className="bi bi-trash me-1" aria-hidden="true" /> Flow
                   </Button>
                 </div>
               </Card.Header>
@@ -328,23 +320,31 @@ const RoutingConfigPage = () => {
                   <tbody>
                     {routing.map((r) => (
                       <tr key={r.id}>
-                        <td>{r.flow_index}</td>
-                        <td>{r.step_index}</td>
+                        <td className="num">{r.flow_index}</td>
+                        <td className="num">{r.step_index}</td>
                         <td>{r.step_name}</td>
                         <td>{r.setup_group}</td>
                         <td className="text-end text-nowrap">
-                          <Pencil
-                            size={15}
-                            role="button"
-                            className="text-primary me-2"
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 me-3 text-primary icon-btn"
+                            title="แก้ไข Step"
+                            aria-label={`แก้ไข Step ${r.step_name}`}
                             onClick={() => setDialog({ type: 'editRouting', row: r })}
-                          />
-                          <Trash2
-                            size={15}
-                            role="button"
-                            className="text-danger"
+                          >
+                            <i className="bi bi-pencil-square" aria-hidden="true" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 text-danger icon-btn"
+                            title="ลบ Step"
+                            aria-label={`ลบ Step ${r.step_name}`}
                             onClick={() => askDeleteRouting(r)}
-                          />
+                          >
+                            <i className="bi bi-trash" aria-hidden="true" />
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -375,33 +375,44 @@ const RoutingConfigPage = () => {
                   <tbody>
                     {machine.map((m) => (
                       <tr key={m.id}>
-                        <td>{m.flow_index}</td>
-                        <td>{m.step_index}</td>
-                        <td>{m.alternative_index}</td>
+                        <td className="num">{m.flow_index}</td>
+                        <td className="num">{m.step_index}</td>
+                        <td className="num">{m.alternative_index}</td>
                         <td className="fw-semibold">{m.machine}</td>
-                        <td>{m.cycle_time}</td>
-                        <td>{m.setup_time}</td>
+                        <td className="num">{m.cycle_time}</td>
+                        <td className="num">{m.setup_time}</td>
                         <td>{m.jig_id}</td>
                         <td className="text-end text-nowrap">
-                          <Plus
-                            size={15}
-                            role="button"
-                            className="text-success me-2"
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 me-3 text-success icon-btn"
                             title="เพิ่มเครื่องสำรอง (Alt)"
+                            aria-label={`เพิ่มเครื่องสำรองของ ${m.machine}`}
                             onClick={() => setDialog({ type: 'insertAlt', step: m })}
-                          />
-                          <Pencil
-                            size={15}
-                            role="button"
-                            className="text-primary me-2"
+                          >
+                            <i className="bi bi-plus-lg" aria-hidden="true" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 me-3 text-primary icon-btn"
+                            title="แก้ไขเครื่องจักร"
+                            aria-label={`แก้ไข ${m.machine}`}
                             onClick={() => setDialog({ type: 'editMachine', row: m })}
-                          />
-                          <Trash2
-                            size={15}
-                            role="button"
-                            className="text-danger"
+                          >
+                            <i className="bi bi-pencil-square" aria-hidden="true" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 text-danger icon-btn"
+                            title="ลบเครื่องจักร"
+                            aria-label={`ลบ ${m.machine}`}
                             onClick={() => askDeleteMachine(m)}
-                          />
+                          >
+                            <i className="bi bi-trash" aria-hidden="true" />
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -487,7 +498,7 @@ const RoutingConfigPage = () => {
         onError={onError}
         onSuccess={(newName) => {
           setShowWizard(false);
-          showToast('✅ สร้าง Model ใหม่สำเร็จ!');
+          showToast('สร้าง Model ใหม่แล้ว');
           setSearchInput(newName);
           runSearch(newName);
           fetchMissing();
@@ -498,8 +509,8 @@ const RoutingConfigPage = () => {
       <Modal show={showUrgent} onHide={() => setShowUrgent(false)} centered size="lg">
         <Modal.Header closeButton>
           <Modal.Title style={{ fontSize: '1.1rem' }} className="text-danger">
-            <AlertTriangle size={20} className="me-2" />
-            URGENT: งานด่วนจากฝ่ายวางแผน
+            <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
+            งานด่วนจากฝ่ายวางแผน
           </Modal.Title>
         </Modal.Header>
         <Modal.Body>
@@ -530,22 +541,7 @@ const RoutingConfigPage = () => {
         </Modal.Body>
       </Modal>
 
-      {/* ===== toast ===== */}
-      <ToastContainer position="bottom-end" className="p-3">
-        {toast && (
-          <Toast
-            bg={toast.variant}
-            onClose={() => setToast(null)}
-            show
-            delay={3500}
-            autohide
-          >
-            <Toast.Body className={toast.variant === 'warning' ? '' : 'text-white'}>
-              {toast.message}
-            </Toast.Body>
-          </Toast>
-        )}
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </Container>
   );
 };

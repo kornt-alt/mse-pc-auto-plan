@@ -10,25 +10,23 @@ import {
   Modal,
   Badge,
   Spinner,
-  Toast,
-  ToastContainer,
 } from 'react-bootstrap';
-import { Plus, Pencil, Trash2, Mail } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import PageHeader from '../../components/shared/PageHeader';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
 
 const emptyForm = () => ({ email: '', recipient_type: 'TO', label: '' });
 
 const AlertSettingsPage = () => {
   const [recipients, setRecipients] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState(null);
 
   const [editing, setEditing] = useState(null); // null | {} (add) | recipient (edit)
   const [form, setForm] = useState(emptyForm());
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null); // recipient to delete
 
-  const showToast = useCallback((message, variant = 'success') => setToast({ message, variant }), []);
+  const { toast, showToast, hideToast } = useToast();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -63,10 +61,10 @@ const AlertSettingsPage = () => {
           method: 'PUT',
           body: JSON.stringify(form),
         });
-        showToast('✅ อัปเดตผู้รับสำเร็จ');
+        showToast('อัปเดตผู้รับแล้ว');
       } else {
         await apiCall('/alert/recipients', { method: 'POST', body: JSON.stringify(form) });
-        showToast('✅ เพิ่มผู้รับสำเร็จ');
+        showToast('เพิ่มผู้รับแล้ว');
       }
       setEditing(null);
       load();
@@ -94,7 +92,7 @@ const AlertSettingsPage = () => {
     setBusy(true);
     try {
       await apiCall(`/alert/recipients/${confirm.id}`, { method: 'DELETE' });
-      showToast('✅ ลบผู้รับสำเร็จ');
+      showToast('ลบผู้รับแล้ว');
       setConfirm(null);
       load();
     } catch (err) {
@@ -108,18 +106,18 @@ const AlertSettingsPage = () => {
 
   return (
     <Container className="pb-4" style={{ maxWidth: 900 }}>
-      <h4 className="text-mse fw-bold mb-1">
-        <Mail size={20} className="me-2" />
-        ตั้งค่าแจ้งเตือน (ผู้รับอีเมล)
-      </h4>
-      <p className="text-muted small">
-        รายชื่อผู้รับอีเมลแจ้งเตือน Model ที่ยังไม่มี Routing Master — To อย่างน้อย 1 รายที่ active
-        จึงจะส่งได้
-      </p>
+      <PageHeader
+        icon="bi-envelope"
+        title="ตั้งค่าแจ้งเตือน"
+        subtitle="ผู้รับอีเมลแจ้งเตือน Model ที่ยังไม่มี Routing Master — ต้องมีผู้รับประเภท To ที่เปิดใช้งานอย่างน้อย 1 ราย"
+      />
 
       {activeTo === 0 && !loading && (
-        <div className="alert alert-warning py-2 small">
-          ⚠️ ยังไม่มีผู้รับประเภท <b>To</b> ที่เปิดใช้งาน — ระบบจะส่งอีเมลไม่ได้
+        <div className="alert alert-warning py-2 small d-flex align-items-center gap-2">
+          <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" />
+          <span>
+            ยังไม่มีผู้รับประเภท <b>To</b> ที่เปิดใช้งาน — ระบบจะส่งอีเมลไม่ได้
+          </span>
         </div>
       )}
 
@@ -127,7 +125,7 @@ const AlertSettingsPage = () => {
         <Card.Header className="d-flex justify-content-between align-items-center">
           <span className="fw-bold">ผู้รับทั้งหมด ({recipients.length})</span>
           <Button size="sm" className="btn-mse" onClick={openAdd}>
-            <Plus size={14} className="me-1" />
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" />
             เพิ่มผู้รับ
           </Button>
         </Card.Header>
@@ -172,18 +170,26 @@ const AlertSettingsPage = () => {
                         />
                       </td>
                       <td className="text-end text-nowrap">
-                        <Pencil
-                          size={15}
-                          role="button"
-                          className="text-primary me-2"
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0 me-3 text-primary icon-btn"
+                          title="แก้ไขผู้รับ"
+                          aria-label={`แก้ไขผู้รับ ${r.email}`}
                           onClick={() => openEdit(r)}
-                        />
-                        <Trash2
-                          size={15}
-                          role="button"
-                          className="text-danger"
+                        >
+                          <i className="bi bi-pencil-square" aria-hidden="true" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0 text-danger icon-btn"
+                          title="ลบผู้รับ"
+                          aria-label={`ลบผู้รับ ${r.email}`}
                           onClick={() => setConfirm(r)}
-                        />
+                        >
+                          <i className="bi bi-trash" aria-hidden="true" />
+                        </Button>
                       </td>
                     </tr>
                   ))
@@ -256,13 +262,7 @@ const AlertSettingsPage = () => {
         </Modal.Footer>
       </Modal>
 
-      <ToastContainer position="bottom-end" className="p-3">
-        {toast && (
-          <Toast bg={toast.variant} onClose={() => setToast(null)} show delay={3500} autohide>
-            <Toast.Body className="text-white">{toast.message}</Toast.Body>
-          </Toast>
-        )}
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </Container>
   );
 };

@@ -2,7 +2,6 @@
 // ตาม filter bar ของ overview_tab.dart / detailed_tab.dart
 import React from 'react';
 import { Form, Button } from 'react-bootstrap';
-import { RotateCcw, Download } from 'lucide-react';
 
 const FilterBar = ({
   machineList,
@@ -52,11 +51,11 @@ const FilterBar = ({
       </Form.Select>
     </Form.Group>
     <Button variant="secondary" size="sm" onClick={onReset}>
-      <RotateCcw size={14} className="me-1" />
+      <i className="bi bi-arrow-counterclockwise me-1" aria-hidden="true" />
       Reset
     </Button>
     <Button variant="success" size="sm" onClick={onExport}>
-      <Download size={14} className="me-1" />
+      <i className="bi bi-download me-1" aria-hidden="true" />
       Export CSV
     </Button>
   </div>

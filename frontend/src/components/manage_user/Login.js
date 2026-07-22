@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
-import { Factory, AlertCircle, Eye, EyeOff, QrCode } from 'lucide-react';
 import { apiCall } from '../../api/client';
 import useScanInput from '../shared/useScanInput';
 
@@ -75,19 +74,30 @@ const Login = () => {
   return (
     <div
       className="d-flex align-items-center justify-content-center p-4"
-      style={{ minHeight: '100vh', backgroundColor: '#f0f2f5' }}
+      style={{ minHeight: '100vh', backgroundColor: 'var(--mse-canvas)' }}
     >
-      <Card className="w-100 shadow" style={{ maxWidth: '400px', borderRadius: '12px' }}>
+      <Card className="w-100 shadow" style={{ maxWidth: '400px' }}>
+        <div
+          className="text-center text-white px-4 py-4"
+          style={{
+            backgroundColor: 'var(--mse-primary)',
+            borderTopLeftRadius: 'var(--mse-radius)',
+            borderTopRightRadius: 'var(--mse-radius)',
+          }}
+        >
+          <i className="bi bi-building-gear" style={{ fontSize: '2.75rem' }} aria-hidden="true" />
+          <h1 className="fw-bold mb-0 mt-2" style={{ fontSize: 'var(--fs-page)' }}>
+            MSE Auto Plan
+          </h1>
+          <p className="mb-0 small" style={{ opacity: 0.85 }}>
+            ระบบวางแผนการผลิต
+          </p>
+        </div>
         <Card.Body className="p-4">
-          <div className="text-center mb-4">
-            <Factory size={48} className="text-mse mb-2" />
-            <h2 className="fw-bold text-mse">MES System</h2>
-            <p className="text-muted">เข้าสู่ระบบเพื่อใช้งาน</p>
-          </div>
 
           {error && (
             <Alert variant="danger" className="d-flex align-items-center py-2">
-              <AlertCircle size={16} className="me-2 flex-shrink-0" />
+              <i className="bi bi-exclamation-circle-fill me-2 flex-shrink-0" aria-hidden="true" />
               {error}
             </Alert>
           )}
@@ -102,6 +112,7 @@ const Login = () => {
                   onChange={scan.onChange}
                   onKeyDown={scan.onKeyDown}
                   placeholder="สแกนรหัสพนักงาน 5 ตัว"
+                  className="touch-target"
                   autoFocus
                   disabled={loading}
                 />
@@ -156,16 +167,16 @@ const Login = () => {
                   onClick={() => setShowPassword(!showPassword)}
                   type="button"
                   tabIndex={-1}
+                  aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
                 >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  <i className={`bi ${showPassword ? 'bi-eye-slash' : 'bi-eye'}`} aria-hidden="true" />
                 </Button>
               </div>
             </Form.Group>
 
             <Button
               type="submit"
-              className="w-100 btn-mse"
-              style={{ height: '48px' }}
+              className="w-100 btn-mse touch-target"
               disabled={loading}
             >
               {loading ? (
@@ -186,7 +197,7 @@ const Login = () => {
                 setError('');
               }}
             >
-              <QrCode size={16} className="me-1" />
+              <i className="bi bi-upc-scan me-1" aria-hidden="true" />
               เข้าสู่ระบบด้วยรหัสพนักงาน (สแกน)
             </Button>
           </Form>

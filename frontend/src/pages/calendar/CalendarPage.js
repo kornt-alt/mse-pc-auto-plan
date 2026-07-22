@@ -7,11 +7,14 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Container, Button, Form, Table, Spinner, Modal, Toast, ToastContainer, InputGroup,
+  Container, Button, Form, Table, Spinner, Modal, InputGroup,
 } from 'react-bootstrap';
-import { Search, Pencil, CalendarRange, Sparkles, PartyPopper, RefreshCw } from 'lucide-react';
 import { apiCall } from '../../api/client';
 import { usePlanData } from '../../context/PlanDataContext';
+import PageHeader from '../../components/shared/PageHeader';
+import Toolbar from '../../components/shared/Toolbar';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
+import ConfirmModal from '../../components/shared/ConfirmModal';
 import BulkEditDialog from './BulkEditDialog';
 import GenerateCalendarDialog from './GenerateCalendarDialog';
 import HolidayManagerDialog from './HolidayManagerDialog';
@@ -45,14 +48,11 @@ const CalendarPage = () => {
   const [showGenerate, setShowGenerate] = useState(false);
   const [showHoliday, setShowHoliday] = useState(false);
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, variant, onConfirm}
-  const [toast, setToast] = useState(null); // {message, variant}
 
   const navigate = useNavigate();
   const { setFromRunResponse } = usePlanData();
 
-  const showToast = useCallback((message, variant = 'success') => {
-    setToast({ message, variant });
-  }, []);
+  const { toast, showToast, hideToast } = useToast();
   const showErrorToast = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
 
   const fetchCalendarData = useCallback(
@@ -119,7 +119,7 @@ const CalendarPage = () => {
       });
       await refresh();
       setHasChanges(true);
-      showToast('✅ อัปเดตเวลาสำเร็จ! กรุณากดปุ่ม Replan เพื่ออัปเดตแผนผลิต', 'warning');
+      showToast('อัปเดตเวลาแล้ว กดปุ่ม Replan เพื่อคำนวณแผนใหม่', 'warning');
     } catch (err) {
       showToast(err.message, 'danger');
     } finally {
@@ -135,7 +135,7 @@ const CalendarPage = () => {
         await apiCall('/calendar/bulk_update', { method: 'PUT', body: JSON.stringify(payload) });
         await refresh();
         setHasChanges(true); // FIX: เดิมไม่ set — bulk ก็เปลี่ยน capacity เหมือนแก้รายแถว
-        showToast('✅ อัปเดตเวลาสำเร็จ!');
+        showToast('อัปเดตเวลาแบบกลุ่มแล้ว');
       } catch (err) {
         showToast(err.message, 'danger');
       } finally {
@@ -155,7 +155,7 @@ const CalendarPage = () => {
           body: JSON.stringify(payload),
         });
         await refresh();
-        showToast(`✅ สร้างปฏิทินสำเร็จ! เพิ่มข้อมูลใหม่ ${data.created_records ?? 0} แถว`);
+        showToast(`สร้างปฏิทินแล้ว เพิ่มข้อมูลใหม่ ${data.created_records ?? 0} แถว`);
       } catch (err) {
         showToast(err.message, 'danger');
       } finally {
@@ -195,8 +195,39 @@ const CalendarPage = () => {
 
   return (
     <Container fluid className="pb-4">
+      <PageHeader
+        icon="bi-calendar-range"
+        title="Calendar"
+        subtitle="กำหนดเวลาทำงานที่ใช้ได้ของเครื่องจักรรายวัน"
+        actions={
+          <>
+            {hasChanges && (
+              <span className="chip chip-warn">
+                <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" />
+                แก้ไขแล้วยังไม่ได้คำนวณแผนใหม่
+              </span>
+            )}
+            <Button
+              variant={hasChanges ? 'warning' : 'secondary'}
+              disabled={!hasChanges || isReplanning}
+              onClick={handleReplan}
+            >
+              {isReplanning ? (
+                <>
+                  <Spinner size="sm" animation="border" className="me-1" /> กำลังประมวลผล...
+                </>
+              ) : (
+                <>
+                  <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" /> Replan
+                </>
+              )}
+            </Button>
+          </>
+        }
+      />
+
       {/* ===== toolbar ===== */}
-      <div className="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <Toolbar>
         <span className="fw-bold">Machine</span>
         <InputGroup style={{ maxWidth: 180 }}>
           <Form.Control
@@ -237,61 +268,35 @@ const CalendarPage = () => {
         </Form.Select>
 
         <Button size="sm" className="btn-mse" onClick={refresh}>
-          <Search size={14} className="me-1" />
+          <i className="bi bi-search me-1" aria-hidden="true" />
           ค้นหา
         </Button>
         <Button size="sm" variant="info" className="text-white" onClick={() => setShowBulk(true)}>
-          <CalendarRange size={14} className="me-1" />
+          <i className="bi bi-calendar-range me-1" aria-hidden="true" />
           ตั้งค่าแบบกลุ่ม
         </Button>
         <Button size="sm" variant="success" onClick={() => setShowGenerate(true)}>
-          <Sparkles size={14} className="me-1" />
+          <i className="bi bi-calendar-plus me-1" aria-hidden="true" />
           สร้างปฏิทิน
         </Button>
         <Button size="sm" variant="warning" onClick={() => setShowHoliday(true)}>
-          <PartyPopper size={14} className="me-1" />
-          Master Holiday
+          <i className="bi bi-calendar-event me-1" aria-hidden="true" />
+          วันหยุดประจำปี
         </Button>
         {filtersDirty && (
-          <Button size="sm" variant="secondary" onClick={handleClear}>
+          <Button size="sm" variant="outline-secondary" onClick={handleClear}>
             ล้างค่า
           </Button>
         )}
-
-        <div className="ms-auto d-flex align-items-center gap-2">
-          {hasChanges && (
-            <span className="text-danger fw-bold">⚠️ กรุณากดปุ่ม</span>
-          )}
-          <Button
-            size="sm"
-            disabled={!hasChanges || isReplanning}
-            onClick={handleReplan}
-            style={
-              hasChanges && !isReplanning
-                ? { backgroundColor: '#f57c00', borderColor: '#f57c00' }
-                : {}
-            }
-          >
-            {isReplanning ? (
-              <>
-                <Spinner size="sm" animation="border" className="me-1" /> กำลังประมวลผล...
-              </>
-            ) : (
-              <>
-                <RefreshCw size={14} className="me-1" /> Replan
-              </>
-            )}
-          </Button>
-        </div>
-      </div>
+      </Toolbar>
 
       {/* ===== ตาราง ===== */}
       <div style={{ position: 'relative' }}>
         {tableData.length === 0 && !isLoading ? (
-          <div className="text-center mt-5">
-            <h5 className="text-secondary fw-bold">
-              กรุณาพิมพ์ชื่อ Machine แล้วกดค้นหา 🔍 (ปฏิทินอาจยังไม่ได้ทำ)
-            </h5>
+          <div className="empty-state">
+            <i className="bi bi-calendar-x" aria-hidden="true" />
+            <div>พิมพ์ชื่อเครื่องจักรแล้วกดค้นหา</div>
+            <div className="small">ถ้าค้นแล้วไม่พบข้อมูล แปลว่ายังไม่ได้สร้างปฏิทินของเดือนนั้น</div>
           </div>
         ) : (
           <Table bordered hover size="sm" style={{ maxWidth: 720 }}>
@@ -306,14 +311,14 @@ const CalendarPage = () => {
               {tableData.map((row) => (
                 <tr key={row.id}>
                   <td>{row.machine ?? '-'}</td>
-                  <td>{row.date ?? '-'}</td>
+                  <td className="num">{row.date ?? '-'}</td>
                   <td
                     role="button"
                     onClick={() => row.id && openEditDialog(row)}
                     title="คลิกเพื่อแก้ไข"
                   >
-                    <span className="fw-bold text-primary">{row.available_time ?? 0}</span>{' '}
-                    <Pencil size={14} className="text-secondary ms-1" />
+                    <span className="fw-bold text-mse num">{row.available_time ?? 0}</span>{' '}
+                    <i className="bi bi-pencil-square text-secondary ms-1" aria-hidden="true" />
                   </td>
                 </tr>
               ))}
@@ -375,37 +380,8 @@ const CalendarPage = () => {
         onError={showErrorToast}
       />
 
-      {/* ===== confirm modal ===== */}
-      <Modal show={!!confirm} onHide={() => setConfirm(null)} centered>
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: '1.1rem' }}>{confirm?.title}</Modal.Title>
-        </Modal.Header>
-        <Modal.Body style={{ whiteSpace: 'pre-line' }}>{confirm?.body}</Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setConfirm(null)}>
-            ยกเลิก
-          </Button>
-          <Button
-            variant={confirm?.variant || 'primary'}
-            onClick={() => {
-              const action = confirm?.onConfirm;
-              setConfirm(null);
-              if (action) action();
-            }}
-          >
-            {confirm?.confirmLabel || 'ยืนยัน'}
-          </Button>
-        </Modal.Footer>
-      </Modal>
-
-      {/* ===== toast ===== */}
-      <ToastContainer position="bottom-end" className="p-3" style={{ position: 'fixed', zIndex: 2000 }}>
-        <Toast show={!!toast} onClose={() => setToast(null)} delay={3500} autohide bg={toast?.variant}>
-          <Toast.Body className={toast?.variant === 'warning' ? '' : 'text-white'}>
-            {toast?.message}
-          </Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />
+      <ToastHost toast={toast} onClose={hideToast} />
     </Container>
   );
 };

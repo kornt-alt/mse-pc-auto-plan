@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Modal, Table, Button } from 'react-bootstrap';
-import { Pencil, Trash2 } from 'lucide-react';
 
 // ประวัติการบันทึกของ step — port จาก _showHistoryDialog (shop_floor_screen.dart L761-926)
 // แก้/ลบได้เฉพาะ record ของพนักงานที่สแกนอยู่ (employee ตรงกับ empCode)
@@ -49,7 +48,7 @@ const RecordHistoryDialog = ({ show, stepName, history, empCode, onEdit, onDelet
                           className="p-0 me-2"
                           onClick={() => onEdit(h)}
                         >
-                          <Pencil size={15} />
+                          <i className="bi bi-pencil-square" aria-hidden="true" />
                         </Button>
                         <Button
                           variant="link"
@@ -57,7 +56,7 @@ const RecordHistoryDialog = ({ show, stepName, history, empCode, onEdit, onDelet
                           className="p-0 text-danger"
                           onClick={() => setConfirmDelete(h)}
                         >
-                          <Trash2 size={15} />
+                          <i className="bi bi-trash" aria-hidden="true" />
                         </Button>
                       </>
                     )}

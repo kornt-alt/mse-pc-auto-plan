@@ -86,7 +86,8 @@ const NumpadDialog = ({ show, stepName, machine, cap, editRecord, onSubmit, onHi
       </Modal.Header>
       <Modal.Body>
         <Alert variant="warning" className="py-2 small">
-          ⚠️ ยอดที่บันทึกได้สูงสุดครั้งนี้: {cap} ชิ้น
+          <i className="bi bi-exclamation-triangle-fill me-1" aria-hidden="true" />
+          ยอดที่บันทึกได้สูงสุดครั้งนี้: {cap} ชิ้น
         </Alert>
 
         <div className="d-flex gap-3 mb-3">
@@ -122,7 +123,7 @@ const NumpadDialog = ({ show, stepName, machine, cap, editRecord, onSubmit, onHi
           <Form.Check
             type="checkbox"
             id="force-close-check"
-            label="✅ ชิ้นงานหมดตะกร้า (บังคับจบงาน)"
+            label="ชิ้นงานหมดตะกร้า (บังคับจบงาน)"
             checked={forceClose}
             onChange={(e) => setForceClose(e.target.checked)}
           />

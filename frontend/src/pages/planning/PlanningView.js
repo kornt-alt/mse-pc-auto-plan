@@ -7,6 +7,7 @@ import { usePlanData } from '../../context/PlanDataContext';
 import OverviewTab from './OverviewTab';
 import ReportTab from './ReportTab';
 import DetailedTab from './DetailedTab';
+import PageHeader from '../../components/shared/PageHeader';
 import './planning.css';
 
 const PlanningView = () => {
@@ -27,7 +28,11 @@ const PlanningView = () => {
 
   return (
     <Container fluid className="px-3">
-      <h5 className="text-mse fw-bold mb-3">Planning view & Shipment Date</h5>
+      <PageHeader
+        icon="bi-grid-3x3"
+        title="Planning View"
+        subtitle="แผนการผลิตรายเครื่องจักร และกำหนดส่งของแต่ละแบตช์"
+      />
       <Tabs defaultActiveKey="chart" className="mb-2">
         <Tab eventKey="chart" title="Planing Chart">
           <OverviewTab planData={planData} />

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Table, Button, Form, Spinner, Alert, InputGroup } from 'react-bootstrap';
-import { QrCode, Archive } from 'lucide-react';
 import { apiCall } from '../../api/client';
 import useScanInput from '../../components/shared/useScanInput';
 
@@ -40,14 +39,14 @@ const HistoryDialog = ({ show, onHide, onOpenTracking }) => {
     <Modal show={show} onHide={onHide} size="lg">
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
-          <Archive size={18} className="me-2" />
+          <i className="bi bi-archive me-2" aria-hidden="true" />
           ประวัติการผลิต (Top 20 ล่าสุด)
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <InputGroup className="mb-3">
           <InputGroup.Text>
-            <QrCode size={16} />
+            <i className="bi bi-upc-scan" aria-hidden="true" />
           </InputGroup.Text>
           <Form.Control
             placeholder="สแกน Batch Barcode"

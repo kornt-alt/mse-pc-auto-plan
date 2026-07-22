@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Form, Button, Spinner, Toast, ToastContainer } from 'react-bootstrap';
-import { RefreshCw } from 'lucide-react';
+import { Card, Form, Button, Spinner } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
+import PageHeader from '../../components/shared/PageHeader';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import Dialogue1 from './Dialogue1';
 
 // Production Daily Result — port จาก production_daily_screen.dart
@@ -18,7 +19,7 @@ const DailyResultPage = () => {
   const [summary, setSummary] = useState([]);
   const [loading, setLoading] = useState(false);
   const [d1Ctx, setD1Ctx] = useState(null);
-  const [toast, setToast] = useState(null);
+  const { toast, showToast, hideToast } = useToast();
 
   const years = Array.from({ length: 10 }, (_, i) => now.getFullYear() - 5 + i);
 
@@ -29,12 +30,12 @@ const DailyResultPage = () => {
       const res = await apiCall(`/daily-result/summary?${params.toString()}`);
       setSummary(res.data || []);
     } catch (err) {
-      setToast({ message: `เกิดข้อผิดพลาดในการโหลดข้อมูล: ${err.message}` });
+      showToast(`โหลดข้อมูลไม่สำเร็จ: ${err.message}`, 'danger');
       setSummary([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     apiCall('/daily-result/machines')
@@ -83,10 +84,14 @@ const DailyResultPage = () => {
 
   return (
     <div className="container-fluid py-3">
-      <Card className="shadow-sm mb-3" style={{ backgroundColor: '#fff8f0' }}>
+      <PageHeader
+        icon="bi-clipboard-data"
+        title="Daily Result"
+        subtitle="ยอดรับเข้า ยอดผลิต และ Yield รายวันของแต่ละเครื่องจักร"
+      />
+      <Card className="shadow-sm mb-3" style={{ backgroundColor: 'var(--mse-warn-bg)' }}>
         <Card.Body className="py-2">
           <div className="d-flex flex-wrap align-items-end gap-2">
-            <strong className="me-2">Result</strong>
             <Form.Group>
               <Form.Label className="small mb-0">ปี</Form.Label>
               <Form.Select
@@ -146,8 +151,8 @@ const DailyResultPage = () => {
               className="btn-mse"
               onClick={() => fetchSummary(year, month, machine)}
             >
-              <RefreshCw size={14} className="me-1" />
-              Refresh
+              <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />
+              รีเฟรช
             </Button>
             {loading && <Spinner animation="border" size="sm" />}
           </div>
@@ -200,11 +205,7 @@ const DailyResultPage = () => {
 
       <Dialogue1 show={!!d1Ctx} ctx={d1Ctx} onHide={() => setD1Ctx(null)} />
 
-      <ToastContainer position="bottom-end" className="p-3" style={{ zIndex: 2000 }}>
-        <Toast show={!!toast} onClose={() => setToast(null)} delay={3500} autohide bg="danger">
-          <Toast.Body className="text-white">{toast?.message}</Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </div>
   );
 };

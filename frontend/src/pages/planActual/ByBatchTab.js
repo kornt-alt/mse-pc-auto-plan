@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Form, Button, Spinner } from 'react-bootstrap';
-import { RefreshCw, Route, Package, LogIn, CheckCircle2 } from 'lucide-react';
 import { apiCall } from '../../api/client';
 import { DateCell, stickyStyle, dateCellStyle, ROW_HEIGHT } from './matrixCells';
 
@@ -155,15 +154,15 @@ const ByBatchTab = () => {
               fetchPlanVsActual(selectedBatch);
             }}
           >
-            <RefreshCw size={14} />
+            <i className="bi bi-arrow-clockwise" aria-hidden="true" />
           </Button>
         </div>
       </div>
 
       {!selectedBatch ? (
         <div className="text-center text-muted py-5">
-          <Route size={64} color="#bdbdbd" className="mb-3" />
-          <div className="fw-bold">📍 กรุณาพิมพ์ค้นหา Batch ด้านบนเพื่อดูเส้นทางการผลิต</div>
+          <i className="bi bi-signpost-split" style={{ fontSize: '4rem', opacity: 0.4 }} aria-hidden="true" />
+          <div className="fw-bold mt-3">พิมพ์ค้นหา Batch ด้านบนเพื่อดูเส้นทางการผลิต</div>
         </div>
       ) : loading ? (
         <div className="text-center py-5">
@@ -206,15 +205,15 @@ const ByBatchTab = () => {
                     <td style={stickyStyle(630, 100)}>
                       {/* Qty 3 บรรทัด: Lot / In / Out (dart L190-240) */}
                       <div style={{ fontSize: 12, color: '#1976D2' }}>
-                        <Package size={12} className="me-1" />
+                        <i className="bi bi-box-seam me-1" aria-hidden="true" />
                         Lot: {trunc(finalDisplayPlanQty)}
                       </div>
                       <div style={{ fontSize: 12, color: '#212121' }}>
-                        <LogIn size={12} className="me-1" />
+                        <i className="bi bi-box-arrow-in-right me-1" aria-hidden="true" />
                         In: {trunc(row.total_actual_ok + row.total_actual_ng)}
                       </div>
                       <div style={{ fontSize: 12, color: '#388E3C' }}>
-                        <CheckCircle2 size={12} className="me-1" />
+                        <i className="bi bi-check-circle me-1" aria-hidden="true" />
                         Out: {trunc(row.total_actual_ok)}
                       </div>
                     </td>

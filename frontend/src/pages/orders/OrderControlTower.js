@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Container, Table, Button, Form, Modal, Spinner, Badge,
-  Toast, ToastContainer, InputGroup,
+  Container, Table, Button, Form, Spinner, Badge, InputGroup,
 } from 'react-bootstrap';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -11,13 +10,12 @@ import {
   SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import {
-  GripVertical, Pencil, CheckCircle, Trash2, Search, X, PlusSquare,
-  Lock, Unlock, Undo2, RotateCcw, Wand2, ArrowDownUp, History, RefreshCw,
-  AlertTriangle, Clock, MailCheck,
-} from 'lucide-react';
 import { apiCall } from '../../api/client';
 import { usePlanData } from '../../context/PlanDataContext';
+import PageHeader from '../../components/shared/PageHeader';
+import Toolbar from '../../components/shared/Toolbar';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
+import ConfirmModal from '../../components/shared/ConfirmModal';
 import OrderFormDialog from './OrderFormDialog';
 import TrackingDialog from './TrackingDialog';
 import HistoryDialog from './HistoryDialog';
@@ -36,7 +34,7 @@ const dueDateInfo = (dueDateStr) => {
   due.setHours(0, 0, 0, 0);
   const diffDays = Math.round((due - todayMidnight()) / 86400000);
   if (diffDays < 0) return { className: 'text-danger fw-bold', icon: 'overdue' };
-  if (diffDays <= 2) return { className: 'fw-bold', icon: 'near', style: { color: '#f57c00' } };
+  if (diffDays <= 2) return { className: 'fw-bold', icon: 'near', style: { color: 'var(--mse-warn)' } };
   return { className: '', icon: null };
 };
 
@@ -81,47 +79,55 @@ const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTrackin
         <span
           {...attributes}
           {...listeners}
-          style={{ cursor: searchActive ? 'not-allowed' : 'grab', color: searchActive ? '#dee2e6' : '#6c757d' }}
+          title={searchActive ? 'ล้างคำค้นหาก่อนจึงจะจัดลำดับได้' : 'ลากเพื่อจัดลำดับ'}
+          style={{
+            cursor: searchActive ? 'not-allowed' : 'grab',
+            color: searchActive ? 'var(--mse-border)' : 'var(--mse-muted)',
+          }}
         >
-          <GripVertical size={16} />
+          <i className="bi bi-grip-vertical" aria-hidden="true" />
         </span>
       </td>
       <td className="text-nowrap">
-        <Button variant="link" size="sm" className="p-0 me-1 text-primary" title="แก้ไข" onClick={() => onEdit(order)}>
-          <Pencil size={15} />
+        <Button variant="link" size="sm" className="p-0 me-2 text-primary icon-btn" title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(order)}>
+          <i className="bi bi-pencil-square" aria-hidden="true" />
         </Button>
-        <Button variant="link" size="sm" className="p-0 me-1 text-success" title="ปิดจ๊อบ" onClick={() => onClose(order)}>
-          <CheckCircle size={15} />
+        <Button variant="link" size="sm" className="p-0 me-2 text-success icon-btn" title="ปิดจ๊อบ" aria-label="ปิดจ๊อบ" onClick={() => onClose(order)}>
+          <i className="bi bi-check-circle" aria-hidden="true" />
         </Button>
-        <Button variant="link" size="sm" className="p-0 text-danger" title="ลบ" onClick={() => onDelete(order)}>
-          <Trash2 size={15} />
+        <Button variant="link" size="sm" className="p-0 text-danger icon-btn" title="ลบ" aria-label="ลบ" onClick={() => onDelete(order)}>
+          <i className="bi bi-trash" aria-hidden="true" />
         </Button>
       </td>
       <td>
         <Button
           variant="link"
           size="sm"
-          className="p-0 fw-bold text-decoration-underline"
+          className="p-0 fw-bold text-decoration-underline num"
           onClick={() => onTracking(order.batch)}
         >
           {order.batch}
         </Button>
-        {order.is_new ? <span className="text-danger fw-bold ms-1">New</span> : null}
+        {order.is_new ? <span className="chip chip-ng ms-1">ใหม่</span> : null}
       </td>
       <td>
         {order.model}
         {order.is_missing_routing ? (
           order.has_actual_master ? (
-            <MailCheck size={15} className="text-success ms-1" title="Engineer จัดทำ Master เรียบร้อยแล้ว ✅" />
+            <i
+              className="bi bi-envelope-check text-success ms-1"
+              title="Engineer จัดทำ Master เรียบร้อยแล้ว"
+            />
           ) : (
             <Button
               variant="link"
               size="sm"
-              className="p-0 ms-1"
+              className="p-0 ms-1 text-warning icon-btn"
               title="แจ้ง Engineer ว่ายังไม่มี Routing"
+              aria-label="แจ้ง Engineer ว่ายังไม่มี Routing"
               onClick={() => onMissingAlert(order)}
             >
-              ❓
+              <i className="bi bi-question-circle-fill" aria-hidden="true" />
             </Button>
           )
         ) : null}
@@ -129,16 +135,28 @@ const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTrackin
       <td className="text-truncate" style={{ maxWidth: 200 }} title={order.description || ''}>
         {order.description || '-'}
       </td>
-      <td>{formatWip(order.wip)}</td>
+      <td className="num">{formatWip(order.wip)}</td>
       <td>{order.planning_mode === 'backward' ? 'Backward' : 'Forward'}</td>
-      <td>{order.qty}</td>
-      <td className={due.className} style={due.style}>
-        {due.icon === 'overdue' && <AlertTriangle size={14} className="me-1" />}
-        {due.icon === 'near' && <Clock size={14} className="me-1" />}
+      <td className="num">{order.qty}</td>
+      <td className={`num ${due.className}`} style={due.style}>
+        {due.icon === 'overdue' && (
+          <i className="bi bi-exclamation-triangle-fill me-1" title="เลยกำหนดส่ง" />
+        )}
+        {due.icon === 'near' && <i className="bi bi-clock-fill me-1" title="ใกล้ถึงกำหนดส่ง" />}
         {String(order.due_date || '').slice(0, 10)}
       </td>
-      <td>{order.planMode || order.plan_mode || 'NEW'}</td>
-      <td>{formatReleaseDate(order.release_date)}</td>
+      <td>
+        {(() => {
+          const mode = order.planMode || order.plan_mode || 'NEW';
+          return (
+            <span className={`chip ${mode === 'FIXED' ? 'chip-warn' : 'chip-info'}`}>
+              <i className={`bi ${mode === 'FIXED' ? 'bi-lock-fill' : 'bi-unlock'}`} aria-hidden="true" />
+              {mode}
+            </span>
+          );
+        })()}
+      </td>
+      <td className="num">{formatReleaseDate(order.release_date)}</td>
       <td className="text-center">
         <Badge bg={(order.priority ?? 99) < 10 ? 'danger' : 'secondary'} pill>
           {order.priority ?? 99}
@@ -169,13 +187,10 @@ const OrderControlTower = () => {
   const [trackingBatch, setTrackingBatch] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, variant, onConfirm}
-  const [toast, setToast] = useState(null); // {message, variant}
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  const showToast = useCallback((message, variant = 'success') => {
-    setToast({ message, variant });
-  }, []);
+  const { toast, showToast, hideToast } = useToast();
 
   // ต้อง stable — ถ้าเป็น inline function จะทำให้ useEffect ใน OrderFormDialog รีเซ็ตฟอร์มทุก re-render
   const showErrorToast = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
@@ -265,7 +280,7 @@ const OrderControlTower = () => {
       onConfirm: async () => {
         try {
           await apiCall(`/orders/${encodeURIComponent(order.batch)}/close`, { method: 'PUT' });
-          showToast(`✅ ปิดจ๊อบ ${order.batch} เรียบร้อยแล้ว`);
+          showToast(`ปิดจ๊อบ ${order.batch} เรียบร้อยแล้ว`);
           fetchOrders();
           fetchTimestamps();
         } catch (err) {
@@ -282,7 +297,7 @@ const OrderControlTower = () => {
         method: 'POST',
         body: JSON.stringify({ batch_id: order.batch, model_name: order.model }),
       });
-      showToast(res.message || '✅ ส่งอีเมลแจ้ง Engineer แล้ว');
+      showToast(res.message || 'ส่งอีเมลแจ้ง Engineer แล้ว');
     } catch (err) {
       showToast(err.message, 'danger');
     }
@@ -290,14 +305,14 @@ const OrderControlTower = () => {
 
   const handleDeleteOrder = (order) => {
     setConfirm({
-      title: 'ยืนยันการลบ 🗑️',
+      title: 'ยืนยันการลบออเดอร์',
       body: `คุณต้องการลบออเดอร์ Batch: ${order.batch} ใช่หรือไม่?\n(ข้อมูลจะถูกลบออกจากระบบทันที)`,
       confirmLabel: 'ลบเลย',
       variant: 'danger',
       onConfirm: async () => {
         try {
           await apiCall(`/orders/${encodeURIComponent(order.batch)}`, { method: 'DELETE' });
-          showToast('✅ ลบออเดอร์สำเร็จ');
+          showToast('ลบออเดอร์สำเร็จ');
           fetchOrders();
         } catch (err) {
           showToast(err.message, 'danger');
@@ -309,7 +324,7 @@ const OrderControlTower = () => {
   const handleToggleAllMode = () => {
     const target = allFixed ? 'NEW' : 'FIXED';
     setConfirm({
-      title: target === 'FIXED' ? '🔒 ล็อกแผนทั้งหมด (All FIXED)' : '🔓 ปลดล็อกแผนทั้งหมด (All NEW)',
+      title: target === 'FIXED' ? 'ล็อกแผนทั้งหมด (All FIXED)' : 'ปลดล็อกแผนทั้งหมด (All NEW)',
       body: `ต้องการเปลี่ยนสถานะทุกออเดอร์เป็น ${target} ใช่หรือไม่?`,
       confirmLabel: 'ยืนยัน',
       variant: target === 'FIXED' ? 'warning' : 'success',
@@ -319,7 +334,7 @@ const OrderControlTower = () => {
             method: 'PUT',
             body: JSON.stringify({ batches: orders.map((o) => o.batch) }),
           });
-          showToast(`✅ เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ`);
+          showToast(`เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ`);
           fetchOrders();
         } catch (err) {
           showToast(err.message, 'danger');
@@ -338,7 +353,7 @@ const OrderControlTower = () => {
       onConfirm: async () => {
         try {
           await apiCall('/orders/bulk/sort-priority', { method: 'PUT' });
-          showToast('✅ เรียงลำดับ Priority สำเร็จ!');
+          showToast('เรียงลำดับ Priority สำเร็จ');
           fetchOrders();
         } catch (err) {
           showToast(err.message, 'danger');
@@ -377,7 +392,7 @@ const OrderControlTower = () => {
   const handleInitialPlan = () => {
     // กล่องเตือนสีแดงเดิม (order_management_screen.dart L1064-1128)
     setConfirm({
-      title: '⚠️ ยืนยันการรัน Initial Plan',
+      title: 'ยืนยันการรัน Initial Plan',
       body: 'คุณต้องการล้างแผนการผลิตทั้งหมดใช่หรือไม่?',
       confirmLabel: 'ยืนยัน (ล้างแผน)',
       variant: 'danger',
@@ -440,11 +455,55 @@ const OrderControlTower = () => {
 
   return (
     <Container fluid className="pb-4">
+      <PageHeader
+        icon="bi-list-check"
+        title="Order Management"
+        subtitle="จัดลำดับความสำคัญของออเดอร์ แล้วสั่งคำนวณแผนการผลิต"
+        status={
+          <div className="d-flex align-items-center gap-3 border rounded bg-white px-3 py-1">
+            <span
+              className={`chip ${outdated ? 'chip-ng' : 'chip-ok'}`}
+              title={outdated ? 'มีการแก้ไขหลังวางแผนล่าสุด' : 'แผนเป็นปัจจุบัน'}
+            >
+              <i className={`bi ${outdated ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill'}`} />
+              {outdated ? 'แผนไม่เป็นปัจจุบัน' : 'แผนเป็นปัจจุบัน'}
+            </span>
+            <small className="fw-bold text-mse num">Last plan: {timestamps.last_plan}</small>
+            <small className="fw-bold num" style={{ color: 'var(--mse-warn)' }}>
+              Last edit: {timestamps.last_edit}
+            </small>
+          </div>
+        }
+        actions={
+          <>
+            <Button
+              variant="outline-secondary"
+              title="ประวัติการผลิต"
+              aria-label="ประวัติการผลิต"
+              onClick={() => setShowHistory(true)}
+            >
+              <i className="bi bi-clock-history" aria-hidden="true" />
+            </Button>
+            <Button
+              variant="outline-secondary"
+              title="รีเฟรช"
+              aria-label="รีเฟรช"
+              onClick={() => {
+                fetchOrders();
+                fetchTimestamps();
+              }}
+            >
+              <i className="bi bi-arrow-clockwise" aria-hidden="true" />
+            </Button>
+          </>
+        }
+      />
+
       {/* ===== toolbar ===== */}
-      <div className="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <Toolbar>
         <InputGroup style={{ maxWidth: 320 }}>
           <InputGroup.Text>
-            <Search size={15} />
+            <i className="bi bi-search" aria-hidden="true" />
           </InputGroup.Text>
           <Form.Control
             placeholder="ค้นหา Batch หรือ Model..."
@@ -452,87 +511,49 @@ const OrderControlTower = () => {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
           {searchActive && (
-            <Button variant="outline-secondary" onClick={() => setSearchQuery('')}>
-              <X size={15} />
+            <Button variant="outline-secondary" onClick={() => setSearchQuery('')} title="ล้างคำค้นหา" aria-label="ล้างคำค้นหา">
+              <i className="bi bi-x-lg" aria-hidden="true" />
             </Button>
           )}
         </InputGroup>
 
         <Button className="btn-mse" onClick={() => setFormOrder(null)}>
-          <PlusSquare size={16} className="me-1" /> New Order
+          <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
         </Button>
 
-        {/* status panel */}
-        <div className="d-flex align-items-center gap-3 border rounded bg-white px-3 py-1">
-          <span
-            style={{
-              width: 14,
-              height: 14,
-              borderRadius: '50%',
-              backgroundColor: outdated ? '#ff5252' : '#28a745',
-              boxShadow: `0 0 8px ${outdated ? 'rgba(255,82,82,0.4)' : 'rgba(40,167,69,0.4)'}`,
-              display: 'inline-block',
-            }}
-            title={outdated ? 'มีการแก้ไขหลังวางแผนล่าสุด' : 'แผนเป็นปัจจุบัน'}
-          />
-          <small className="fw-bold text-primary">Last plan: {timestamps.last_plan}</small>
-          <small className="fw-bold" style={{ color: '#ff5722' }}>
-            Last Edit: {timestamps.last_edit}
-          </small>
-        </div>
-
-        <div className="ms-auto d-flex gap-2 flex-wrap">
-          <Button variant={allFixed ? 'success' : 'warning'} size="sm" onClick={handleToggleAllMode}>
-            {allFixed ? <Unlock size={15} className="me-1" /> : <Lock size={15} className="me-1" />}
-            {allFixed ? 'All NEW' : 'All FIXED'}
+        <Toolbar.End>
+          <Button variant={allFixed ? 'success' : 'warning'} onClick={handleToggleAllMode}>
+            <i className={`bi ${allFixed ? 'bi-unlock' : 'bi-lock-fill'} me-1`} aria-hidden="true" />
+            {allFixed ? 'ปลดล็อกทั้งหมด' : 'ล็อกทั้งหมด'}
           </Button>
           <Button
-            variant="secondary"
-            size="sm"
+            variant="warning"
             disabled={!previousOrderList || isPlanning}
             onClick={handleUndo}
-            style={previousOrderList && !isPlanning ? { backgroundColor: '#f57c00', borderColor: '#f57c00' } : {}}
           >
-            <Undo2 size={15} className="me-1" /> Undo
+            <i className="bi bi-arrow-90deg-left me-1" aria-hidden="true" /> ย้อนกลับ
           </Button>
-          <Button variant="danger" size="sm" disabled={isPlanning} onClick={handleInitialPlan}>
+          <Button variant="danger" disabled={isPlanning} onClick={handleInitialPlan}>
             {isPlanning ? (
               <Spinner animation="border" size="sm" className="me-1" />
             ) : (
-              <RotateCcw size={15} className="me-1" />
+              <i className="bi bi-arrow-counterclockwise me-1" aria-hidden="true" />
             )}
             Initial Plan
           </Button>
-          <Button
-            variant="info"
-            size="sm"
-            disabled={isPlanning}
-            className="text-white"
-            onClick={handleReplan}
-          >
+          <Button variant="info" disabled={isPlanning} className="text-white" onClick={handleReplan}>
             {isPlanning ? (
               <Spinner animation="border" size="sm" className="me-1" />
             ) : (
-              <Wand2 size={15} className="me-1" />
+              <i className="bi bi-magic me-1" aria-hidden="true" />
             )}
             Replan
           </Button>
-          <Button
-            size="sm"
-            style={{ backgroundColor: '#7b1fa2', borderColor: '#7b1fa2' }}
-            disabled={isPlanning}
-            onClick={handleSortByDueDate}
-          >
-            <ArrowDownUp size={15} className="me-1" /> Sort by Due Date
+          <Button variant="outline-primary" disabled={isPlanning} onClick={handleSortByDueDate}>
+            <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
           </Button>
-          <Button variant="outline-secondary" size="sm" title="ประวัติการผลิต" onClick={() => setShowHistory(true)}>
-            <History size={15} />
-          </Button>
-          <Button variant="outline-secondary" size="sm" title="รีเฟรช" onClick={() => { fetchOrders(); fetchTimestamps(); }}>
-            <RefreshCw size={15} />
-          </Button>
-        </div>
-      </div>
+        </Toolbar.End>
+      </Toolbar>
 
       {/* ===== ตาราง orders ===== */}
       {loading ? (
@@ -540,7 +561,13 @@ const OrderControlTower = () => {
           <Spinner animation="border" />
         </div>
       ) : orders.length === 0 ? (
-        <p className="text-center text-muted py-5">ยังไม่มี Order (กด New Order เพื่อเพิ่ม)</p>
+        <div className="empty-state">
+          <i className="bi bi-inbox" aria-hidden="true" />
+          <div>ยังไม่มีออเดอร์ในระบบ</div>
+          <Button className="btn-mse mt-3" onClick={() => setFormOrder(null)}>
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
+          </Button>
+        </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -548,8 +575,8 @@ const OrderControlTower = () => {
               items={filteredOrders.map((o) => o.batch)}
               strategy={verticalListSortingStrategy}
             >
-              <Table hover size="sm" className="align-middle">
-                <thead style={{ backgroundColor: '#e8eaf6' }}>
+              <Table hover size="sm" className="align-middle bg-white">
+                <thead>
                   <tr>
                     <th style={{ width: 40 }}></th>
                     <th style={{ width: 90 }}>Action</th>
@@ -615,37 +642,8 @@ const OrderControlTower = () => {
         }}
       />
 
-      {/* ===== confirm modal ===== */}
-      <Modal show={!!confirm} onHide={() => setConfirm(null)} centered>
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: '1.1rem' }}>{confirm?.title}</Modal.Title>
-        </Modal.Header>
-        <Modal.Body style={{ whiteSpace: 'pre-line' }}>{confirm?.body}</Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setConfirm(null)}>
-            ยกเลิก
-          </Button>
-          <Button
-            variant={confirm?.variant || 'primary'}
-            onClick={() => {
-              const action = confirm?.onConfirm;
-              setConfirm(null);
-              if (action) action();
-            }}
-          >
-            {confirm?.confirmLabel || 'ยืนยัน'}
-          </Button>
-        </Modal.Footer>
-      </Modal>
-
-      {/* ===== toast ===== */}
-      <ToastContainer position="bottom-end" className="p-3" style={{ position: 'fixed', zIndex: 2000 }}>
-        <Toast show={!!toast} onClose={() => setToast(null)} delay={3500} autohide bg={toast?.variant}>
-          <Toast.Body className={toast?.variant === 'warning' ? '' : 'text-white'}>
-            {toast?.message}
-          </Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />
+      <ToastHost toast={toast} onClose={hideToast} />
     </Container>
   );
 };

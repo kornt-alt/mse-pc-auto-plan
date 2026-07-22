@@ -13,8 +13,8 @@
     "@testing-library/user-event": "^13.5.0",
     "axios": "^1.9.0",
     "bootstrap": "^5.3.8",
+    "bootstrap-icons": "^1.13.1",
     "file-saver": "^2.0.5",
-    "lucide-react": "^0.519.0",
     "prop-types": "^15.8.1",
     "react": "^19.1.0",
     "react-bootstrap": "^2.10.10",
@@ -36,6 +36,14 @@
       "react-app",
       "react-app/jest"
     ]
+  },
+  "//jest": "react-router v7 ประกาศทางเข้าไว้ใน exports อย่างเดียว (main ชี้ไฟล์ที่ไม่มีจริง) — webpack อ่านได้ แต่ jest ของ CRA5 ยังอ่านไม่เป็น ต้องชี้ path ตรง ๆ ให้",
+  "jest": {
+    "moduleNameMapper": {
+      "^react-router-dom$": "<rootDir>/node_modules/react-router-dom/dist/index.js",
+      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+      "^react-router$": "<rootDir>/node_modules/react-router/dist/development/index.js"
+    }
   },
   "browserslist": {
     "production": [

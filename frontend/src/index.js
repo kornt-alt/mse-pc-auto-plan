@@ -1,10 +1,13 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+// ลำดับสำคัญ: bootstrap ก่อน แล้วค่อย theme ของเรา (ไม่งั้น bootstrap ชนะเมื่อ specificity เท่ากัน)
 import 'bootstrap/dist/css/bootstrap.min.css';
+import 'bootstrap-icons/font/bootstrap-icons.css'; // โหลดจาก node_modules ไม่ใช่ CDN (เครือข่ายโรงงานออกเน็ตไม่ได้)
+import './index.css';
+import './theme/theme.css';
 
 import 'bootstrap/dist/js/bootstrap.bundle.min.js';
 

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, Table, Button, Spinner, Alert } from 'react-bootstrap';
-import { Info } from 'lucide-react';
 import { apiCall } from '../../api/client';
 
 // Dialog รายละเอียดการบันทึกราย step (จาก GET /orders/{batch}/tracking/{step})
@@ -23,7 +22,7 @@ const StepDetailDialog = ({ show, onHide, batchId, stepName }) => {
     <Modal show={show} onHide={onHide} size="lg">
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
-          🔍 รายละเอียด: {stepName} (Batch: {batchId})
+          รายละเอียด: {stepName} (Batch: {batchId})
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -162,7 +161,7 @@ const TrackingDialog = ({ show, onHide, batchId }) => {
                           className="p-0"
                           onClick={() => setDetailStep(s.step_name)}
                         >
-                          <Info size={16} />
+                          <i className="bi bi-info-circle" aria-hidden="true" />
                         </Button>
                       </td>
                     </tr>

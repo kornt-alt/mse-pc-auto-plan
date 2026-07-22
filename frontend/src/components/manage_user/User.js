@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Table, Button, Modal, Form, Alert, Badge, Spinner } from 'react-bootstrap';
-import { UserPlus, Pencil } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import PageHeader from '../shared/PageHeader';
 
 const ROLES = ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'];
 
@@ -69,12 +69,16 @@ const User = () => {
 
   return (
     <Container className="py-3">
-      <div className="d-flex justify-content-between align-items-center mb-3">
-        <h4 className="text-mse mb-0">จัดการผู้ใช้งาน</h4>
-        <Button className="btn-mse" onClick={openCreate}>
-          <UserPlus size={16} className="me-1" /> เพิ่มผู้ใช้
-        </Button>
-      </div>
+      <PageHeader
+        icon="bi-people"
+        title="จัดการผู้ใช้งาน"
+        subtitle="เพิ่ม แก้ไข และระงับสิทธิ์การเข้าใช้ระบบ"
+        actions={
+          <Button className="btn-mse" onClick={openCreate}>
+            <i className="bi bi-person-plus me-1" aria-hidden="true" /> เพิ่มผู้ใช้
+          </Button>
+        }
+      />
 
       {error && <Alert variant="danger">{error}</Alert>}
 
@@ -114,11 +118,11 @@ const User = () => {
                   </Badge>
                 </td>
                 <td>
-                  {u.is_active ? <Badge bg="success">Active</Badge> : <Badge bg="secondary">ระงับ</Badge>}
+                  {u.is_active ? <span className="chip chip-ok">ใช้งานอยู่</span> : <span className="chip chip-muted">ระงับ</span>}
                 </td>
                 <td className="text-center">
-                  <Button variant="outline-primary" size="sm" onClick={() => openEdit(u)}>
-                    <Pencil size={14} />
+                  <Button variant="outline-primary" size="sm" title="แก้ไข" aria-label={`แก้ไขผู้ใช้ ${u.username}`} onClick={() => openEdit(u)}>
+                    <i className="bi bi-pencil-square" aria-hidden="true" />
                   </Button>
                 </td>
               </tr>

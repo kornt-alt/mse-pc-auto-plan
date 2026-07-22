@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, Form, Button, Row, Col, Spinner, Alert } from 'react-bootstrap';
-import { Search } from 'lucide-react';
 import { apiCall } from '../../api/client';
 
 // Dialog เพิ่ม/แก้ไข Order — โครง 3 โซนตามหน้าจอเดิม (order_management_screen.dart)
@@ -185,7 +184,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                     disabled={loadingInfo}
                     title="โหลดข้อมูล Routing ของ Model"
                   >
-                    {loadingInfo ? <Spinner animation="border" size="sm" /> : <Search size={16} />}
+                    {loadingInfo ? <Spinner animation="border" size="sm" /> : <i className="bi bi-search" aria-hidden="true" />}
                   </Button>
                 </div>
                 {validated && !form.model?.trim() && (
@@ -293,7 +292,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
             </p>
           ) : modelSteps.length === 0 ? (
             <Alert variant="warning" className="py-2">
-              กำลังโหลดข้อมูล หรือ กรุณากด 🔍 เพื่อโหลดข้อมูล Model ก่อน
+              กำลังโหลดข้อมูล หรือ กดปุ่มค้นหาเพื่อโหลดข้อมูล Model ก่อน
             </Alert>
           ) : (
             <Row className="g-3">
