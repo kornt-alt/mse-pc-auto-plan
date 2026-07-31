@@ -36,7 +36,13 @@ const SettingsDialog = ({ show, onHide, onSaved, onError }) => {
   }, [onError, onHide]);
 
   useEffect(() => {
-    if (show) load();
+    if (show) {
+      load();
+    } else {
+      // เคลียร์ตอนปิด กันค่าเก่าแว้บตอนเปิดใหม่ก่อน load() จะเซ็ตค่าใหม่
+      setForm(null);
+      setLoading(false);
+    }
   }, [show, load]);
 
   const setField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));

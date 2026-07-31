@@ -266,6 +266,11 @@ const OrderControlTower = () => {
 
   // ต้อง stable — ถ้าเป็น inline function จะทำให้ useEffect ใน OrderFormDialog รีเซ็ตฟอร์มทุก re-render
   const showErrorToast = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
+  // stable onHide สำหรับ dialog ที่มี useEffect init ผูกกับ prop เหล่านี้ (SettingsDialog.load, DateEditDialog reset)
+  // inline function = identity ใหม่ทุก re-render → รีเซ็ต/refetch ฟอร์มกลางคัน
+  const closeSettings = useCallback(() => setShowSettings(false), []);
+  const closeDateEdit = useCallback(() => setDateEdit(null), []);
+  const onSettingsSaved = useCallback((msg) => showToast(msg), [showToast]);
 
   const fetchTimestamps = useCallback(async () => {
     try {
@@ -351,7 +356,7 @@ const OrderControlTower = () => {
   };
 
   // ===== date edit (Material / Confirm / Release) =====
-  const submitDateEdit = async (value) => {
+  const submitDateEdit = useCallback(async (value) => {
     if (!dateEdit) return;
     const { kind, order } = dateEdit;
     const meta = DATE_EDIT_META[kind];
@@ -372,7 +377,7 @@ const OrderControlTower = () => {
     } catch (err) {
       showToast(err.message, 'danger');
     }
-  };
+  }, [dateEdit, fetchTimestamps, showToast]);
 
   // ===== simulation mode =====
   const enterSimMode = () => {
@@ -401,9 +406,16 @@ const OrderControlTower = () => {
       for (const r of decoded.report ?? []) {
         if (r.FinishDate && !DROP.has(String(r.FinishDate))) finishMap[r.Batch] = r.FinishDate;
       }
-      setOrders((prev) => prev.map((o) => (
-        finishMap[o.batch] != null ? { ...o, fg_date: finishMap[o.batch], _simulated: true } : o
-      )));
+      setOrders((prev) => prev.map((o) => {
+        // ค่า FG จริงก่อนถูกจำลอง — เก็บไว้ที่ _origFg ตั้งแต่รอบแรก เพื่อคืนค่าได้เมื่อ batch หลุดจากผลรอบใหม่
+        const origFg = o._simulated ? o._origFg : o.fg_date;
+        if (finishMap[o.batch] != null) {
+          return { ...o, fg_date: finishMap[o.batch], _simulated: true, _origFg: origFg };
+        }
+        // ไม่อยู่ในผลรอบนี้ (เช่นกลายเป็น NO_CAPACITY) → คืน FG จริง + ปลดธงจำลอง กันค่ารอบก่อนค้าง
+        if (o._simulated) return { ...o, fg_date: origFg, _simulated: false, _origFg: undefined };
+        return o;
+      }));
       showToast('จำลองเสร็จ — ดูคอลัมน์ FG (สีฟ้า) แล้วกด "ยืนยัน & ใช้จริง" ถ้าพอใจ', 'info');
     } catch (err) {
       planErrorToast(err);
@@ -416,6 +428,9 @@ const OrderControlTower = () => {
     const updates = Object.entries(simPriorities).map(([batch, priority]) => ({ batch, priority }));
     setIsPlanning(true);
     try {
+      // เก็บลำดับ "ก่อน apply" ไว้ให้ปุ่มย้อนกลับ — ต้อง snapshot ก่อน reorder จะ persist ลง DB
+      // (baselineRef ยังเป็นลำดับตอนโหลด/ก่อนเข้าโหมดจำลอง เพราะ drag ในโหมดจำลองไม่แตะ baseline)
+      setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? [])));
       if (updates.length > 0) {
         await apiCall('/orders/reorder', { method: 'PUT', body: JSON.stringify({ updates }) });
       }
@@ -423,7 +438,7 @@ const OrderControlTower = () => {
       setSimPriorities({});
       baselineRef.current = null;
       await fetchOrders();
-      await runReplan(true); // แผนจริง + ไปหน้า Planning
+      await runReplan(false); // แผนจริง + ไปหน้า Planning; false = ไม่ทับ previousOrderList ที่เพิ่งเก็บ
     } catch (err) {
       showToast(err.message, 'danger');
       setIsPlanning(false);
@@ -853,14 +868,14 @@ const OrderControlTower = () => {
         icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}
         batch={dateEdit ? dateEdit.order.batch : ''}
         currentValue={dateEdit ? dateEdit.order[DATE_EDIT_META[dateEdit.kind].bodyKey] : ''}
-        onHide={() => setDateEdit(null)}
+        onHide={closeDateEdit}
         onSubmit={submitDateEdit}
       />
 
       <SettingsDialog
         show={showSettings}
-        onHide={() => setShowSettings(false)}
-        onSaved={(msg) => showToast(msg)}
+        onHide={closeSettings}
+        onSaved={onSettingsSaved}
         onError={showErrorToast}
       />
 

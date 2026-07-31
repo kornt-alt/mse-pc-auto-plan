@@ -48,14 +48,17 @@ router.put('/settings', verifyToken, writeRoles, async (req, res) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : def;
     };
+    // clamp: ค่าเหล่านี้ขับทุกแผนถัดไป — ค่าติดลบ/เกินช่วงทำแผนเพี้ยน จึง clamp ให้อยู่ในช่วงที่สมเหตุผล
+    const nonNeg = (v, def) => Math.max(0, Math.trunc(num(v, def)));
     const p = {
-      pack_window_days: Math.trunc(num(b.pack_window_days, DEFAULT_SETTINGS.pack_window_days)),
+      pack_window_days: nonNeg(b.pack_window_days, DEFAULT_SETTINGS.pack_window_days),
       enable_heat_deep_plan: b.enable_heat_deep_plan ? 1 : 0,
       enable_stickiness: b.enable_stickiness ? 1 : 0,
-      min_fragment_time: Math.trunc(num(b.min_fragment_time, DEFAULT_SETTINGS.min_fragment_time)),
-      switch_penalty_minutes: Math.trunc(num(b.switch_penalty_minutes, DEFAULT_SETTINGS.switch_penalty_minutes)),
-      minor_setup_time: Math.trunc(num(b.minor_setup_time, DEFAULT_SETTINGS.minor_setup_time)),
-      max_overlap_percentage: num(b.max_overlap_percentage, DEFAULT_SETTINGS.max_overlap_percentage),
+      min_fragment_time: nonNeg(b.min_fragment_time, DEFAULT_SETTINGS.min_fragment_time),
+      switch_penalty_minutes: nonNeg(b.switch_penalty_minutes, DEFAULT_SETTINGS.switch_penalty_minutes),
+      minor_setup_time: nonNeg(b.minor_setup_time, DEFAULT_SETTINGS.minor_setup_time),
+      // เปอร์เซ็นต์ overlap ต้องอยู่ 0–100
+      max_overlap_percentage: Math.min(100, Math.max(0, num(b.max_overlap_percentage, DEFAULT_SETTINGS.max_overlap_percentage))),
     };
 
     const affected = await execute(

@@ -13,6 +13,19 @@ const router = express.Router();
 const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
 const writeRoles = requireRole('ADMIN', 'PLANNER');
 
+// วันที่ทั้งระบบเป็น string 'YYYY-MM-DD' (zero-padded) เทียบ lexicographic — รับค่าว่าง/null (=ล้างค่า) ได้
+// คืน { ok, value }: value เป็น string ที่ผ่านแล้ว หรือ null ถ้าเว้นว่าง; ok=false ถ้ารูปแบบผิด
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const parseDateInput = (raw) => {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return { ok: true, value: null };
+  const s = String(raw).trim();
+  if (!ISO_DATE_RE.test(s)) return { ok: false, value: null };
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return { ok: false, value: null };
+  return { ok: true, value: s };
+};
+const BAD_DATE_MSG = 'รูปแบบวันที่ไม่ถูกต้อง ต้องเป็น YYYY-MM-DD';
+
 // ========== GET /api/orders — list + enrichment ==========
 router.get('/', verifyToken, readRoles, async (req, res) => {
   try {
@@ -480,7 +493,9 @@ router.put('/:batchId/close', verifyToken, writeRoles, async (req, res) => {
 router.put('/:batch/material-date', verifyToken, writeRoles, async (req, res) => {
   try {
     const { batch } = req.params;
-    const materialDate = (req.body && req.body.material_ready_date) ? String(req.body.material_ready_date) : null;
+    const parsed = parseDateInput(req.body && req.body.material_ready_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const materialDate = parsed.value;
     const rows = await query('SELECT id, start_date FROM orders WHERE batch = @batch', { batch });
     if (rows.length === 0) {
       return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
@@ -502,7 +517,9 @@ router.put('/:batch/material-date', verifyToken, writeRoles, async (req, res) =>
 router.put('/:batch/confirm-date', verifyToken, writeRoles, async (req, res) => {
   try {
     const { batch } = req.params;
-    const confirmDate = (req.body && req.body.confirm_reply_date) ? String(req.body.confirm_reply_date) : null;
+    const parsed = parseDateInput(req.body && req.body.confirm_reply_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const confirmDate = parsed.value;
     const result = await execute(
       'UPDATE orders SET confirm_reply_date = @c WHERE batch = @batch',
       { c: confirmDate, batch },
@@ -522,7 +539,9 @@ router.put('/:batch/confirm-date', verifyToken, writeRoles, async (req, res) => 
 router.put('/:batch/release-date', verifyToken, writeRoles, async (req, res) => {
   try {
     const { batch } = req.params;
-    const releaseDate = (req.body && req.body.release_date) ? String(req.body.release_date) : null;
+    const parsed = parseDateInput(req.body && req.body.release_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const releaseDate = parsed.value;
     const result = await execute(
       'UPDATE orders SET release_date = @r WHERE batch = @batch',
       { r: releaseDate, batch },

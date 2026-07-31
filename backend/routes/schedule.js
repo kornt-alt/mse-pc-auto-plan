@@ -19,6 +19,9 @@ const writeRoles = requireRole('ADMIN', 'PLANNER');
 
 const LOCK_MESSAGE = 'มีการวางแผนกำลังทำงานอยู่ กรุณารอสักครู่แล้วลองใหม่';
 
+// รับได้ทั้ง boolean true, 1, 'true', 'True' — นอกนั้นถือเป็น false (fail closed = run จริง)
+const truthy = (v) => v === true || v === 1 || (typeof v === 'string' && v.trim().toLowerCase() === 'true');
+
 // ========== POST /api/schedule/run — Initial Plan ==========
 router.post('/run', verifyToken, writeRoles, async (req, res) => {
   if (!planLock.tryAcquire()) {
@@ -26,8 +29,10 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
   }
   try {
     // Simulation: รันแบบไม่บันทึกอะไร (ไม่แตะ schedule_results / orders / lastPlan) — แค่คืนแผนให้ดู
-    const isSimulation = req.body && req.body.is_simulation === true;
-    const priorityOverrides = (req.body && req.body.priority_overrides) || {};
+    // coerce เป็น boolean กัน "true"/1 หลุดเป็น run จริงโดยไม่ตั้งใจ
+    const isSimulation = truthy(req.body && req.body.is_simulation);
+    // priority_overrides ใช้เฉพาะโหมด simulation — run จริงต้องยึด orders.priority ที่เก็บไว้เท่านั้น
+    const priorityOverrides = isSimulation ? (req.body && req.body.priority_overrides) || {} : {};
 
     const result = await schedulerService.run(false, { isSimulation, priorityOverrides });
     const totalPlanMap = result.total_plan_map || {};
@@ -63,8 +68,10 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
   }
   try {
     // Simulation: รันแบบไม่บันทึก + ไม่ markEdit (ของจริงไม่ถูกแตะ) — แค่คืนแผนจำลอง
-    const isSimulation = req.body && req.body.is_simulation === true;
-    const priorityOverrides = (req.body && req.body.priority_overrides) || {};
+    // coerce เป็น boolean กัน "true"/1 หลุดเป็น run จริงโดยไม่ตั้งใจ
+    const isSimulation = truthy(req.body && req.body.is_simulation);
+    // priority_overrides ใช้เฉพาะโหมด simulation — replan จริงต้องยึด orders.priority ที่เก็บไว้เท่านั้น
+    const priorityOverrides = isSimulation ? (req.body && req.body.priority_overrides) || {} : {};
 
     if (!isSimulation) timestamps.markEdit(); // = api.py L379 (GLOBAL_LAST_EDIT_TIME ก่อนรัน)
 

@@ -149,15 +149,15 @@ router.post('/alert/missing-routing', verifyToken, sendRoles, async (req, res) =
         ? `อ้างอิง Batch ID: ${String(batch_id).trim()}`
         : 'แจ้งจากหน้า Routing Config — ไม่ระบุ Batch';
     const subject = `[Action Required] แจ้งเตือน: ยังไม่มี Routing Master สำหรับ Model ${model_name}`;
+    // ลิงก์เข้าระบบมาจาก APP_URL ใน .env — ถ้าไม่ได้ตั้งค่า ก็ตัดบรรทัดนี้ทิ้ง (ไม่ฝัง URL ตายตัว)
+    const checkLine = env.APP_URL ? `\nตรวจสอบที่ : ${env.APP_URL}\n` : '';
     const text = `สวัสดีครับ Engineer / ผู้รับผิดชอบ,
 
 ระบบ MSE AUTO PLAN ตรวจพบว่า Model: ${model_name} (${batchRef})
 ยังไม่มีข้อมูล Routing & Machine Config ในระบบ ทำให้ไม่สามารถรันแผนการผลิตได้ครับ
 
 รบกวนดำเนินการเพิ่มข้อมูล Master data ให้ด้วยครับ
-
-ตรวจสอบที่ : https://www.google.com/
-
+${checkLine}
 ขอบคุณครับ
 Auto-Notification from MES/APS System
 Korn T.`;

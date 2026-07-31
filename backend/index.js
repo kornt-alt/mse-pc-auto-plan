@@ -4,10 +4,17 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { getPool } = require('./db/pool');
+const { activityLogger } = require('./middleware/activityLog');
 
 const app = express();
+// หลัง IIS reverse proxy (localhost) — เชื่อ X-Forwarded-For เพื่อให้ req.ip เป็น IP ผู้ใช้จริงใน activity_log
+// ถ้า IIS ไม่ส่ง XFF มา req.ip จะเป็น 127.0.0.1/::1 (ดูหมายเหตุใน CHANGELOG)
+app.set('trust proxy', true);
 app.use(express.json());
 app.use(cors());
+
+// Audit log — บันทึกทุก mutation (POST/PUT/DELETE/PATCH) ใต้ /api พร้อมว่าใครทำ (ผ่าน res.on('finish'))
+app.use(activityLogger);
 
 // ========== STATIC FILES ==========
 app.use('/MSE-PC-AUTO-PLAN', express.static(path.join(__dirname, 'build')));
