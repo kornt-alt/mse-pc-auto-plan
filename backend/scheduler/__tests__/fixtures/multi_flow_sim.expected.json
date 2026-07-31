@@ -103,6 +103,10 @@
  ],
  "total_plan_map": {
   "2600001002": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600001002",
    "qty": 400.0,
    "Model": "MODEL-A",
@@ -126,6 +130,10 @@
    "_chosenFlow": 1
   },
   "2600001001": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600001001",
    "qty": 300.0,
    "Model": "MODEL-MULTI",

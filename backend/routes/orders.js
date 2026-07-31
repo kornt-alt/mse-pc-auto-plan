@@ -6,6 +6,7 @@ const { query, execute, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const timestamps = require('../state/timestamps');
 const { formatThaiTimestamp, dateOnly } = require('../utils/dates');
+const { computeProgramNote } = require('../scheduler/planBuilder');
 
 const router = express.Router();
 
@@ -470,6 +471,69 @@ router.put('/:batchId/close', verifyToken, writeRoles, async (req, res) => {
     res.json({ message: `ปิดจ๊อบ ${batchId} เรียบร้อยแล้ว (สถานะ: COMPLETED)` });
   } catch (err) {
     console.error('Error closing order:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/material-date — Mat'l Receive: วันวัตถุดิบเข้า ==========
+// เขียน material_ready_date + คำนวณ program_notes ใหม่เทียบ start_date ปัจจุบัน
+router.put('/:batch/material-date', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const { batch } = req.params;
+    const materialDate = (req.body && req.body.material_ready_date) ? String(req.body.material_ready_date) : null;
+    const rows = await query('SELECT id, start_date FROM orders WHERE batch = @batch', { batch });
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+    }
+    const programNotes = computeProgramNote(rows[0].start_date, materialDate);
+    await execute(
+      'UPDATE orders SET material_ready_date = @m, program_notes = @p WHERE id = @id',
+      { m: materialDate, p: programNotes, id: rows[0].id },
+    );
+    timestamps.markEdit();
+    res.json({ batch, material_ready_date: materialDate, program_notes: programNotes });
+  } catch (err) {
+    console.error('Error updating material date:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/confirm-date — Confirm/VIP: วัน confirm ส่งมอบ ==========
+router.put('/:batch/confirm-date', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const { batch } = req.params;
+    const confirmDate = (req.body && req.body.confirm_reply_date) ? String(req.body.confirm_reply_date) : null;
+    const result = await execute(
+      'UPDATE orders SET confirm_reply_date = @c WHERE batch = @batch',
+      { c: confirmDate, batch },
+    );
+    if (!result) {
+      return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+    }
+    timestamps.markEdit();
+    res.json({ batch, confirm_reply_date: confirmDate });
+  } catch (err) {
+    console.error('Error updating confirm date:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/release-date — วัน release งาน ==========
+router.put('/:batch/release-date', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const { batch } = req.params;
+    const releaseDate = (req.body && req.body.release_date) ? String(req.body.release_date) : null;
+    const result = await execute(
+      'UPDATE orders SET release_date = @r WHERE batch = @batch',
+      { r: releaseDate, batch },
+    );
+    if (!result) {
+      return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+    }
+    timestamps.markEdit();
+    res.json({ batch, release_date: releaseDate });
+  } catch (err) {
+    console.error('Error updating release date:', err);
     res.status(500).json({ message: String(err.message || err) });
   }
 });

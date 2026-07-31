@@ -53,6 +53,10 @@
  ],
  "total_plan_map": {
   "2600000601": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000601",
    "qty": 300.0,
    "Model": "MODEL-JIG",
@@ -76,6 +80,10 @@
    "_chosenFlow": 1
   },
   "2600000602": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000602",
    "qty": 400.0,
    "Model": "MODEL-JIG2",

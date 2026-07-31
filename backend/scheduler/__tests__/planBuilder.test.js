@@ -85,3 +85,96 @@ test('toScheduleResultRows: parse qty จาก "NN pcs" / setup → qty_plan 0'
   assert.equal(rows[1].qty_plan, 0);
   assert.equal(rows[1].is_setup, true);
 });
+
+// ===== ฟีเจอร์ Mat'l / Confirm / Simulation (buildRawOrders) =====
+
+const orderRow = (over = {}) => ({
+  batch: 'B1', model: 'M1', due_date: '2026-09-01', priority: 5, qty: 100,
+  plan_mode: 'NEW', wip_flow_index: null, wip_start_step_index: null,
+  wip_finish_date: null, wip_machine: null, planning_mode: 'forward',
+  release_date: '2026-07-20', material_ready_date: null, confirm_reply_date: null,
+  ...over,
+});
+
+test('buildRawOrders: effectiveReadyDate = max(release, material) แบบ string', () => {
+  const [o] = pb.buildRawOrders([orderRow({ release_date: '2026-07-20', material_ready_date: '2026-07-25' })], {}, '2026-07-10', false);
+  assert.equal(o.effectiveReadyDate, '2026-07-25'); // material ช้ากว่า → ชนะ
+  const [o2] = pb.buildRawOrders([orderRow({ release_date: '2026-07-28', material_ready_date: '2026-07-25' })], {}, '2026-07-10', false);
+  assert.equal(o2.effectiveReadyDate, '2026-07-28'); // release ช้ากว่า → ชนะ
+});
+
+test('buildRawOrders: material ว่าง/none → ใช้ today แทนในการหา max', () => {
+  const [o] = pb.buildRawOrders([orderRow({ release_date: '2026-07-15', material_ready_date: null })], {}, '2026-07-22', false);
+  assert.equal(o.effectiveReadyDate, '2026-07-22'); // max(release 7/15, today 7/22) = today
+  const [o2] = pb.buildRawOrders([orderRow({ release_date: '2026-07-15', material_ready_date: 'None' })], {}, '2026-07-22', false);
+  assert.equal(o2.effectiveReadyDate, '2026-07-22');
+});
+
+test('buildRawOrders: confirm_reply_date normalize (none/null/wait/ว่าง → "")', () => {
+  for (const bad of [null, 'None', 'NULL', 'wait', '']) {
+    const [o] = pb.buildRawOrders([orderRow({ confirm_reply_date: bad })], {}, '2026-07-10', false);
+    assert.equal(o.confirm_reply_date, '', `confirm=${bad}`);
+  }
+  const [ok] = pb.buildRawOrders([orderRow({ confirm_reply_date: '2026-08-05' })], {}, '2026-07-10', false);
+  assert.equal(ok.confirm_reply_date, '2026-08-05');
+});
+
+test('buildRawOrders: has_actuals จาก startedBatchSet', () => {
+  const started = new Set(['B1']);
+  const [yes] = pb.buildRawOrders([orderRow({ batch: 'B1' })], {}, '2026-07-10', false, started);
+  const [no] = pb.buildRawOrders([orderRow({ batch: 'B2' })], {}, '2026-07-10', false, started);
+  assert.equal(yes.has_actuals, true);
+  assert.equal(no.has_actuals, false);
+});
+
+test('buildRawOrders: priorityOverrides สวมรอย priority (simulation)', () => {
+  const [ov] = pb.buildRawOrders([orderRow({ batch: 'B1', priority: 5 })], {}, '2026-07-10', false, new Set(), { B1: 1 });
+  assert.equal(ov.priority, 1); // override ชนะ
+  const [plain] = pb.buildRawOrders([orderRow({ batch: 'B1', priority: 5 })], {}, '2026-07-10', false, new Set(), {});
+  assert.equal(plain.priority, 5); // ไม่มี override → ของเดิม
+  const [zero] = pb.buildRawOrders([orderRow({ batch: 'B1', priority: 5 })], {}, '2026-07-10', false, new Set(), { B1: 0 });
+  assert.equal(zero.priority, 0); // override เป็น 0 ต้องไม่ถูกมองข้าม
+});
+
+test('computeProgramNote: start < material → pull in / >= → enough / material ว่าง → enough / ไม่มี start → N/A', () => {
+  assert.equal(pb.computeProgramNote('2026-07-10', '2026-07-15'), 'Please pull in material');
+  assert.equal(pb.computeProgramNote('2026-07-20', '2026-07-15'), 'Material enough');
+  assert.equal(pb.computeProgramNote('2026-07-20', '2026-07-20'), 'Material enough');
+  assert.equal(pb.computeProgramNote('2026-07-20', null), 'Material enough'); // material ว่าง → ใช้ start
+  assert.equal(pb.computeProgramNote('2026-07-20', 'NONE'), 'Material enough');
+  assert.equal(pb.computeProgramNote(null, '2026-07-20'), 'N/A (Missing Date)');
+  assert.equal(pb.computeProgramNote('16/07/2026', '2026-07-20'), 'Please pull in material'); // d/m/Y แปลงก่อนเทียบ
+});
+
+test('buildOrderDateUpdates: แตก sub-batch, start=min / fg=max, program_notes ต่อ target', () => {
+  const statusMap = new Map([
+    ['PACK-1', { original_batches: [{ batch: 'B1' }, { batch: 'B2' }] }],
+    ['SOLO', { original_batches: [] }],
+  ]);
+  const mainPlan = [
+    { date: '2026-07-20', batch: 'PACK-1' },
+    { date: '2026-07-22', batch: 'PACK-1' },
+    { date: 'NO_CAPACITY', batch: 'PACK-1' }, // sentinel ข้าม
+    { date: '2026-07-25', batch: 'SOLO' },
+  ];
+  const safeOrders = [{ Batch: 'PACK-1' }, { Batch: 'SOLO' }];
+  const orderState = {
+    B1: { material_ready_date: '2026-07-18' }, // start 7/20 >= mat 7/18 → enough
+    B2: { material_ready_date: '2026-07-28' }, // start 7/20 < mat 7/28 → pull in
+    SOLO: { material_ready_date: null },        // ว่าง → ใช้ start → enough
+  };
+  const updates = pb.buildOrderDateUpdates(mainPlan, statusMap, safeOrders, orderState);
+  const byBatch = Object.fromEntries(updates.map((u) => [u.batch, u]));
+  assert.equal(byBatch.B1.startDate, '2026-07-20');
+  assert.equal(byBatch.B1.fgDate, '2026-07-22');   // max ข้าม sentinel
+  assert.equal(byBatch.B1.programNotes, 'Material enough');
+  assert.equal(byBatch.B2.programNotes, 'Please pull in material');
+  assert.equal(byBatch.SOLO.startDate, '2026-07-25');
+  assert.equal(byBatch.SOLO.programNotes, 'Material enough');
+});
+
+test('buildOrderDateUpdates: batch ที่ไม่อยู่ใน safeOrders ถูกข้าม', () => {
+  const statusMap = new Map([['X', { original_batches: [] }]]);
+  const updates = pb.buildOrderDateUpdates([{ date: '2026-07-20', batch: 'X' }], statusMap, [], {});
+  assert.equal(updates.length, 0);
+});

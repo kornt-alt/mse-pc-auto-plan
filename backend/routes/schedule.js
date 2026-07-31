@@ -25,21 +25,27 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
     return res.status(409).json({ message: LOCK_MESSAGE });
   }
   try {
-    const result = await schedulerService.run(false);
+    // Simulation: รันแบบไม่บันทึกอะไร (ไม่แตะ schedule_results / orders / lastPlan) — แค่คืนแผนให้ดู
+    const isSimulation = req.body && req.body.is_simulation === true;
+    const priorityOverrides = (req.body && req.body.priority_overrides) || {};
+
+    const result = await schedulerService.run(false, { isSimulation, priorityOverrides });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L333-347: ล้างป้าย ❓ เฉพาะ order ใหม่ -> ประทับตัวที่หา routing ไม่เจอ -> ปลดป้าย New
-    await transaction(async (t) => {
-      await t.query('UPDATE orders SET is_missing_routing = 0 WHERE is_new = 1');
-      for (const [batchId, planInfo] of Object.entries(totalPlanMap)) {
-        if (planInfo.is_missing_routing === true) {
-          await t.query('UPDATE orders SET is_missing_routing = 1 WHERE batch = @batch', {
-            batch: batchId,
-          });
+    if (!isSimulation) {
+      await transaction(async (t) => {
+        await t.query('UPDATE orders SET is_missing_routing = 0 WHERE is_new = 1');
+        for (const [batchId, planInfo] of Object.entries(totalPlanMap)) {
+          if (planInfo.is_missing_routing === true) {
+            await t.query('UPDATE orders SET is_missing_routing = 1 WHERE batch = @batch', {
+              batch: batchId,
+            });
+          }
         }
-      }
-      await t.query('UPDATE orders SET is_new = 0 WHERE is_new = 1');
-    });
+        await t.query('UPDATE orders SET is_new = 0 WHERE is_new = 1');
+      });
+    }
 
     res.json(result);
   } catch (err) {
@@ -56,34 +62,40 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
     return res.status(409).json({ message: LOCK_MESSAGE });
   }
   try {
-    timestamps.markEdit(); // = api.py L379 (GLOBAL_LAST_EDIT_TIME ก่อนรัน)
+    // Simulation: รันแบบไม่บันทึก + ไม่ markEdit (ของจริงไม่ถูกแตะ) — แค่คืนแผนจำลอง
+    const isSimulation = req.body && req.body.is_simulation === true;
+    const priorityOverrides = (req.body && req.body.priority_overrides) || {};
 
-    const result = await schedulerService.run(true);
+    if (!isSimulation) timestamps.markEdit(); // = api.py L379 (GLOBAL_LAST_EDIT_TIME ก่อนรัน)
+
+    const result = await schedulerService.run(true, { isSimulation, priorityOverrides });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L393-426: ล้างป้าย ❓ ทุก order (ไม่ลบ) -> ประทับใหม่ (PACK แตก original_batches) -> ปลดป้าย New
-    await transaction(async (t) => {
-      await t.query('UPDATE orders SET is_missing_routing = 0 WHERE is_deleted = 0');
-      for (const [packedBatchId, planInfo] of Object.entries(totalPlanMap)) {
-        if (planInfo.is_missing_routing !== true) continue;
-        const originalBatches = planInfo.original_batches || [];
-        if (originalBatches.length === 0) {
-          await t.query('UPDATE orders SET is_missing_routing = 1 WHERE batch = @batch', {
-            batch: packedBatchId,
-          });
-        } else {
-          for (const orig of originalBatches) {
-            const realBatchId = orig && orig.batch;
-            if (realBatchId) {
-              await t.query('UPDATE orders SET is_missing_routing = 1 WHERE batch = @batch', {
-                batch: realBatchId,
-              });
+    if (!isSimulation) {
+      await transaction(async (t) => {
+        await t.query('UPDATE orders SET is_missing_routing = 0 WHERE is_deleted = 0');
+        for (const [packedBatchId, planInfo] of Object.entries(totalPlanMap)) {
+          if (planInfo.is_missing_routing !== true) continue;
+          const originalBatches = planInfo.original_batches || [];
+          if (originalBatches.length === 0) {
+            await t.query('UPDATE orders SET is_missing_routing = 1 WHERE batch = @batch', {
+              batch: packedBatchId,
+            });
+          } else {
+            for (const orig of originalBatches) {
+              const realBatchId = orig && orig.batch;
+              if (realBatchId) {
+                await t.query('UPDATE orders SET is_missing_routing = 1 WHERE batch = @batch', {
+                  batch: realBatchId,
+                });
+              }
             }
           }
         }
-      }
-      await t.query('UPDATE orders SET is_new = 0 WHERE is_new = 1');
-    });
+        await t.query('UPDATE orders SET is_new = 0 WHERE is_new = 1');
+      });
+    }
 
     res.json(result);
   } catch (err) {

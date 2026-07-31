@@ -92,8 +92,9 @@ const assertDivisibleCt = (ct, model, step, machine) => {
 };
 
 class SchedulerEngine {
-  // __init__ (L261-284)
-  constructor(calendar, routing, fixedMachine, cycleTime, setupConfig) {
+  // __init__ (L390-411) — ฟีเจอร์ Mat'l/Confirm: รับ settings object (จาก system_settings)
+  // tunables มาจาก DB แทน constant (fallback เป็น constants ถ้าไม่มี ค่า default ต้องให้ผลเท่าเดิม)
+  constructor(calendar, routing, fixedMachine, cycleTime, setupConfig, settings = null) {
     this.originalCalendar = structuredClone(calendar);
     this.workingCalendar = structuredClone(calendar);
     this.routing = routing;
@@ -105,11 +106,13 @@ class SchedulerEngine {
     this.actualMachines = {};
     this.closedStatuses = {};
 
-    this.ENABLE_HEAT_DEEP_PLAN = ENABLE_HEAT_DEEP_PLAN;
-    this.ENABLE_STICKINESS = ENABLE_STICKINESS;
-    this.MIN_FRAGMENT_TIME = MIN_FRAGMENT_TIME;
-    this.SWITCH_PENALTY_MINUTES = SWITCH_PENALTY_MINUTES;
-    this.MINOR_SETUP_TIME = MINOR_SETUP_TIME;
+    const s = settings || {};
+    this.ENABLE_HEAT_DEEP_PLAN = s.enable_heat_deep_plan != null ? Boolean(s.enable_heat_deep_plan) : ENABLE_HEAT_DEEP_PLAN;
+    this.ENABLE_STICKINESS = s.enable_stickiness != null ? Boolean(s.enable_stickiness) : ENABLE_STICKINESS;
+    this.MIN_FRAGMENT_TIME = s.min_fragment_time != null ? s.min_fragment_time : MIN_FRAGMENT_TIME;
+    this.SWITCH_PENALTY_MINUTES = s.switch_penalty_minutes != null ? s.switch_penalty_minutes : SWITCH_PENALTY_MINUTES;
+    this.MINOR_SETUP_TIME = s.minor_setup_time != null ? s.minor_setup_time : MINOR_SETUP_TIME;
+    // MAX_OVERLAP_PERCENTAGE / SWITCH_PENALTY_MS ไม่ถูกใช้จริงในระบบใหม่ (port rule 12) จึงไม่ inject
     this.DAY_UNIT_KEYWORDS = DAY_UNIT_KEYWORDS;
 
     this.decisionLog = [];
@@ -1163,27 +1166,34 @@ class SchedulerEngine {
         finishDate: order.WIP_FinishDate ?? null,
         machine: order.WIP_Machine ?? null,
       };
+      // Mat'l: บังคับเริ่มหาคิวตาม effectiveReadyDate (fallback releaseDate/earliest) — L1183-1191
       let effectiveStartDate = earliestDate;
-      if (order.releaseDate && order.releaseDate > earliestDate) {
-        effectiveStartDate = order.releaseDate;
+      const effReadyStr = order.effectiveReadyDate || order.releaseDate || '';
+      if (effReadyStr && effReadyStr > earliestDate) {
+        effectiveStartDate = effReadyStr;
       }
 
       let bestFlowIdx = wip.flow;
 
-      // has_actuals (L1119-1127) — default [{batch}] เฉพาะเมื่อไม่มี key
+      // has_actuals + จดชื่อสเต็ปที่ทำไปแล้ว (L1195-1206) — วนครบทุก sub/step ไม่ break
       let hasActuals = false;
+      const actualStepNames = new Set();
       const obList = 'original_batches' in order ? order.original_batches : [{ batch }];
       for (const sub of obList) {
         const subB = 'batch' in sub ? sub.batch : batch;
         const subActualsDict = this.actuals[subB] ?? {};
-        if (Object.values(subActualsDict).some((q) => q > 0)) {
-          hasActuals = true;
-          break;
+        for (const [stepName, q] of Object.entries(subActualsDict)) {
+          if (q > 0) {
+            hasActuals = true;
+            actualStepNames.add(String(stepName).trim().toUpperCase());
+          }
         }
       }
 
-      // จำลองหา flow เฉพาะงานใหม่เอี่ยมที่ไม่ได้บังคับ flow (L1138-1204)
-      if (wip.startStep === 0 && availableFlows.size > 1 && !hasActuals && wip.flow === 0) {
+      const isWipStep = wip.startStep > 0;
+
+      // จำลองหา flow เฉพาะงานใหม่เอี่ยมที่ไม่ได้บังคับ flow (L1208-1246)
+      if (!isWipStep && availableFlows.size > 1 && !hasActuals && wip.flow === 0) {
         let bestTime = Infinity;
         let winner = 0;
         for (const fIdx of availableFlows.keys()) {
@@ -1225,9 +1235,18 @@ class SchedulerEngine {
           }
         }
         bestFlowIdx = winner;
+      } else if (bestFlowIdx === 0 && availableFlows.size > 1 && hasActuals) {
+        // โหมดห้ามเปลี่ยน flow (WIP / มี actuals): เลือก flow ที่มีสเต็ปตรงกับที่ทำไปแล้ว (L1248-1256)
+        for (const [fIdx, stepsObj] of availableFlows) {
+          const flowSteps = Object.values(stepsObj).map((st) => String(st).trim().toUpperCase());
+          if ([...actualStepNames].some((act) => flowSteps.includes(act))) {
+            bestFlowIdx = fIdx;
+            break;
+          }
+        }
       }
 
-      // Python ทำเงื่อนไขนี้ซ้ำ 2 ครั้ง (L1208, L1214) — idempotent, ครั้งเดียวพอ
+      // ฟางเส้นสุดท้าย (L1259-1260) — Python ทำซ้ำ 2 ครั้ง idempotent, ครั้งเดียวพอ
       if (bestFlowIdx === 0 || !availableFlows.has(bestFlowIdx)) {
         bestFlowIdx = availableFlows.keys().next().value;
       }

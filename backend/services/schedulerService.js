@@ -7,6 +7,7 @@ const { query, transaction } = require('../db/pool');
 const { processRouting, processUnifiedMachineConfig } = require('../scheduler/configProcessor');
 const { OrderManager } = require('../scheduler/orderManager');
 const { SchedulerEngine } = require('../scheduler/engine');
+const { ENABLE_PACKING } = require('../config/constants');
 const pb = require('../scheduler/planBuilder');
 const timestamps = require('../state/timestamps');
 const { nowBangkok, toDateString } = require('../utils/dates');
@@ -24,10 +25,11 @@ async function loadInputs(isReplan) {
     'SELECT machine, date, available_time FROM calendar_config ORDER BY id',
   );
   // WHERE เดียวกับ logic.py L49-52 (ORM filter ฝั่ง SQL)
+  // ฟีเจอร์ Mat'l/Confirm: เพิ่ม material_ready_date, confirm_reply_date (input)
   const orderRows = await query(
     `SELECT batch, model, due_date, priority, qty, plan_mode,
             wip_flow_index, wip_start_step_index, wip_finish_date, wip_machine,
-            planning_mode, release_date
+            planning_mode, release_date, material_ready_date, confirm_reply_date
      FROM orders
      WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
      ORDER BY id`,
@@ -46,9 +48,17 @@ async function loadInputs(isReplan) {
       )
     : [];
 
+  // ฟีเจอร์ Settings: ค่า tunable ของ scheduler (แถวเดียว id=1) — ไม่มีแถว = ใช้ default constants
+  const settingsRows = await query(
+    `SELECT pack_window_days, enable_heat_deep_plan, enable_stickiness,
+            min_fragment_time, switch_penalty_minutes, minor_setup_time, max_overlap_percentage
+     FROM system_settings WHERE id = 1`,
+  );
+  const settings = settingsRows[0] || null;
+
   return {
     routingRows, machineRows, calendarRows, orderRows,
-    productMasterRows, productionRecords, statusRows, scheduleRows,
+    productMasterRows, productionRecords, statusRows, scheduleRows, settings,
   };
 }
 
@@ -73,8 +83,25 @@ async function persist(scheduleResultRows) {
   });
 }
 
+// UPDATE orders SET start_date/fg_date/program_notes ต่อ batch หลังวางแผน (logic.py L541-562)
+async function persistOrderDates(updates) {
+  if (updates.length === 0) return;
+  await transaction(async (t) => {
+    for (const u of updates) {
+      await t.query(
+        `UPDATE orders SET start_date = @start_date, fg_date = @fg_date, program_notes = @program_notes
+         WHERE batch = @batch`,
+        { batch: u.batch, start_date: u.startDate, fg_date: u.fgDate, program_notes: u.programNotes },
+      );
+    }
+  });
+}
+
 // SchedulerService.run (logic.py L13-499) — คืน response shape เดิมเป๊ะ
-async function run(isReplan = false) {
+// options.isSimulation: ไม่บันทึกอะไรเลย (schedule_results / lastPlan / order dates) — แค่คืนแผนให้ดู
+// options.priorityOverrides: { batch: priority } สวมรอยตอน simulation
+async function run(isReplan = false, options = {}) {
+  const { isSimulation = false, priorityOverrides = {} } = options;
   const inputs = await loadInputs(isReplan);
 
   // ---- config (L15-23) ----
@@ -109,10 +136,17 @@ async function run(isReplan = false) {
   const todayStr = toDateString(currentTime);
   const pmMap = {};
   for (const p of inputs.productMasterRows) pmMap[p.model] = p.setup_group;
-  const rawOrders = pb.buildRawOrders(inputs.orderRows, pmMap, todayStr, isReplan);
+
+  // Actual: batch ที่มียอดผลิต (qty_ok+qty_ng) > 0 -> has_actuals (logic.py L57-63)
+  const startedBatchSet = new Set();
+  for (const r of inputs.productionRecords) {
+    if (Number(r.qty_ok || 0) + Number(r.qty_ng || 0) > 0) startedBatchSet.add(r.batch);
+  }
+
+  const rawOrders = pb.buildRawOrders(inputs.orderRows, pmMap, todayStr, isReplan, startedBatchSet, priorityOverrides);
 
   // ---- OrderManager + missing routing (L87-115) ----
-  const om = new OrderManager();
+  const om = new OrderManager(ENABLE_PACKING, inputs.settings);
   const parsed = rawOrders.map((o) => om.parseRawInput(o));
   const packed = om.packOrders(parsed);
   const finalOrders = om.sortForScheduler(packed);
@@ -132,7 +166,7 @@ async function run(isReplan = false) {
   const closedDict = pb.buildClosedDict(inputs.statusRows);
 
   // ---- engine (L215-225) ----
-  const engine = new SchedulerEngine(calendar, routing, fixedMachine, cycleTime, setupConfig);
+  const engine = new SchedulerEngine(calendar, routing, fixedMachine, cycleTime, setupConfig, inputs.settings);
   const { mainPlan, totalPlanMap } = engine.run(
     safeOrders, existingPlan, actualsDict, actualMachines, closedDict, currentTime,
   );
@@ -142,8 +176,20 @@ async function run(isReplan = false) {
   const displayRows = pb.buildDisplayRows(mainPlan, totalPlanMap, actualsDict);
   const scheduleResultRows = pb.toScheduleResultRows(displayRows, totalPlanMap);
 
-  timestamps.markPlan(); // = logic.py L257 (GLOBAL_LAST_PLAN_TIME)
-  await persist(scheduleResultRows);
+  // Simulation: ห้ามบันทึกอะไรลง DB (schedule_results / lastPlan / order dates) — แค่คืนแผน (logic.py L293-300, L455-458)
+  if (!isSimulation) {
+    timestamps.markPlan(); // = logic.py L257 (GLOBAL_LAST_PLAN_TIME)
+    await persist(scheduleResultRows);
+
+    // เขียน start_date/fg_date/program_notes กลับ orders (logic.py L459-562)
+    const orderStateRows = await query(
+      'SELECT batch, start_date, fg_date, material_ready_date FROM orders WHERE is_deleted = 0',
+    );
+    const orderStateMap = {};
+    for (const r of orderStateRows) orderStateMap[r.batch] = r;
+    const dateUpdates = pb.buildOrderDateUpdates(mainPlan, totalPlanMap, safeOrders, orderStateMap);
+    await persistOrderDates(dateUpdates);
+  }
 
   const cleanedData = pb.cleanDisplayData(displayRows, calendar);
   const shipmentReport = pb.buildShipmentReport(mainPlan, totalPlanMap, safeOrders);

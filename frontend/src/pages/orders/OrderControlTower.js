@@ -19,6 +19,15 @@ import ConfirmModal from '../../components/shared/ConfirmModal';
 import OrderFormDialog from './OrderFormDialog';
 import TrackingDialog from './TrackingDialog';
 import HistoryDialog from './HistoryDialog';
+import DateEditDialog from './DateEditDialog';
+import SettingsDialog from './SettingsDialog';
+
+// meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
+const DATE_EDIT_META = {
+  material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันวัตถุดิบเข้า (Material Ready)', label: 'เลือกวันที่วัตถุดิบเข้า', icon: 'bi-box-seam' },
+  confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
+  release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
+};
 
 // ===== helpers =====
 const todayMidnight = () => {
@@ -51,6 +60,28 @@ const formatWip = (wip) => {
   return String(wip);
 };
 
+const shortDate = (v) => (v ? String(v).slice(0, 10) : '-');
+
+// program_notes → chip สี (จาก backend: Please pull in material / Material enough / N/A)
+const programNoteChip = (note) => {
+  if (!note) return <span className="text-muted">-</span>;
+  if (note === 'Please pull in material') {
+    return (
+      <span className="chip chip-ng" title="วัตถุดิบเข้าช้ากว่าวันเริ่มผลิต">
+        <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" /> ดึงวัตถุดิบเข้า
+      </span>
+    );
+  }
+  if (note === 'Material enough') {
+    return (
+      <span className="chip chip-ok" title="วัตถุดิบพร้อมก่อนเริ่มผลิต">
+        <i className="bi bi-check-circle-fill" aria-hidden="true" /> วัตถุดิบพร้อม
+      </span>
+    );
+  }
+  return <span className="text-muted small">{note}</span>;
+};
+
 // แผน "ค้าง" ถ้ามีการแก้ไขหลังวางแผนล่าสุด (เทียบ string 'YYYY-MM-DD HH:MM:SS')
 const isPlanOutdated = (lastPlan, lastEdit) => {
   if (lastEdit === '-') return false;
@@ -59,7 +90,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTracking, onMissingAlert }) => {
+const SortableRow = ({ order, searchActive, simMode, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -157,6 +188,36 @@ const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTrackin
         })()}
       </td>
       <td className="num">{formatReleaseDate(order.release_date)}</td>
+      <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className="p-0 text-decoration-none num"
+          disabled={simMode}
+          title="แก้วันวัตถุดิบเข้า (Material Ready)"
+          onClick={() => onEditDate('material', order)}
+        >
+          {shortDate(order.material_ready_date)}
+        </Button>
+      </td>
+      <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className={`p-0 text-decoration-none num ${order.confirm_reply_date ? 'fw-bold text-mse' : 'text-muted'}`}
+          disabled={simMode}
+          title="แก้วัน Confirm ส่งมอบ (VIP)"
+          onClick={() => onEditDate('confirm', order)}
+        >
+          {order.confirm_reply_date ? shortDate(order.confirm_reply_date) : '-'}
+        </Button>
+      </td>
+      <td className="num">{shortDate(order.start_date)}</td>
+      <td className={`num ${order._simulated ? 'fw-bold text-info' : ''}`}>
+        {order._simulated && <i className="bi bi-flask me-1" title="ผลจำลอง" aria-hidden="true" />}
+        {shortDate(order.fg_date)}
+      </td>
+      <td>{programNoteChip(order.program_notes)}</td>
       <td className="text-center">
         <Badge bg={(order.priority ?? 99) < 10 ? 'danger' : 'secondary'} pill>
           {order.priority ?? 99}
@@ -187,6 +248,17 @@ const OrderControlTower = () => {
   const [trackingBatch, setTrackingBatch] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, variant, onConfirm}
+  const [dateEdit, setDateEdit] = useState(null); // { kind:'material'|'confirm'|'release', order }
+  const [showSettings, setShowSettings] = useState(false);
+
+  // โหมดจำลอง (Simulation): ลากจัดลำดับแล้วรันแบบไม่บันทึก ดู FG ที่ได้ก่อนตัดสินใจ
+  const [simMode, setSimMode] = useState(false);
+  const [simPriorities, setSimPriorities] = useState({}); // { batch: ลำดับ }
+
+  const currentUser = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
+  }, []);
+  const canManageSettings = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -257,6 +329,14 @@ const OrderControlTower = () => {
     const moved = arrayMove(orders, oldIndex, newIndex).map((o, i) => ({ ...o, priority: i + 1 }));
     setOrders(moved);
 
+    // โหมดจำลอง: เก็บลำดับไว้ในเครื่องเฉย ๆ ไม่บันทึกลง DB
+    if (simMode) {
+      const map = {};
+      moved.forEach((o, i) => { map[o.batch] = i + 1; });
+      setSimPriorities(map);
+      return;
+    }
+
     try {
       await apiCall('/orders/reorder', {
         method: 'PUT',
@@ -267,6 +347,86 @@ const OrderControlTower = () => {
       fetchTimestamps();
     } catch {
       showToast('บันทึกไม่สำเร็จ', 'danger');
+    }
+  };
+
+  // ===== date edit (Material / Confirm / Release) =====
+  const submitDateEdit = async (value) => {
+    if (!dateEdit) return;
+    const { kind, order } = dateEdit;
+    const meta = DATE_EDIT_META[kind];
+    try {
+      const res = await apiCall(`/orders/${encodeURIComponent(order.batch)}/${meta.endpoint}`, {
+        method: 'PUT',
+        body: JSON.stringify({ [meta.bodyKey]: value || null }),
+      });
+      setOrders((prev) => prev.map((o) => {
+        if (o.batch !== order.batch) return o;
+        const upd = { ...o, [meta.bodyKey]: res[meta.bodyKey] ?? (value || null) };
+        if (kind === 'material' && res.program_notes !== undefined) upd.program_notes = res.program_notes;
+        return upd;
+      }));
+      fetchTimestamps();
+      setDateEdit(null);
+      showToast('บันทึกวันที่เรียบร้อย');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    }
+  };
+
+  // ===== simulation mode =====
+  const enterSimMode = () => {
+    setSimPriorities({});
+    setSimMode(true);
+    showToast('เข้าโหมดจำลอง: ลากจัดลำดับแล้วกด "รันจำลอง" — ยังไม่บันทึกจริง', 'info');
+  };
+
+  const exitSimMode = async () => {
+    setSimMode(false);
+    setSimPriorities({});
+    await fetchOrders(); // คืนค่า FG/ลำดับที่โชว์กลับเป็นของจริง
+  };
+
+  const runSimulation = async () => {
+    setIsPlanning(true);
+    showToast('กำลังจำลองแผน (ไม่บันทึก)...', 'info');
+    try {
+      const decoded = await apiCall('/schedule/replan', {
+        method: 'POST',
+        body: JSON.stringify({ is_simulation: true, priority_overrides: simPriorities }),
+      });
+      // ข้ามค่าที่ไม่ใช่วันจริง (ยังจัดไม่ลง / sentinel) — ไม่งั้นจะวาด '-'/'9999-12-31' เป็นผลจำลอง
+      const DROP = new Set(['-', 'NO_CAPACITY', 'OVERDUE', '9999-12-31', 'CONFIG_ERROR']);
+      const finishMap = {};
+      for (const r of decoded.report ?? []) {
+        if (r.FinishDate && !DROP.has(String(r.FinishDate))) finishMap[r.Batch] = r.FinishDate;
+      }
+      setOrders((prev) => prev.map((o) => (
+        finishMap[o.batch] != null ? { ...o, fg_date: finishMap[o.batch], _simulated: true } : o
+      )));
+      showToast('จำลองเสร็จ — ดูคอลัมน์ FG (สีฟ้า) แล้วกด "ยืนยัน & ใช้จริง" ถ้าพอใจ', 'info');
+    } catch (err) {
+      planErrorToast(err);
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
+  const confirmApplySimulation = async () => {
+    const updates = Object.entries(simPriorities).map(([batch, priority]) => ({ batch, priority }));
+    setIsPlanning(true);
+    try {
+      if (updates.length > 0) {
+        await apiCall('/orders/reorder', { method: 'PUT', body: JSON.stringify({ updates }) });
+      }
+      setSimMode(false);
+      setSimPriorities({});
+      baselineRef.current = null;
+      await fetchOrders();
+      await runReplan(true); // แผนจริง + ไปหน้า Planning
+    } catch (err) {
+      showToast(err.message, 'danger');
+      setIsPlanning(false);
     }
   };
 
@@ -476,6 +636,16 @@ const OrderControlTower = () => {
         }
         actions={
           <>
+            {canManageSettings && (
+              <Button
+                variant="outline-secondary"
+                title="ตั้งค่าการวางแผน"
+                aria-label="ตั้งค่าการวางแผน"
+                onClick={() => setShowSettings(true)}
+              >
+                <i className="bi bi-sliders" aria-hidden="true" />
+              </Button>
+            )}
             <Button
               variant="outline-secondary"
               title="ประวัติการผลิต"
@@ -522,36 +692,63 @@ const OrderControlTower = () => {
         </Button>
 
         <Toolbar.End>
-          <Button variant={allFixed ? 'success' : 'warning'} onClick={handleToggleAllMode}>
-            <i className={`bi ${allFixed ? 'bi-unlock' : 'bi-lock-fill'} me-1`} aria-hidden="true" />
-            {allFixed ? 'ปลดล็อกทั้งหมด' : 'ล็อกทั้งหมด'}
-          </Button>
-          <Button
-            variant="warning"
-            disabled={!previousOrderList || isPlanning}
-            onClick={handleUndo}
-          >
-            <i className="bi bi-arrow-90deg-left me-1" aria-hidden="true" /> ย้อนกลับ
-          </Button>
-          <Button variant="danger" disabled={isPlanning} onClick={handleInitialPlan}>
-            {isPlanning ? (
-              <Spinner animation="border" size="sm" className="me-1" />
-            ) : (
-              <i className="bi bi-arrow-counterclockwise me-1" aria-hidden="true" />
-            )}
-            Initial Plan
-          </Button>
-          <Button variant="info" disabled={isPlanning} className="text-white" onClick={handleReplan}>
-            {isPlanning ? (
-              <Spinner animation="border" size="sm" className="me-1" />
-            ) : (
-              <i className="bi bi-magic me-1" aria-hidden="true" />
-            )}
-            Replan
-          </Button>
-          <Button variant="outline-primary" disabled={isPlanning} onClick={handleSortByDueDate}>
-            <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
-          </Button>
+          {simMode ? (
+            <>
+              <span className="chip chip-info align-self-center">
+                <i className="bi bi-flask" aria-hidden="true" /> โหมดจำลอง
+              </span>
+              <Button variant="info" className="text-white" disabled={isPlanning} onClick={runSimulation}>
+                {isPlanning ? (
+                  <Spinner animation="border" size="sm" className="me-1" />
+                ) : (
+                  <i className="bi bi-play-fill me-1" aria-hidden="true" />
+                )}
+                รันจำลอง
+              </Button>
+              <Button variant="success" disabled={isPlanning} onClick={confirmApplySimulation}>
+                <i className="bi bi-check2-circle me-1" aria-hidden="true" /> ยืนยัน &amp; ใช้จริง
+              </Button>
+              <Button variant="outline-secondary" disabled={isPlanning} onClick={exitSimMode}>
+                <i className="bi bi-x-lg me-1" aria-hidden="true" /> ออกจากโหมด
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant={allFixed ? 'success' : 'warning'} onClick={handleToggleAllMode}>
+                <i className={`bi ${allFixed ? 'bi-unlock' : 'bi-lock-fill'} me-1`} aria-hidden="true" />
+                {allFixed ? 'ปลดล็อกทั้งหมด' : 'ล็อกทั้งหมด'}
+              </Button>
+              <Button
+                variant="warning"
+                disabled={!previousOrderList || isPlanning}
+                onClick={handleUndo}
+              >
+                <i className="bi bi-arrow-90deg-left me-1" aria-hidden="true" /> ย้อนกลับ
+              </Button>
+              <Button variant="outline-info" disabled={isPlanning} onClick={enterSimMode}>
+                <i className="bi bi-flask me-1" aria-hidden="true" /> จำลองแผน
+              </Button>
+              <Button variant="danger" disabled={isPlanning} onClick={handleInitialPlan}>
+                {isPlanning ? (
+                  <Spinner animation="border" size="sm" className="me-1" />
+                ) : (
+                  <i className="bi bi-arrow-counterclockwise me-1" aria-hidden="true" />
+                )}
+                Initial Plan
+              </Button>
+              <Button variant="info" disabled={isPlanning} className="text-white" onClick={handleReplan}>
+                {isPlanning ? (
+                  <Spinner animation="border" size="sm" className="me-1" />
+                ) : (
+                  <i className="bi bi-magic me-1" aria-hidden="true" />
+                )}
+                Replan
+              </Button>
+              <Button variant="outline-primary" disabled={isPlanning} onClick={handleSortByDueDate}>
+                <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
+              </Button>
+            </>
+          )}
         </Toolbar.End>
       </Toolbar>
 
@@ -589,6 +786,11 @@ const OrderControlTower = () => {
                     <th>Due Date</th>
                     <th>Mode</th>
                     <th>Release Date</th>
+                    <th>Material</th>
+                    <th>Confirm</th>
+                    <th>Start</th>
+                    <th>FG</th>
+                    <th>Notes</th>
                     <th className="text-center">Priority</th>
                   </tr>
                 </thead>
@@ -598,11 +800,13 @@ const OrderControlTower = () => {
                       key={order.batch}
                       order={order}
                       searchActive={searchActive}
+                      simMode={simMode}
                       onEdit={(o) => setFormOrder(o)}
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
                       onTracking={(batch) => setTrackingBatch(batch)}
                       onMissingAlert={handleMissingAlert}
+                      onEditDate={(kind, o) => setDateEdit({ kind, order: o })}
                     />
                   ))}
                 </tbody>
@@ -640,6 +844,24 @@ const OrderControlTower = () => {
           setShowHistory(false);
           setTrackingBatch(batch);
         }}
+      />
+
+      <DateEditDialog
+        show={!!dateEdit}
+        title={dateEdit ? DATE_EDIT_META[dateEdit.kind].title : ''}
+        label={dateEdit ? DATE_EDIT_META[dateEdit.kind].label : ''}
+        icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}
+        batch={dateEdit ? dateEdit.order.batch : ''}
+        currentValue={dateEdit ? dateEdit.order[DATE_EDIT_META[dateEdit.kind].bodyKey] : ''}
+        onHide={() => setDateEdit(null)}
+        onSubmit={submitDateEdit}
+      />
+
+      <SettingsDialog
+        show={showSettings}
+        onHide={() => setShowSettings(false)}
+        onSaved={(msg) => showToast(msg)}
+        onError={showErrorToast}
       />
 
       <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />

@@ -128,6 +128,10 @@
  ],
  "total_plan_map": {
   "PACK-SG-ALPHA-20260815": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "PACK-SG-ALPHA-20260815",
    "qty": 800.0,
    "Model": "MODEL-A",
@@ -155,6 +159,10 @@
    "_chosenFlow": 1
   },
   "2600000003": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000003",
    "qty": 100.0,
    "Model": "MODEL-HEAT",

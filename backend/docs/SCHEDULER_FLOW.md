@@ -655,6 +655,32 @@ flowchart TD
 
 ---
 
+## ฟีเจอร์ Mat'l Receive / Confirm Date / Simulation (พอร์ตทีหลัง)
+
+พอร์ตจาก `OLD_BACKUP` commit `4cc70eb` — **ฝั่ง backend (schema + endpoint) ของ commit นั้นไม่เคยถูกเขียน** จึง reconstruct ใหม่
+เพิ่มทับกลไกเดิม **โดยไม่แตะการล็อก FIXED** (ระบบใหม่ยังคง FIXED lock ต่างจากซอร์สที่ลบทิ้ง)
+
+- **วันวัตถุดิบเข้า (Material)** — `effectiveReadyDate = max(release_date, material_ready_date)` (เทียบ string) กลายเป็น
+  "วันเริ่มหาคิว" ของสายเดินหน้า (หัวข้อ 7b) แทนที่จะใช้ `release_date` อย่างเดียว. หลังวางแผนเสร็จ ระบบเทียบวันเริ่มจริง
+  (`start_date`) กับ `material_ready_date` แล้วเขียน `program_notes` = `Please pull in material` / `Material enough` / `N/A`
+  พร้อม `start_date`/`fg_date` กลับตาราง `orders` (เฉพาะตอน**ไม่ใช่** simulation)
+- **วัน Confirm (VIP)** — ถ้ามี `confirm_reply_date` จะ (1) สวมรอยเป็น `dueDate`, (2) จัดคิวขึ้นก่อนงานปกติ (`vipScore=0`
+  ในหัวข้อ 4), (3) มัดแพ็ครวมเฉพาะงาน confirm วันเดียวกัน (คีย์แพ็คได้ `CLASS:VIP:<date>`)
+- **มียอดผลิตแล้ว (has_actuals)** — งานที่เริ่มผลิตแล้ว (`qty_ok+qty_ng>0`) ถูกบังคับแพ็คเดี่ยว (คีย์ `ACTUAL:<batch>`) และ
+  ถ้ายังไม่รู้เส้นทาง จะเลือกเส้นทางที่มีขั้นตอนตรงกับที่ผลิตไปแล้ว (หัวข้อ 7a). **has_actuals มี 2 ตัวคนละระดับ** —
+  ระดับ batch (จาก `production_records` ใน `schedulerService`) ใช้ทำคีย์แพ็ค ส่วนระดับลอทลูก (ใน `engine.js`) ใช้ล็อกเส้นทาง
+- **คีย์มัดแพ็คใหม่** (หัวข้อ 4) — เดิม `SETUP|FLOW|STEP|MODE` เพิ่มเป็น `...|EFF_DATE:<วันพร้อม>|CLASS:<VIP|NORMAL>[|ACTUAL:<batch>]`
+- **ค่า setting จาก DB** — `pack_window_days` และค่า tunable ของ engine อ่านจากตาราง `system_settings` (แถว `id=1`)
+  ผ่าน `OrderManager`/`SchedulerEngine` ที่รับ `settings` object; ไม่มีแถว → ใช้ default จาก `config/constants.js` (ผลเท่าเดิม)
+- **Simulation** — `schedulerService.run(isReplan, {isSimulation, priorityOverrides})`; ตอน `isSimulation` จะรัน engine ปกติ
+  แต่**ไม่เขียนอะไรลง DB เลย** (ไม่ลบ/เขียน `schedule_results`, ไม่อัปเดต lastPlan, ไม่ writeback วันของ `orders`) —
+  ใช้ให้หน้า Orders ลองสลับ priority แล้วดู `fg_date` ที่ได้ก่อนตัดสินใจ
+- **ไม่มี parity oracle** — Python ที่ HEAD import ไม่ผ่าน (dump fixture ไม่ได้) → ยืนยันด้วย unit test เฉพาะกฎใหม่
+  (`orderManager.test.js`, `planBuilder.test.js`, `engine.smoke.test.js`) + rebaseline `total_plan_map` ใน parity fixtures
+  (เพิ่มเฉพาะ 4 ฟิลด์ metadata; `main_plan` พิสูจน์แล้วว่าไม่เปลี่ยน)
+
+---
+
 ## แผนที่โค้ดสำหรับผู้ดูแลระบบ
 
 *(หัวข้อเดียวในเอกสารนี้ที่อ้างชื่อไฟล์และเลขบรรทัด — ทุกเส้นทางนับจาก `backend/`)*
