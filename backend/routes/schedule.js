@@ -22,6 +22,19 @@ const LOCK_MESSAGE = 'มีการวางแผนกำลังทำง�
 // รับได้ทั้ง boolean true, 1, 'true', 'True' — นอกนั้นถือเป็น false (fail closed = run จริง)
 const truthy = (v) => v === true || v === 1 || (typeof v === 'string' && v.trim().toLowerCase() === 'true');
 
+// plan_mode_overrides (sim-only): กรองให้เหลือเฉพาะค่า 'FIXED'/'NEW'
+// กัน 'COMPLETED' (หรือค่าอื่น) หลุดเข้า engine — loadInputs กรอง COMPLETED ที่ SQL อยู่แล้ว
+const cleanPlanModeOverrides = (raw) => {
+  const out = {};
+  if (raw && typeof raw === 'object') {
+    for (const [batch, mode] of Object.entries(raw)) {
+      const m = String(mode).toUpperCase();
+      if (m === 'FIXED' || m === 'NEW') out[batch] = m;
+    }
+  }
+  return out;
+};
+
 // ========== POST /api/schedule/run — Initial Plan ==========
 router.post('/run', verifyToken, writeRoles, async (req, res) => {
   if (!planLock.tryAcquire()) {
@@ -31,10 +44,12 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
     // Simulation: รันแบบไม่บันทึกอะไร (ไม่แตะ schedule_results / orders / lastPlan) — แค่คืนแผนให้ดู
     // coerce เป็น boolean กัน "true"/1 หลุดเป็น run จริงโดยไม่ตั้งใจ
     const isSimulation = truthy(req.body && req.body.is_simulation);
-    // priority_overrides ใช้เฉพาะโหมด simulation — run จริงต้องยึด orders.priority ที่เก็บไว้เท่านั้น
+    // priority_overrides / plan_mode_overrides ใช้เฉพาะโหมด simulation
+    // run จริงต้องยึด orders.priority + orders.plan_mode ที่เก็บไว้เท่านั้น
     const priorityOverrides = isSimulation ? (req.body && req.body.priority_overrides) || {} : {};
+    const planModeOverrides = isSimulation ? cleanPlanModeOverrides(req.body && req.body.plan_mode_overrides) : {};
 
-    const result = await schedulerService.run(false, { isSimulation, priorityOverrides });
+    const result = await schedulerService.run(false, { isSimulation, priorityOverrides, planModeOverrides });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L333-347: ล้างป้าย ❓ เฉพาะ order ใหม่ -> ประทับตัวที่หา routing ไม่เจอ -> ปลดป้าย New
@@ -70,12 +85,14 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
     // Simulation: รันแบบไม่บันทึก + ไม่ markEdit (ของจริงไม่ถูกแตะ) — แค่คืนแผนจำลอง
     // coerce เป็น boolean กัน "true"/1 หลุดเป็น run จริงโดยไม่ตั้งใจ
     const isSimulation = truthy(req.body && req.body.is_simulation);
-    // priority_overrides ใช้เฉพาะโหมด simulation — replan จริงต้องยึด orders.priority ที่เก็บไว้เท่านั้น
+    // priority_overrides / plan_mode_overrides ใช้เฉพาะโหมด simulation
+    // replan จริงต้องยึด orders.priority + orders.plan_mode ที่เก็บไว้เท่านั้น
     const priorityOverrides = isSimulation ? (req.body && req.body.priority_overrides) || {} : {};
+    const planModeOverrides = isSimulation ? cleanPlanModeOverrides(req.body && req.body.plan_mode_overrides) : {};
 
     if (!isSimulation) timestamps.markEdit(); // = api.py L379 (GLOBAL_LAST_EDIT_TIME ก่อนรัน)
 
-    const result = await schedulerService.run(true, { isSimulation, priorityOverrides });
+    const result = await schedulerService.run(true, { isSimulation, priorityOverrides, planModeOverrides });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L393-426: ล้างป้าย ❓ ทุก order (ไม่ลบ) -> ประทับใหม่ (PACK แตก original_batches) -> ปลดป้าย New

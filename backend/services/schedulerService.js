@@ -100,8 +100,9 @@ async function persistOrderDates(updates) {
 // SchedulerService.run (logic.py L13-499) — คืน response shape เดิมเป๊ะ
 // options.isSimulation: ไม่บันทึกอะไรเลย (schedule_results / lastPlan / order dates) — แค่คืนแผนให้ดู
 // options.priorityOverrides: { batch: priority } สวมรอยตอน simulation
+// options.planModeOverrides: { batch: 'FIXED'|'NEW' } สวมรอย plan_mode ตอน simulation (lock/unlock)
 async function run(isReplan = false, options = {}) {
-  const { isSimulation = false, priorityOverrides = {} } = options;
+  const { isSimulation = false, priorityOverrides = {}, planModeOverrides = {} } = options;
   const inputs = await loadInputs(isReplan);
 
   // ---- config (L15-23) ----
@@ -143,7 +144,7 @@ async function run(isReplan = false, options = {}) {
     if (Number(r.qty_ok || 0) + Number(r.qty_ng || 0) > 0) startedBatchSet.add(r.batch);
   }
 
-  const rawOrders = pb.buildRawOrders(inputs.orderRows, pmMap, todayStr, isReplan, startedBatchSet, priorityOverrides);
+  const rawOrders = pb.buildRawOrders(inputs.orderRows, pmMap, todayStr, isReplan, startedBatchSet, priorityOverrides, planModeOverrides);
 
   // ---- OrderManager + missing routing (L87-115) ----
   const om = new OrderManager(ENABLE_PACKING, inputs.settings);

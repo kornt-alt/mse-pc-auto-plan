@@ -200,7 +200,8 @@ router.put('/bulk/sort-priority', verifyToken, writeRoles, async (req, res) => {
       const rows = await t.query(
         `SELECT id FROM orders
          WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
-         ORDER BY (CASE WHEN due_date IS NULL THEN 1 ELSE 0 END) ASC, due_date ASC`
+         -- id ASC = tiebreak คงที่เมื่อ due_date ซ้ำ ให้ preview (client mirror) ตรงกับผลจริง
+         ORDER BY (CASE WHEN due_date IS NULL THEN 1 ELSE 0 END) ASC, due_date ASC, id ASC`
       );
       for (let i = 0; i < rows.length; i++) {
         await t.query('UPDATE orders SET priority = @priority WHERE id = @id', {

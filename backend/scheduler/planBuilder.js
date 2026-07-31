@@ -23,7 +23,8 @@ const tupleCompare = (a, b) => {
 // pmMap = { model: setup_group } จาก product_master (LEFT JOIN -> ไม่มี = undefined)
 // startedBatchSet = Set ของ batch ที่มียอดผลิต (qty_ok+qty_ng) > 0 -> has_actuals
 // priorityOverrides = { batch: priority } สวมรอย priority ตอน simulation ({} = ใช้ของเดิม)
-function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = new Set(), priorityOverrides = {}) {
+// planModeOverrides = { batch: 'FIXED'|'NEW' } สวมรอย plan_mode ตอน simulation (lock/unlock preview)
+function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = new Set(), priorityOverrides = {}, planModeOverrides = {}) {
   const rawOrders = [];
   for (const row of orderRows) {
     const setupGroupVal = pmMap[row.model];
@@ -32,7 +33,10 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
 
     const wMachine = row.wip_machine || '';
 
-    let planMode = row.plan_mode || 'NEW';
+    // Simulation: สวมรอย plan_mode ถ้าส่ง override มา (ก่อนกฎ FIXED->NEW ของ !isReplan)
+    const modeOverride = Object.prototype.hasOwnProperty.call(planModeOverrides, row.batch)
+      ? planModeOverrides[row.batch] : null;
+    let planMode = modeOverride || row.plan_mode || 'NEW';
     if (!isReplan && planMode.toUpperCase() === 'FIXED') planMode = 'NEW'; // L65
 
     let rDate = row.release_date || '';

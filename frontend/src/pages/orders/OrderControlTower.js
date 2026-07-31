@@ -21,6 +21,9 @@ import TrackingDialog from './TrackingDialog';
 import HistoryDialog from './HistoryDialog';
 import DateEditDialog from './DateEditDialog';
 import SettingsDialog from './SettingsDialog';
+import PlanPreviewDialog from './PlanPreviewDialog';
+import { buildPlanDiff, computeSortByDueDate } from './planDiff';
+import { buildPlanDetail } from './planDetail';
 
 // meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
 const DATE_EDIT_META = {
@@ -90,7 +93,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, searchActive, simMode, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
+const SortableRow = ({ order, searchActive, datesLocked, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -193,7 +196,7 @@ const SortableRow = ({ order, searchActive, simMode, onEdit, onClose, onDelete, 
           variant="link"
           size="sm"
           className="p-0 text-decoration-none num"
-          disabled={simMode}
+          disabled={datesLocked}
           title="แก้วันวัตถุดิบเข้า (Material Ready)"
           onClick={() => onEditDate('material', order)}
         >
@@ -205,7 +208,7 @@ const SortableRow = ({ order, searchActive, simMode, onEdit, onClose, onDelete, 
           variant="link"
           size="sm"
           className={`p-0 text-decoration-none num ${order.confirm_reply_date ? 'fw-bold text-mse' : 'text-muted'}`}
-          disabled={simMode}
+          disabled={datesLocked}
           title="แก้วัน Confirm ส่งมอบ (VIP)"
           onClick={() => onEditDate('confirm', order)}
         >
@@ -213,10 +216,7 @@ const SortableRow = ({ order, searchActive, simMode, onEdit, onClose, onDelete, 
         </Button>
       </td>
       <td className="num">{shortDate(order.start_date)}</td>
-      <td className={`num ${order._simulated ? 'fw-bold text-info' : ''}`}>
-        {order._simulated && <i className="bi bi-flask me-1" title="ผลจำลอง" aria-hidden="true" />}
-        {shortDate(order.fg_date)}
-      </td>
+      <td className="num">{shortDate(order.fg_date)}</td>
       <td>{programNoteChip(order.program_notes)}</td>
       <td className="text-center">
         <Badge bg={(order.priority ?? 99) < 10 ? 'danger' : 'secondary'} pill>
@@ -233,13 +233,20 @@ const OrderControlTower = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [timestamps, setTimestamps] = useState({ last_plan: '-', last_edit: '-' });
+  const [settings, setSettings] = useState(null); // system_settings — ใช้ทำ legend ใน preview
 
-  // snapshot สำหรับ Undo — เก็บก่อนรัน Initial Plan/Replan
+  // snapshot สำหรับ Undo — เก็บก่อนยืนยัน Replan/เรียง/บันทึกลำดับ
   const [previousOrderList, setPreviousOrderList] = useState(null);
   // baseline = สภาพ orders ตอนโหลดครั้งแรก (deep copy) ใช้เป็น snapshot ของ Replan
-  // (order_management_screen.dart L122-123)
   const baselineRef = useRef(null);
+  // สภาพ orders ก่อนเริ่มลากรอบนี้ (ใช้เป็น "ก่อน" ของ preview + snapshot Undo ของการบันทึกลำดับ)
+  const preReorderRef = useRef(null);
   const [isPlanning, setIsPlanning] = useState(false);
+
+  // มีการลากจัดลำดับที่ยังไม่บันทึก (optimistic ในจอ ยังไม่ persist)
+  const [reorderDirty, setReorderDirty] = useState(false);
+  // preview dialog: { mode:'replan'|'sort'|'drag'|'lock'|'unlock', loading, diff, detail, onConfirm }
+  const [preview, setPreview] = useState(null);
 
   const navigate = useNavigate();
   const { setFromRunResponse } = usePlanData();
@@ -250,10 +257,6 @@ const OrderControlTower = () => {
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, variant, onConfirm}
   const [dateEdit, setDateEdit] = useState(null); // { kind:'material'|'confirm'|'release', order }
   const [showSettings, setShowSettings] = useState(false);
-
-  // โหมดจำลอง (Simulation): ลากจัดลำดับแล้วรันแบบไม่บันทึก ดู FG ที่ได้ก่อนตัดสินใจ
-  const [simMode, setSimMode] = useState(false);
-  const [simPriorities, setSimPriorities] = useState({}); // { batch: ลำดับ }
 
   const currentUser = useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
@@ -266,11 +269,22 @@ const OrderControlTower = () => {
 
   // ต้อง stable — ถ้าเป็น inline function จะทำให้ useEffect ใน OrderFormDialog รีเซ็ตฟอร์มทุก re-render
   const showErrorToast = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
-  // stable onHide สำหรับ dialog ที่มี useEffect init ผูกกับ prop เหล่านี้ (SettingsDialog.load, DateEditDialog reset)
-  // inline function = identity ใหม่ทุก re-render → รีเซ็ต/refetch ฟอร์มกลางคัน
+  // stable onHide สำหรับ dialog ที่มี useEffect init ผูกกับ prop เหล่านี้
   const closeSettings = useCallback(() => setShowSettings(false), []);
   const closeDateEdit = useCallback(() => setDateEdit(null), []);
-  const onSettingsSaved = useCallback((msg) => showToast(msg), [showToast]);
+  const onSettingsSaved = useCallback((msg) => {
+    showToast(msg);
+    apiCall('/system/settings').then(setSettings).catch(() => {}); // อัปเดต legend
+  }, [showToast]);
+
+  // 409 (มีการวางแผนซ้อน) → warning / อื่นๆ → danger
+  const planErrorToast = useCallback(
+    (err) => {
+      const msg = String(err.message || err);
+      showToast(msg, msg.includes('กำลังทำงานอยู่') ? 'warning' : 'danger');
+    },
+    [showToast],
+  );
 
   const fetchTimestamps = useCallback(async () => {
     try {
@@ -299,6 +313,8 @@ const OrderControlTower = () => {
   useEffect(() => {
     fetchOrders();
     fetchTimestamps();
+    // settings สำหรับ legend — เงียบถ้าดึงไม่ได้ (legend ใช้ค่า default แทน)
+    apiCall('/system/settings').then(setSettings).catch(() => {});
   }, [fetchOrders, fetchTimestamps]);
 
   const filteredOrders = useMemo(() => {
@@ -317,8 +333,8 @@ const OrderControlTower = () => {
   const allFixed = orders.length > 0 && orders.every((o) => (o.plan_mode || 'NEW') === 'FIXED');
   const maxPriority = orders.reduce((max, o) => Math.max(max, o.priority ?? 0), 0);
 
-  // ===== drag reorder =====
-  const handleDragEnd = async (event) => {
+  // ===== drag reorder (optimistic ในจอ — ยังไม่ persist จนกว่าจะยืนยันใน preview) =====
+  const handleDragEnd = (event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     if (searchActive) {
@@ -330,30 +346,21 @@ const OrderControlTower = () => {
     const newIndex = orders.findIndex((o) => o.batch === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
 
-    // optimistic: ย้ายแถว + renumber priority = 1..n ทั้งลิสต์ (ตามหน้าจอเดิม)
+    // จำสภาพก่อนลากรอบแรก ไว้เป็น "ก่อน" ของ preview + snapshot Undo
+    if (!reorderDirty) {
+      preReorderRef.current = JSON.parse(JSON.stringify(orders));
+    }
     const moved = arrayMove(orders, oldIndex, newIndex).map((o, i) => ({ ...o, priority: i + 1 }));
     setOrders(moved);
-
-    // โหมดจำลอง: เก็บลำดับไว้ในเครื่องเฉย ๆ ไม่บันทึกลง DB
-    if (simMode) {
-      const map = {};
-      moved.forEach((o, i) => { map[o.batch] = i + 1; });
-      setSimPriorities(map);
-      return;
-    }
-
-    try {
-      await apiCall('/orders/reorder', {
-        method: 'PUT',
-        body: JSON.stringify({
-          updates: moved.map((o) => ({ batch: o.batch, priority: o.priority })),
-        }),
-      });
-      fetchTimestamps();
-    } catch {
-      showToast('บันทึกไม่สำเร็จ', 'danger');
-    }
+    setReorderDirty(true);
   };
+
+  const cancelReorder = useCallback(async () => {
+    setReorderDirty(false);
+    preReorderRef.current = null;
+    await fetchOrders(); // คืนลำดับจริงจาก DB
+    showToast('ยกเลิกการจัดลำดับแล้ว', 'info');
+  }, [fetchOrders, showToast]);
 
   // ===== date edit (Material / Confirm / Release) =====
   const submitDateEdit = useCallback(async (value) => {
@@ -379,71 +386,114 @@ const OrderControlTower = () => {
     }
   }, [dateEdit, fetchTimestamps, showToast]);
 
-  // ===== simulation mode =====
-  const enterSimMode = () => {
-    setSimPriorities({});
-    setSimMode(true);
-    showToast('เข้าโหมดจำลอง: ลากจัดลำดับแล้วกด "รันจำลอง" — ยังไม่บันทึกจริง', 'info');
-  };
+  // ===== preview dialog control =====
+  const closePreview = useCallback(() => setPreview(null), []);
 
-  const exitSimMode = async () => {
-    setSimMode(false);
-    setSimPriorities({});
-    await fetchOrders(); // คืนค่า FG/ลำดับที่โชว์กลับเป็นของจริง
-  };
-
-  const runSimulation = async () => {
-    setIsPlanning(true);
-    showToast('กำลังจำลองแผน (ไม่บันทึก)...', 'info');
+  // รัน simulation (ไม่บันทึก) แล้วเปิด preview พร้อม diff + detail — ใช้ร่วมทุกโหมด
+  const openPreview = useCallback(async ({
+    mode, beforeRows, afterPriorities, afterModes, planModeOverrides, onConfirm,
+  }) => {
+    setPreview({ mode, loading: true, diff: null, detail: null, onConfirm });
     try {
+      const body = { is_simulation: true };
+      if (afterPriorities) body.priority_overrides = afterPriorities;
+      if (planModeOverrides) body.plan_mode_overrides = planModeOverrides;
       const decoded = await apiCall('/schedule/replan', {
         method: 'POST',
-        body: JSON.stringify({ is_simulation: true, priority_overrides: simPriorities }),
+        body: JSON.stringify(body),
       });
-      // ข้ามค่าที่ไม่ใช่วันจริง (ยังจัดไม่ลง / sentinel) — ไม่งั้นจะวาด '-'/'9999-12-31' เป็นผลจำลอง
-      const DROP = new Set(['-', 'NO_CAPACITY', 'OVERDUE', '9999-12-31', 'CONFIG_ERROR']);
-      const finishMap = {};
-      for (const r of decoded.report ?? []) {
-        if (r.FinishDate && !DROP.has(String(r.FinishDate))) finishMap[r.Batch] = r.FinishDate;
-      }
-      setOrders((prev) => prev.map((o) => {
-        // ค่า FG จริงก่อนถูกจำลอง — เก็บไว้ที่ _origFg ตั้งแต่รอบแรก เพื่อคืนค่าได้เมื่อ batch หลุดจากผลรอบใหม่
-        const origFg = o._simulated ? o._origFg : o.fg_date;
-        if (finishMap[o.batch] != null) {
-          return { ...o, fg_date: finishMap[o.batch], _simulated: true, _origFg: origFg };
-        }
-        // ไม่อยู่ในผลรอบนี้ (เช่นกลายเป็น NO_CAPACITY) → คืน FG จริง + ปลดธงจำลอง กันค่ารอบก่อนค้าง
-        if (o._simulated) return { ...o, fg_date: origFg, _simulated: false, _origFg: undefined };
-        return o;
-      }));
-      showToast('จำลองเสร็จ — ดูคอลัมน์ FG (สีฟ้า) แล้วกด "ยืนยัน & ใช้จริง" ถ้าพอใจ', 'info');
+      const diff = buildPlanDiff({
+        beforeRows,
+        afterReport: decoded.report ?? [],
+        afterPriorities: afterPriorities ?? null,
+        afterModes: afterModes ?? null,
+      });
+      // deep detail: เครื่อง/process กินเวลาเท่าไหร่ + คอขวด (จาก decoded.data)
+      const detail = buildPlanDetail(decoded.data ?? []);
+      setPreview((p) => (p && p.mode === mode ? { ...p, loading: false, diff, detail } : p));
+    } catch (err) {
+      setPreview(null);
+      planErrorToast(err);
+    }
+  }, [planErrorToast]);
+
+  // ---- Replan: sim → preview → ยืนยัน → replan จริง (ไม่เด้งหน้า Planning) ----
+  const doReplan = useCallback(async () => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
+    setIsPlanning(true);
+    try {
+      const decoded = await apiCall('/schedule/replan', { method: 'POST' });
+      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast('Replan สำเร็จ — กด "ดูแผน" เพื่อไปหน้าวางแผน', 'success');
     } catch (err) {
       planErrorToast(err);
     } finally {
       setIsPlanning(false);
     }
-  };
+  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, showToast, planErrorToast]);
 
-  const confirmApplySimulation = async () => {
-    const updates = Object.entries(simPriorities).map(([batch, priority]) => ({ batch, priority }));
+  const handleReplan = useCallback(() => {
+    openPreview({ mode: 'replan', beforeRows: orders, onConfirm: doReplan });
+  }, [openPreview, orders, doReplan]);
+
+  // ---- เรียงตาม Due Date: คำนวณลำดับใหม่ client-side → sim → preview → ยืนยัน → persist ----
+  const doSort = useCallback(async () => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
     setIsPlanning(true);
     try {
-      // เก็บลำดับ "ก่อน apply" ไว้ให้ปุ่มย้อนกลับ — ต้อง snapshot ก่อน reorder จะ persist ลง DB
-      // (baselineRef ยังเป็นลำดับตอนโหลด/ก่อนเข้าโหมดจำลอง เพราะ drag ในโหมดจำลองไม่แตะ baseline)
-      setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? [])));
-      if (updates.length > 0) {
-        await apiCall('/orders/reorder', { method: 'PUT', body: JSON.stringify({ updates }) });
-      }
-      setSimMode(false);
-      setSimPriorities({});
+      await apiCall('/orders/bulk/sort-priority', { method: 'PUT' });
       baselineRef.current = null;
       await fetchOrders();
-      await runReplan(false); // แผนจริง + ไปหน้า Planning; false = ไม่ทับ previousOrderList ที่เพิ่งเก็บ
+      await fetchTimestamps();
+      setPreview(null);
+      showToast('เรียงลำดับ Priority สำเร็จ — กด Replan เพื่อคำนวณแผนใหม่', 'success');
     } catch (err) {
       showToast(err.message, 'danger');
+    } finally {
       setIsPlanning(false);
     }
-  };
+  }, [orders, fetchOrders, fetchTimestamps, showToast]);
+
+  const handleSortByDueDate = useCallback(() => {
+    const afterPriorities = computeSortByDueDate(orders);
+    openPreview({ mode: 'sort', beforeRows: orders, afterPriorities, onConfirm: doSort });
+  }, [openPreview, orders, doSort]);
+
+  // ---- บันทึกลำดับ (จากการลาก): sim → preview → ยืนยัน → persist reorder ----
+  const doSaveReorder = useCallback(async () => {
+    const updates = orders.map((o, i) => ({ batch: o.batch, priority: i + 1 }));
+    setPreviousOrderList(JSON.parse(JSON.stringify(preReorderRef.current ?? [])));
+    setIsPlanning(true);
+    try {
+      await apiCall('/orders/reorder', { method: 'PUT', body: JSON.stringify({ updates }) });
+      setReorderDirty(false);
+      preReorderRef.current = null;
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast('บันทึกลำดับสำเร็จ — กด Replan เพื่อคำนวณแผนใหม่', 'success');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, fetchOrders, fetchTimestamps, showToast]);
+
+  const handleSaveReorder = useCallback(() => {
+    const afterPriorities = {};
+    orders.forEach((o, i) => { afterPriorities[o.batch] = i + 1; });
+    openPreview({
+      mode: 'drag',
+      beforeRows: preReorderRef.current ?? orders,
+      afterPriorities,
+      onConfirm: doSaveReorder,
+    });
+  }, [openPreview, orders, doSaveReorder]);
 
   // ===== actions =====
   const handleCloseOrder = (order) => {
@@ -496,116 +546,41 @@ const OrderControlTower = () => {
     });
   };
 
-  const handleToggleAllMode = () => {
+  // ---- Lock/Unlock ทั้งหมด: sim ด้วย plan_mode override → preview ผลกระทบ → ยืนยัน → persist mode ----
+  const doToggleMode = useCallback(async (target) => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
+    setIsPlanning(true);
+    try {
+      await apiCall(`/orders/bulk/mode?target_mode=${target}`, {
+        method: 'PUT',
+        body: JSON.stringify({ batches: orders.map((o) => o.batch) }),
+      });
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast(`เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ — กด Replan เพื่อคำนวณแผนใหม่`, 'success');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, fetchOrders, fetchTimestamps, showToast]);
+
+  const handleToggleAllMode = useCallback(() => {
     const target = allFixed ? 'NEW' : 'FIXED';
-    setConfirm({
-      title: target === 'FIXED' ? 'ล็อกแผนทั้งหมด (All FIXED)' : 'ปลดล็อกแผนทั้งหมด (All NEW)',
-      body: `ต้องการเปลี่ยนสถานะทุกออเดอร์เป็น ${target} ใช่หรือไม่?`,
-      confirmLabel: 'ยืนยัน',
-      variant: target === 'FIXED' ? 'warning' : 'success',
-      onConfirm: async () => {
-        try {
-          await apiCall(`/orders/bulk/mode?target_mode=${target}`, {
-            method: 'PUT',
-            body: JSON.stringify({ batches: orders.map((o) => o.batch) }),
-          });
-          showToast(`เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ`);
-          fetchOrders();
-        } catch (err) {
-          showToast(err.message, 'danger');
-        }
-      },
+    const afterModes = {};
+    orders.forEach((o) => { afterModes[o.batch] = target; });
+    openPreview({
+      mode: target === 'FIXED' ? 'lock' : 'unlock',
+      beforeRows: orders,
+      afterModes,
+      planModeOverrides: afterModes,
+      onConfirm: () => doToggleMode(target),
     });
-  };
+  }, [allFixed, orders, openPreview, doToggleMode]);
 
-  const handleSortByDueDate = () => {
-    setConfirm({
-      title: 'เรียงลำดับ Priority ใหม่',
-      body:
-        'ระบบจะทำการเรียงลำดับ Priority ของทุกออเดอร์ใหม่ โดยยึดตาม Due Date จากวันที่ใกล้ที่สุดไปไกลที่สุด\n\nต้องการดำเนินการต่อหรือไม่?',
-      confirmLabel: 'ยืนยัน',
-      variant: 'primary',
-      onConfirm: async () => {
-        try {
-          await apiCall('/orders/bulk/sort-priority', { method: 'PUT' });
-          showToast('เรียงลำดับ Priority สำเร็จ');
-          fetchOrders();
-        } catch (err) {
-          showToast(err.message, 'danger');
-        }
-      },
-    });
-  };
-
-  // ===== scheduler actions (Phase 2) =====
-  // 409 (มีการวางแผนซ้อน) → warning / อื่นๆ → danger
-  const planErrorToast = useCallback(
-    (err) => {
-      const msg = String(err.message || err);
-      showToast(msg, msg.includes('กำลังทำงานอยู่') ? 'warning' : 'danger');
-    },
-    [showToast],
-  );
-
-  // Initial Plan (order_management_screen.dart L332-383)
-  const runInitialPlan = async () => {
-    setPreviousOrderList(JSON.parse(JSON.stringify(orders))); // snapshot ก่อนคำนวณ
-    setIsPlanning(true);
-    showToast('กำลังคำนวณ Initial Plan...', 'info');
-    try {
-      const decoded = await apiCall('/schedule/run', { method: 'POST' });
-      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
-      fetchTimestamps();
-      navigate('/planning');
-    } catch (err) {
-      planErrorToast(err);
-    } finally {
-      setIsPlanning(false);
-    }
-  };
-
-  const handleInitialPlan = () => {
-    // กล่องเตือนสีแดงเดิม (order_management_screen.dart L1064-1128)
-    setConfirm({
-      title: 'ยืนยันการรัน Initial Plan',
-      body: 'คุณต้องการล้างแผนการผลิตทั้งหมดใช่หรือไม่?',
-      confirmLabel: 'ยืนยัน (ล้างแผน)',
-      variant: 'danger',
-      onConfirm: runInitialPlan,
-    });
-  };
-
-  // Replan (order_management_screen.dart L386-442) — snapshot จาก baseline (deep copy)
-  const runReplan = async (saveHistory = true) => {
-    if (saveHistory) {
-      setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? [])));
-    }
-    setIsPlanning(true);
-    showToast('กำลังคำนวณ Replan (ล็อกเวลา FIXED)...', 'info');
-    try {
-      const decoded = await apiCall('/schedule/replan', { method: 'POST' });
-      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
-      fetchTimestamps();
-      navigate('/planning');
-    } catch (err) {
-      planErrorToast(err);
-    } finally {
-      setIsPlanning(false);
-    }
-  };
-
-  const handleReplan = () => {
-    // FIX: ของเก่ารันทันทีไม่มี confirm — user เลือกเพิ่ม dialog (2026-07-16)
-    setConfirm({
-      title: 'ยืนยันการรัน Replan',
-      body: 'ระบบจะคำนวณแผนการผลิตใหม่ทั้งหมด (ล็อกเวลาเฉพาะออเดอร์ FIXED)\n\nต้องการดำเนินการต่อหรือไม่?',
-      confirmLabel: 'ยืนยัน Replan',
-      variant: 'info',
-      onConfirm: () => runReplan(true),
-    });
-  };
-
-  // Undo (order_management_screen.dart L270-329): restore -> refetch -> auto-replan
+  // Undo — restore snapshot แล้ว refetch (ไม่ replan อัตโนมัติ; ผู้ใช้กด Replan เอง)
   const handleUndo = async () => {
     if (!previousOrderList) return;
     setIsPlanning(true);
@@ -616,17 +591,17 @@ const OrderControlTower = () => {
       });
       baselineRef.current = null; // ให้ fetchOrders จำ baseline ใหม่จากข้อมูลที่เพิ่ง restore
       await fetchOrders();
+      await fetchTimestamps();
       setPreviousOrderList(null);
-      showToast('⏪ โหลดแผนเดิมสำเร็จ! กำลังคำนวณตารางใหม่...', 'warning');
-      // หน่วงให้เห็นว่าตารางกลับเป็นของเดิมก่อน (เหมือนเดิม 1.5 วิ) แล้ว replan อัตโนมัติ
-      await new Promise((r) => setTimeout(r, 1500));
-      await runReplan(false); // auto-replan ไม่เก็บ history และไม่ต้อง confirm
+      showToast('⏪ คืนลำดับเดิมสำเร็จ — กด Replan เพื่อคำนวณแผนใหม่', 'warning');
     } catch (err) {
       showToast(err.message, 'danger');
     } finally {
       setIsPlanning(false);
     }
   };
+
+  const busy = isPlanning || !!preview;
 
   return (
     <Container fluid className="pb-4">
@@ -651,6 +626,14 @@ const OrderControlTower = () => {
         }
         actions={
           <>
+            <Button
+              variant="outline-primary"
+              title="ดูแผนล่าสุด"
+              aria-label="ดูแผนล่าสุด"
+              onClick={() => navigate('/planning')}
+            >
+              <i className="bi bi-calendar3 me-1" aria-hidden="true" /> ดูแผน
+            </Button>
             {canManageSettings && (
               <Button
                 variant="outline-secondary"
@@ -702,56 +685,42 @@ const OrderControlTower = () => {
           )}
         </InputGroup>
 
-        <Button className="btn-mse" onClick={() => setFormOrder(null)}>
+        <Button className="btn-mse" onClick={() => setFormOrder(null)} disabled={reorderDirty}>
           <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
         </Button>
 
         <Toolbar.End>
-          {simMode ? (
+          {reorderDirty ? (
             <>
-              <span className="chip chip-info align-self-center">
-                <i className="bi bi-flask" aria-hidden="true" /> โหมดจำลอง
+              <span className="chip chip-warn align-self-center">
+                <i className="bi bi-exclamation-circle" aria-hidden="true" /> มีลำดับที่ยังไม่บันทึก
               </span>
-              <Button variant="info" className="text-white" disabled={isPlanning} onClick={runSimulation}>
+              <Button variant="primary" disabled={busy} onClick={handleSaveReorder}>
                 {isPlanning ? (
                   <Spinner animation="border" size="sm" className="me-1" />
                 ) : (
-                  <i className="bi bi-play-fill me-1" aria-hidden="true" />
+                  <i className="bi bi-eye me-1" aria-hidden="true" />
                 )}
-                รันจำลอง
+                ดูผล &amp; บันทึกลำดับ
               </Button>
-              <Button variant="success" disabled={isPlanning} onClick={confirmApplySimulation}>
-                <i className="bi bi-check2-circle me-1" aria-hidden="true" /> ยืนยัน &amp; ใช้จริง
-              </Button>
-              <Button variant="outline-secondary" disabled={isPlanning} onClick={exitSimMode}>
-                <i className="bi bi-x-lg me-1" aria-hidden="true" /> ออกจากโหมด
+              <Button variant="outline-secondary" disabled={busy} onClick={cancelReorder}>
+                <i className="bi bi-x-lg me-1" aria-hidden="true" /> ยกเลิก
               </Button>
             </>
           ) : (
             <>
-              <Button variant={allFixed ? 'success' : 'warning'} onClick={handleToggleAllMode}>
+              <Button variant={allFixed ? 'success' : 'warning'} disabled={busy} onClick={handleToggleAllMode}>
                 <i className={`bi ${allFixed ? 'bi-unlock' : 'bi-lock-fill'} me-1`} aria-hidden="true" />
                 {allFixed ? 'ปลดล็อกทั้งหมด' : 'ล็อกทั้งหมด'}
               </Button>
               <Button
                 variant="warning"
-                disabled={!previousOrderList || isPlanning}
+                disabled={!previousOrderList || busy}
                 onClick={handleUndo}
               >
                 <i className="bi bi-arrow-90deg-left me-1" aria-hidden="true" /> ย้อนกลับ
               </Button>
-              <Button variant="outline-info" disabled={isPlanning} onClick={enterSimMode}>
-                <i className="bi bi-flask me-1" aria-hidden="true" /> จำลองแผน
-              </Button>
-              <Button variant="danger" disabled={isPlanning} onClick={handleInitialPlan}>
-                {isPlanning ? (
-                  <Spinner animation="border" size="sm" className="me-1" />
-                ) : (
-                  <i className="bi bi-arrow-counterclockwise me-1" aria-hidden="true" />
-                )}
-                Initial Plan
-              </Button>
-              <Button variant="info" disabled={isPlanning} className="text-white" onClick={handleReplan}>
+              <Button variant="info" disabled={busy} className="text-white" onClick={handleReplan}>
                 {isPlanning ? (
                   <Spinner animation="border" size="sm" className="me-1" />
                 ) : (
@@ -759,7 +728,7 @@ const OrderControlTower = () => {
                 )}
                 Replan
               </Button>
-              <Button variant="outline-primary" disabled={isPlanning} onClick={handleSortByDueDate}>
+              <Button variant="outline-primary" disabled={busy} onClick={handleSortByDueDate}>
                 <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
               </Button>
             </>
@@ -815,7 +784,7 @@ const OrderControlTower = () => {
                       key={order.batch}
                       order={order}
                       searchActive={searchActive}
-                      simMode={simMode}
+                      datesLocked={reorderDirty}
                       onEdit={(o) => setFormOrder(o)}
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
@@ -877,6 +846,17 @@ const OrderControlTower = () => {
         onHide={closeSettings}
         onSaved={onSettingsSaved}
         onError={showErrorToast}
+      />
+
+      <PlanPreviewDialog
+        show={!!preview}
+        mode={preview ? preview.mode : 'replan'}
+        diff={preview ? preview.diff : null}
+        detail={preview ? preview.detail : null}
+        loading={preview ? preview.loading : false}
+        settings={settings}
+        onConfirm={preview ? preview.onConfirm : undefined}
+        onHide={closePreview}
       />
 
       <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />
