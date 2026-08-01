@@ -1,0 +1,90 @@
+import React from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
+import DateEditDialog from '../DateEditDialog';
+import { apiCall } from '../../../api/client';
+
+// mock API client — dialog โหลดประวัติผ่าน apiCall, ดาวน์โหลดผ่าน apiDownload
+jest.mock('../../../api/client', () => ({
+  apiCall: jest.fn(),
+  apiDownload: jest.fn(),
+}));
+
+const HISTORY = [
+  {
+    id: 5,
+    date_kind: 'release',
+    date_value: '2026-08-10',
+    note: 'ลูกค้าเลื่อน',
+    file_name: 'confirm.pdf',
+    mime_type: 'application/pdf',
+    file_size: 2048,
+    created_by_name: 'ktawon',
+    display_name: 'Korn Tawonphon',
+    created_at: '2026-08-01T09:30:00',
+    has_file: true,
+  },
+  {
+    id: 4,
+    date_kind: 'release',
+    date_value: '2026-08-05',
+    note: null,
+    file_name: null,
+    display_name: 'Somchai',
+    created_at: '2026-07-31T08:00:00',
+    has_file: false,
+  },
+];
+
+const baseProps = {
+  show: true,
+  kind: 'release',
+  title: 'วัน Release งาน',
+  label: 'เลือกวัน Release',
+  icon: 'bi-calendar-check',
+  batch: 'B001',
+  currentValue: '2026-08-10',
+  onHide: jest.fn(),
+  onSubmit: jest.fn(),
+};
+
+beforeEach(() => {
+  apiCall.mockReset();
+  apiCall.mockResolvedValue(HISTORY);
+});
+
+test('writer: แสดง date/note/file inputs + ปุ่มบันทึก และโหลดประวัติ', async () => {
+  render(<DateEditDialog {...baseProps} canEdit />);
+
+  // Modal เรนเดอร์ผ่าน portal → query ที่ระดับ document
+  expect(document.querySelector('input[type="date"]')).toBeInTheDocument();
+  expect(document.querySelector('textarea')).toBeInTheDocument();
+  expect(document.querySelector('input[type="file"]')).toBeInTheDocument();
+  expect(screen.getByText('บันทึก')).toBeInTheDocument();
+
+  // ประวัติโหลดผ่าน effect
+  await waitFor(() => expect(apiCall).toHaveBeenCalled());
+  expect(apiCall).toHaveBeenCalledWith('/orders/B001/date-log?kind=release');
+  expect(await screen.findByText('Korn Tawonphon')).toBeInTheDocument();
+  expect(screen.getByText('ลูกค้าเลื่อน')).toBeInTheDocument();
+});
+
+test('แสดงลิงก์ดาวน์โหลดเฉพาะ entry ที่ has_file', async () => {
+  render(<DateEditDialog {...baseProps} canEdit />);
+  expect(await screen.findByText('confirm.pdf')).toBeInTheDocument();
+  // entry ที่ไม่มีไฟล์ (Somchai) ไม่มีปุ่มดาวน์โหลด — มีแค่ 1 ปุ่มไฟล์
+  const fileButtons = screen.getAllByTitle('ดาวน์โหลดไฟล์แนบ');
+  expect(fileButtons).toHaveLength(1);
+});
+
+test('read-only (MFG): ซ่อน input/ปุ่มบันทึก แต่ยังเห็นประวัติ', async () => {
+  render(<DateEditDialog {...baseProps} canEdit={false} />);
+
+  expect(document.querySelector('input[type="date"]')).not.toBeInTheDocument();
+  expect(document.querySelector('input[type="file"]')).not.toBeInTheDocument();
+  expect(screen.queryByText('บันทึก')).not.toBeInTheDocument();
+  expect(screen.getByText('ปิด')).toBeInTheDocument();
+
+  // ประวัติ + ดาวน์โหลดยังใช้ได้
+  expect(await screen.findByText('Korn Tawonphon')).toBeInTheDocument();
+  expect(screen.getByText('confirm.pdf')).toBeInTheDocument();
+});

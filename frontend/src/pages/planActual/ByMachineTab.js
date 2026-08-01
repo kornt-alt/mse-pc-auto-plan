@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Form, Button, Spinner } from 'react-bootstrap';
-import { RefreshCw, Factory } from 'lucide-react';
 import { apiCall } from '../../api/client';
 import { DateCell, stickyStyle, dateCellStyle, ROW_HEIGHT } from './matrixCells';
 
@@ -131,15 +130,15 @@ const ByMachineTab = () => {
             disabled={!selectedMachine}
             onClick={() => fetchPlanVsActual(selectedMachine)}
           >
-            <RefreshCw size={14} />
+            <i className="bi bi-arrow-clockwise" aria-hidden="true" />
           </Button>
         </div>
       </div>
 
       {!selectedMachine ? (
         <div className="text-center text-muted py-5">
-          <Factory size={64} color="#bdbdbd" className="mb-3" />
-          <div className="fw-bold">⚠️ กรุณาเลือกเครื่องจักรด้านบนเพื่อแสดงข้อมูล</div>
+          <i className="bi bi-building-gear" style={{ fontSize: '4rem', opacity: 0.4 }} aria-hidden="true" />
+          <div className="fw-bold mt-3">เลือกเครื่องจักรด้านบนเพื่อแสดงข้อมูล</div>
         </div>
       ) : loading ? (
         <div className="text-center py-5">

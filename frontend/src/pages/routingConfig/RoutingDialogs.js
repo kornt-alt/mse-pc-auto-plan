@@ -63,7 +63,7 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
           setup_group: form.setup_group,
         }),
       });
-      onSaved('✅ บันทึก Routing สำเร็จ!');
+      onSaved('บันทึก Routing แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -74,7 +74,10 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
   return (
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
-        <Modal.Title style={{ fontSize: '1.1rem' }}>✏️ แก้ไข Routing</Modal.Title>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>
+          <i className="bi bi-pencil-square me-2" aria-hidden="true" />
+          แก้ไข Routing
+        </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <Row className="g-2">
@@ -156,7 +159,7 @@ export const EditMachineDialog = ({ show, row, machines, onHide, onSaved, onErro
           jig_id: form.jig_id,
         }),
       });
-      onSaved('✅ บันทึก Machine Config สำเร็จ!');
+      onSaved('บันทึก Machine Config แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -167,7 +170,10 @@ export const EditMachineDialog = ({ show, row, machines, onHide, onSaved, onErro
   return (
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
-        <Modal.Title style={{ fontSize: '1.1rem' }}>✏️ แก้ไข Machine Config</Modal.Title>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>
+          <i className="bi bi-pencil-square me-2" aria-hidden="true" />
+          แก้ไข Machine Config
+        </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <Row className="g-2">
@@ -286,7 +292,7 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
           jig_id: resolveJigId(form.jig_id, model, form.machine, form.step_index),
         }),
       });
-      onSaved('✅ แทรก Step สำเร็จ!');
+      onSaved('แทรก Step แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -297,7 +303,10 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
   return (
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
-        <Modal.Title style={{ fontSize: '1.1rem' }}>➕ แทรก Step ใหม่ ({model})</Modal.Title>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>
+          <i className="bi bi-plus-lg me-2" aria-hidden="true" />
+          แทรก Step ใหม่ ({model})
+        </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <p className="text-muted small">Step ตั้งแต่ตำแหน่งนี้จะถูกเลื่อนลง 1 ตำแหน่ง</p>
@@ -401,7 +410,7 @@ export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, 
           jig_id: resolveJigId(form.jig_id, model, form.machine, step?.step_index),
         }),
       });
-      onSaved('✅ เพิ่มเครื่องสำรองสำเร็จ!');
+      onSaved('เพิ่มเครื่องสำรองแล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -413,7 +422,8 @@ export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, 
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
-          ➕ เพิ่มเครื่องสำรอง (Flow {step?.flow_index}, Step {step?.step_index})
+          <i className="bi bi-plus-lg me-2" aria-hidden="true" />
+          เพิ่มเครื่องสำรอง (Flow {step?.flow_index}, Step {step?.step_index})
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -479,7 +489,7 @@ export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError 
         method: 'POST',
         body: JSON.stringify({ model, machine }),
       });
-      onSaved('✅ เพิ่ม Flow ใหม่สำเร็จ!');
+      onSaved('เพิ่ม Flow ใหม่แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -490,7 +500,10 @@ export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError 
   return (
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
-        <Modal.Title style={{ fontSize: '1.1rem' }}>➕ เพิ่ม Flow ใหม่ ({model})</Modal.Title>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>
+          <i className="bi bi-plus-lg me-2" aria-hidden="true" />
+          เพิ่ม Flow ใหม่ ({model})
+        </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <p className="text-muted small">ระบบจะสร้าง Step แรก "1ST" ให้อัตโนมัติ</p>
@@ -527,7 +540,7 @@ export const DeleteFlowDialog = ({ show, model, flows, onHide, onSaved, onError 
     try {
       const qs = `model=${encodeURIComponent(model)}&flow_index=${toInt(flowIndex)}&is_last_flow=${isLastFlow}`;
       await apiCall(`/routing_config/delete_flow?${qs}`, { method: 'DELETE' });
-      onSaved(`✅ ลบ Flow ${flowIndex} สำเร็จ!`);
+      onSaved(`ลบ Flow ${flowIndex} แล้ว`);
     } catch (err) {
       onError(err.message);
     } finally {
@@ -539,7 +552,8 @@ export const DeleteFlowDialog = ({ show, model, flows, onHide, onSaved, onError 
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }} className="text-danger">
-          🗑️ ลบ Flow ({model})
+          <i className="bi bi-trash me-2" aria-hidden="true" />
+          ลบ Flow ({model})
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -553,7 +567,7 @@ export const DeleteFlowDialog = ({ show, model, flows, onHide, onSaved, onError 
         </Form.Select>
         <p className="text-muted small mt-2">
           {isLastFlow
-            ? '⚠️ เป็น Flow สุดท้าย — ระบบจะยุบเหลือ Step เดียว (flow 0)'
+            ? 'เป็น Flow สุดท้าย — ระบบจะยุบเหลือ Step เดียว (flow 0)'
             : 'Flow ที่มากกว่าจะถูกเลื่อนลำดับลง 1'}
         </p>
       </Modal.Body>
@@ -585,7 +599,7 @@ export const BulkSetupGroupDialog = ({ show, model, onHide, onSaved, onError }) 
         method: 'PUT',
         body: JSON.stringify({ new_setup_group: value }),
       });
-      onSaved('✅ แก้ Setup Group สำเร็จ!');
+      onSaved('แก้ Setup Group แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {

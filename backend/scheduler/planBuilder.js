@@ -18,10 +18,13 @@ const tupleCompare = (a, b) => {
   return 0;
 };
 
-// logic.py L44-85: แถว orders (join setup_group แล้ว) -> raw_orders ป้อน OrderManager
+// logic.py L44-135 (ฟีเจอร์ Mat'l/Confirm/Simulation): แถว orders -> raw_orders ป้อน OrderManager
 // orderRows = แถวจากตาราง orders (ผ่าน WHERE is_deleted=0 AND plan_mode<>'COMPLETED' แล้ว)
 // pmMap = { model: setup_group } จาก product_master (LEFT JOIN -> ไม่มี = undefined)
-function buildRawOrders(orderRows, pmMap, todayStr, isReplan) {
+// startedBatchSet = Set ของ batch ที่มียอดผลิต (qty_ok+qty_ng) > 0 -> has_actuals
+// priorityOverrides = { batch: priority } สวมรอย priority ตอน simulation ({} = ใช้ของเดิม)
+// planModeOverrides = { batch: 'FIXED'|'NEW' } สวมรอย plan_mode ตอน simulation (lock/unlock preview)
+function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = new Set(), priorityOverrides = {}, planModeOverrides = {}) {
   const rawOrders = [];
   for (const row of orderRows) {
     const setupGroupVal = pmMap[row.model];
@@ -30,7 +33,10 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan) {
 
     const wMachine = row.wip_machine || '';
 
-    let planMode = row.plan_mode || 'NEW';
+    // Simulation: สวมรอย plan_mode ถ้าส่ง override มา (ก่อนกฎ FIXED->NEW ของ !isReplan)
+    const modeOverride = Object.prototype.hasOwnProperty.call(planModeOverrides, row.batch)
+      ? planModeOverrides[row.batch] : null;
+    let planMode = modeOverride || row.plan_mode || 'NEW';
     if (!isReplan && planMode.toUpperCase() === 'FIXED') planMode = 'NEW'; // L65
 
     let rDate = row.release_date || '';
@@ -41,13 +47,34 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan) {
 
     if (planMode === 'NEW' && !rDate && !wFinishDate) rDate = todayStr; // L74-75
 
+    // Mat'l: effective_ready_date = max(release, material) เทียบ string (logic.py L86-94)
+    let matDate = row.material_ready_date || '';
+    if (['none', 'null'].includes(matDate.toLowerCase())) matDate = '';
+    const effRelDate = rDate ? rDate : todayStr;
+    const effMatDate = matDate ? matDate : todayStr;
+    const effectiveDate = effRelDate > effMatDate ? effRelDate : effMatDate;
+
+    // Confirm/VIP: normalize ค่าที่ไม่ใช่วันจริงให้เป็น '' (logic.py L96-102)
+    let confDate = row.confirm_reply_date || '';
+    if (['none', 'null', 'wait', ''].includes(String(confDate).toLowerCase())) confDate = '';
+
+    const hasActuals = startedBatchSet.has(row.batch);
+
+    // Simulation: สวมรอย priority ถ้าส่ง override มา (logic.py L104-105)
+    const hasOverride = Object.prototype.hasOwnProperty.call(priorityOverrides, row.batch);
+    const simulatedPriority = hasOverride ? priorityOverrides[row.batch] : row.priority;
+    const priorityVal = simulatedPriority !== null && simulatedPriority !== undefined ? Number(simulatedPriority) : 99;
+
     rawOrders.push({
       Batch: row.batch, Model: row.model, dueDate: row.due_date,
-      priority: row.priority, qty: row.qty, planMode,
+      priority: priorityVal, qty: row.qty, planMode,
       WIP_FlowIndex: wFlowIdx, WIP_StartStepIndex: wStepIdx,
       WIP_FinishDate: wFinishDate, WIP_Machine: wMachine,
       planningMode: row.planning_mode || 'forward', releaseDate: rDate,
+      effectiveReadyDate: effectiveDate,
       setup_group: setupGroupVal ? setupGroupVal : row.model, // falsy ('' / null) -> model
+      confirm_reply_date: confDate,
+      has_actuals: hasActuals,
     });
   }
   return rawOrders;
@@ -398,6 +425,62 @@ function buildShipmentReport(mainPlan, statusMap, safeOrders) {
   return keyed.map(([, , x]) => x);
 }
 
+// logic.py L523-528: แปลง d/m/Y -> Y-m-d (ค่าเราส่วนใหญ่เป็น Y-m-d อยู่แล้ว = identity)
+function safeDateFormat(dateStr) {
+  const s = String(dateStr);
+  if (s.includes('/')) {
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  }
+  return s;
+}
+
+// logic.py L508-536: program_notes จาก start_date เทียบ material_ready_date
+// material ว่าง → ใช้ start แทน (→ "Material enough"); ไม่มี start → "N/A (Missing Date)"
+function computeProgramNote(startDate, materialDate) {
+  let mat = materialDate;
+  if (!mat || ['NULL', 'NONE', ''].includes(String(mat).trim().toUpperCase())) mat = startDate;
+  if (startDate && mat) {
+    return safeDateFormat(startDate) < safeDateFormat(mat) ? 'Please pull in material' : 'Material enough';
+  }
+  return 'N/A (Missing Date)';
+}
+
+// logic.py L457-541: คำนวณ start(min)/fg(max)/program_notes ต่อ target batch (แตก sub-batch)
+// เขียนกลับ orders หลังวางแผน — orderStateMap = ค่าปัจจุบัน { batch: {start_date, fg_date, material_ready_date} }
+// (actual '-' = ไม่มีแถวในแผน → คงค่าเดิมไว้ ตรง logic.py ที่ตั้งเฉพาะเมื่อ != '-')
+function buildOrderDateUpdates(mainPlan, statusMap, safeOrders, orderStateMap) {
+  const batchStartMap = {};
+  const batchFinishMap = {};
+  for (const row of mainPlan) {
+    const d = row.date;
+    if (DROP_DATES.includes(d)) continue;
+    const b = row.batch;
+    if (!(b in batchFinishMap) || d > batchFinishMap[b]) batchFinishMap[b] = d;
+    if (!(b in batchStartMap) || d < batchStartMap[b]) batchStartMap[b] = d;
+  }
+
+  const safeIds = new Set(safeOrders.map((o) => o.Batch));
+  const updates = [];
+  for (const [bId, info] of statusMap) {
+    if (!safeIds.has(bId)) continue;
+    const actualStart = bId in batchStartMap ? batchStartMap[bId] : '-';
+    const actualFinish = bId in batchFinishMap ? batchFinishMap[bId] : '-';
+    const subBatches = info.original_batches ?? [];
+    const targets = subBatches.length > 0
+      ? subBatches.map((s) => (isDict(s) ? s.batch : s))
+      : [bId];
+    for (const targetId of targets) {
+      const state = orderStateMap[targetId] ?? {};
+      const startDate = actualStart !== '-' ? actualStart : (state.start_date ?? null);
+      const fgDate = actualFinish !== '-' ? actualFinish : (state.fg_date ?? null);
+      const programNotes = computeProgramNote(startDate, state.material_ready_date);
+      updates.push({ batch: targetId, startDate, fgDate, programNotes });
+    }
+  }
+  return updates;
+}
+
 module.exports = {
   buildRawOrders,
   rejectMissingRouting,
@@ -410,4 +493,7 @@ module.exports = {
   toScheduleResultRows,
   cleanDisplayData,
   buildShipmentReport,
+  safeDateFormat,
+  computeProgramNote,
+  buildOrderDateUpdates,
 };

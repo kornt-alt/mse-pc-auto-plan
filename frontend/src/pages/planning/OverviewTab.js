@@ -237,8 +237,9 @@ const OverviewTab = ({ planData }) => {
         onExport={handleExport}
       />
       {nothingSelected ? (
-        <div className="text-center py-5 fw-bold" style={{ color: '#546e7a' }}>
-          กรุณาเลือกเครื่องจักร หรือ Batch ด้านบนเพื่อดูแผนการผลิต 🏭
+        <div className="empty-state">
+          <i className="bi bi-funnel" aria-hidden="true" />
+          <div className="fw-bold">เลือกเครื่องจักรหรือ Batch ด้านบนเพื่อดูแผนการผลิต</div>
         </div>
       ) : (
         <div className="planning-matrix-wrap">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Form, Button, Table, Spinner, Toast, ToastContainer } from 'react-bootstrap';
-import { Search, RefreshCw } from 'lucide-react';
+import { Card, Form, Button, Table, Spinner } from 'react-bootstrap';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import { apiCall } from '../../api/client';
 
 // WIP ค้นหารายการ — port จาก wip_screen_batch.dart
@@ -11,7 +11,7 @@ const SearchTab = () => {
   const [wipData, setWipData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [toast, setToast] = useState(null);
+  const { toast, showToast, hideToast } = useToast();
 
   useEffect(() => {
     apiCall('/wip/options')
@@ -32,12 +32,12 @@ const SearchTab = () => {
       setWipData(res.data || []);
     } catch (err) {
       // apiCall รวม error ทุกแบบเป็น throw เดียว (ของเดิมแยก "เกิดข้อผิดพลาดจาก Server: {code}")
-      setToast({ message: `❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้: ${err.message}` });
+      showToast(`ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้: ${err.message}`, 'danger');
       setWipData([]);
     } finally {
       setLoading(false);
     }
-  }, [searchBatch, searchDesc]);
+  }, [searchBatch, searchDesc, showToast]);
 
   const resetSearch = () => {
     setSearchDesc('');
@@ -86,12 +86,12 @@ const SearchTab = () => {
               </datalist>
             </Form.Group>
             <Button type="submit" size="sm" className="btn-mse">
-              <Search size={14} className="me-1" />
+              <i className="bi bi-search me-1" aria-hidden="true" />
               ค้นหา
             </Button>
             <Button type="button" size="sm" variant="outline-secondary" onClick={resetSearch}>
-              <RefreshCw size={14} className="me-1" />
-              Reset
+              <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />
+              ล้างคำค้นหา
             </Button>
           </Form>
         </Card.Body>
@@ -104,18 +104,20 @@ const SearchTab = () => {
               <Spinner animation="border" />
             </div>
           ) : !hasSearched ? (
-            <div className="text-center fw-bold py-5" style={{ color: '#9e9e9e', fontSize: 18 }}>
-              🔍 กรุณาพิมพ์คำค้นหาเพื่อดูข้อมูล WIP
+            <div className="empty-state">
+              <i className="bi bi-search" aria-hidden="true" />
+              <div>พิมพ์คำค้นหาเพื่อดูข้อมูล WIP</div>
             </div>
           ) : wipData.length === 0 ? (
-            <div className="text-center py-5" style={{ color: '#ff5252', fontSize: 18 }}>
-              📭 ไม่พบข้อมูลที่ค้นหา
+            <div className="empty-state">
+              <i className="bi bi-inbox" aria-hidden="true" />
+              <div>ไม่พบข้อมูลที่ค้นหา</div>
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <Table bordered hover size="sm">
                 <thead>
-                  <tr style={{ backgroundColor: '#FFECB3' }}>
+                  <tr>
                     <th>Description</th>
                     <th>Model</th>
                     <th>Batch</th>
@@ -130,7 +132,7 @@ const SearchTab = () => {
                       <td>{row.model}</td>
                       <td>{row.batch}</td>
                       <td>{row.step}</td>
-                      <td className="fw-bold" style={{ color: '#1565C0' }}>
+                      <td className="fw-bold num" style={{ color: 'var(--mse-info)' }}>
                         {row.qty}
                       </td>
                     </tr>
@@ -142,11 +144,7 @@ const SearchTab = () => {
         </Card.Body>
       </Card>
 
-      <ToastContainer position="bottom-end" className="p-3" style={{ zIndex: 2000 }}>
-        <Toast show={!!toast} onClose={() => setToast(null)} delay={3500} autohide bg="danger">
-          <Toast.Body className="text-white">{toast?.message}</Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </div>
   );
 };

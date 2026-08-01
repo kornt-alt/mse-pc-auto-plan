@@ -35,7 +35,8 @@ const GenerateCalendarDialog = ({ show, onHide, onSubmit }) => {
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }} className="text-success fw-bold">
-          🗓️ สร้างปฏิทินอัตโนมัติ
+          <i className="bi bi-calendar-plus me-2" aria-hidden="true" />
+          สร้างปฏิทินอัตโนมัติ
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -83,7 +84,8 @@ const GenerateCalendarDialog = ({ show, onHide, onSubmit }) => {
           ยกเลิก
         </Button>
         <Button variant="success" onClick={handleSave}>
-          เสกปฏิทิน! 🪄
+          <i className="bi bi-calendar-plus me-1" aria-hidden="true" />
+          สร้างปฏิทิน
         </Button>
       </Modal.Footer>
     </Modal>

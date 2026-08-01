@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Form, Button, Modal, Spinner, InputGroup } from 'react-bootstrap';
-import { RefreshCw, Search } from 'lucide-react';
 import { apiCall } from '../../api/client';
 
 // Machine Queue — port จาก MachineQueueDashboard (shop_floor_screen.dart L2303-2972)
@@ -140,7 +139,10 @@ const MachineQueuePanel = ({ embedded = false, highlightBatch = null, height, fi
                     {row.batch}
                   </Button>
                   {row.is_pack && (
-                    <div className="small text-muted">📦 {row.parent_pack}</div>
+                    <div className="small text-muted">
+                      <i className="bi bi-box-seam me-1" aria-hidden="true" />
+                      {row.parent_pack}
+                    </div>
                   )}
                 </td>
                 <td>{row.model}</td>
@@ -159,7 +161,7 @@ const MachineQueuePanel = ({ embedded = false, highlightBatch = null, height, fi
           {filtered.length === 0 && !loading && (
             <tr>
               <td colSpan={9} className="text-center text-muted py-3">
-                ไม่มีแผนงาน หรือ ค้นหาไม่พบ 📭
+                ไม่มีแผนงาน หรือค้นหาไม่พบ
               </td>
             </tr>
           )}
@@ -187,10 +189,10 @@ const MachineQueuePanel = ({ embedded = false, highlightBatch = null, height, fi
           <strong>Plan for {machine || '-'}</strong>
           <InputGroup size="sm" style={{ maxWidth: 260 }}>
             <InputGroup.Text>
-              <Search size={14} />
+              <i className="bi bi-search" aria-hidden="true" />
             </InputGroup.Text>
             <Form.Control
-              placeholder="🔍 ค้นหา Batch หรือ Model..."
+              placeholder="ค้นหา Batch หรือ Model..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -202,7 +204,7 @@ const MachineQueuePanel = ({ embedded = false, highlightBatch = null, height, fi
             onClick={() => fetchQueue(machine)}
             disabled={!machine || loading}
           >
-            <RefreshCw size={14} />
+            <i className="bi bi-arrow-clockwise" aria-hidden="true" />
           </Button>
           {loading && <Spinner animation="border" size="sm" />}
         </div>

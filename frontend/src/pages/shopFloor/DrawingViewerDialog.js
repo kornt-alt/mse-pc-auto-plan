@@ -29,7 +29,10 @@ const DrawingViewerDialog = ({ show, model, onHide }) => {
     return (
       <Modal show centered onHide={onHide}>
         <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: '1.05rem' }}>⚠️ ไม่พบไฟล์ Drawing</Modal.Title>
+          <Modal.Title style={{ fontSize: '1.05rem' }}>
+            <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
+            ไม่พบไฟล์แบบงาน
+          </Modal.Title>
         </Modal.Header>
         <Modal.Body style={{ whiteSpace: 'pre-line' }}>
           {`หาไฟล์ของโมเดล ${model} ไม่เจอใน Server ครับ\n\n(Path: ${pdfUrl})`}
@@ -46,7 +49,10 @@ const DrawingViewerDialog = ({ show, model, onHide }) => {
   return (
     <Modal show fullscreen onHide={onHide} contentClassName="bg-dark">
       <Modal.Header closeButton closeVariant="white" className="bg-dark text-white py-2">
-        <Modal.Title style={{ fontSize: '1rem' }}>📐 Drawing Viewer: {model}</Modal.Title>
+        <Modal.Title style={{ fontSize: '1rem' }}>
+          <i className="bi bi-rulers me-2" aria-hidden="true" />
+          แบบงาน: {model}
+        </Modal.Title>
       </Modal.Header>
       <Modal.Body className="p-0">
         {checked && (

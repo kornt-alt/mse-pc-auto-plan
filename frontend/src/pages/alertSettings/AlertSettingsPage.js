@@ -10,25 +10,44 @@ import {
   Modal,
   Badge,
   Spinner,
-  Toast,
-  ToastContainer,
 } from 'react-bootstrap';
-import { Plus, Pencil, Trash2, Mail } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import PageHeader from '../../components/shared/PageHeader';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
+import useTableFilter from '../../components/shared/useTableFilter';
+import TableFilterBar from '../../components/shared/TableFilterBar';
+import TablePagination from '../../components/shared/TablePagination';
 
 const emptyForm = () => ({ email: '', recipient_type: 'TO', label: '' });
+
+// ค่าใน DB เป็น TO/CC และ 0/1 — แปลงเป็นคำที่โชว์ในตารางก่อนกรอง จะได้ตรงกับที่ผู้ใช้เห็น
+const typeLabel = (r) => (String(r.recipient_type).toUpperCase() === 'CC' ? 'CC' : 'To');
+const activeLabel = (r) => (r.is_active ? 'ใช้งานอยู่' : 'ปิดใช้งาน');
+
+const FILTER_FIELDS = [
+  { key: 'email', label: 'Email', type: 'text', width: 220 },
+  { key: 'label', label: 'ชื่อ/แผนก', type: 'text', width: 180 },
+  { key: 'type_label', label: 'ประเภท', type: 'select', options: ['To', 'CC'], value: typeLabel, width: 130 },
+  {
+    key: 'active_label',
+    label: 'ใช้งาน',
+    type: 'select',
+    options: ['ใช้งานอยู่', 'ปิดใช้งาน'],
+    value: activeLabel,
+    width: 140,
+  },
+];
 
 const AlertSettingsPage = () => {
   const [recipients, setRecipients] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState(null);
 
   const [editing, setEditing] = useState(null); // null | {} (add) | recipient (edit)
   const [form, setForm] = useState(emptyForm());
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null); // recipient to delete
 
-  const showToast = useCallback((message, variant = 'success') => setToast({ message, variant }), []);
+  const { toast, showToast, hideToast } = useToast();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -63,10 +82,10 @@ const AlertSettingsPage = () => {
           method: 'PUT',
           body: JSON.stringify(form),
         });
-        showToast('✅ อัปเดตผู้รับสำเร็จ');
+        showToast('อัปเดตผู้รับแล้ว');
       } else {
         await apiCall('/alert/recipients', { method: 'POST', body: JSON.stringify(form) });
-        showToast('✅ เพิ่มผู้รับสำเร็จ');
+        showToast('เพิ่มผู้รับแล้ว');
       }
       setEditing(null);
       load();
@@ -94,7 +113,7 @@ const AlertSettingsPage = () => {
     setBusy(true);
     try {
       await apiCall(`/alert/recipients/${confirm.id}`, { method: 'DELETE' });
-      showToast('✅ ลบผู้รับสำเร็จ');
+      showToast('ลบผู้รับแล้ว');
       setConfirm(null);
       load();
     } catch (err) {
@@ -104,30 +123,47 @@ const AlertSettingsPage = () => {
     }
   };
 
+  // คิดจากผู้รับทั้งชุดเสมอ — ถ้าคิดจากชุดที่กรองแล้ว พอกรองเป็น CC จะขึ้นคำเตือนผิด
   const activeTo = recipients.filter((r) => r.is_active && String(r.recipient_type).toUpperCase() === 'TO').length;
+
+  const table = useTableFilter(recipients, FILTER_FIELDS, { pageSize: 20 });
 
   return (
     <Container className="pb-4" style={{ maxWidth: 900 }}>
-      <h4 className="text-mse fw-bold mb-1">
-        <Mail size={20} className="me-2" />
-        ตั้งค่าแจ้งเตือน (ผู้รับอีเมล)
-      </h4>
-      <p className="text-muted small">
-        รายชื่อผู้รับอีเมลแจ้งเตือน Model ที่ยังไม่มี Routing Master — To อย่างน้อย 1 รายที่ active
-        จึงจะส่งได้
-      </p>
+      <PageHeader
+        icon="bi-envelope"
+        title="ตั้งค่าแจ้งเตือน"
+        subtitle="ผู้รับอีเมลแจ้งเตือน Model ที่ยังไม่มี Routing Master — ต้องมีผู้รับประเภท To ที่เปิดใช้งานอย่างน้อย 1 ราย"
+      />
 
       {activeTo === 0 && !loading && (
-        <div className="alert alert-warning py-2 small">
-          ⚠️ ยังไม่มีผู้รับประเภท <b>To</b> ที่เปิดใช้งาน — ระบบจะส่งอีเมลไม่ได้
+        <div className="alert alert-warning py-2 small d-flex align-items-center gap-2">
+          <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" />
+          <span>
+            ยังไม่มีผู้รับประเภท <b>To</b> ที่เปิดใช้งาน — ระบบจะส่งอีเมลไม่ได้
+          </span>
         </div>
       )}
 
+      <TableFilterBar
+        id="alert-filter"
+        fields={FILTER_FIELDS}
+        filters={table.filters}
+        options={table.options}
+        activeCount={table.activeCount}
+        onChange={table.setFilter}
+        onReset={table.resetFilters}
+      />
+
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
-          <span className="fw-bold">ผู้รับทั้งหมด ({recipients.length})</span>
+          <span className="fw-bold">
+            {table.activeCount > 0
+              ? `ผู้รับที่ตรงฟิลเตอร์ (${table.filteredCount} จาก ${table.total})`
+              : `ผู้รับทั้งหมด (${table.total})`}
+          </span>
           <Button size="sm" className="btn-mse" onClick={openAdd}>
-            <Plus size={14} className="me-1" />
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" />
             เพิ่มผู้รับ
           </Button>
         </Card.Header>
@@ -148,20 +184,20 @@ const AlertSettingsPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {recipients.length === 0 ? (
+                {table.rows.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center text-muted py-3">
-                      ยังไม่มีผู้รับ — กด "เพิ่มผู้รับ"
+                      {table.activeCount > 0
+                        ? 'ไม่มีผู้รับตรงกับฟิลเตอร์ที่เลือก'
+                        : 'ยังไม่มีผู้รับ — กด "เพิ่มผู้รับ"'}
                     </td>
                   </tr>
                 ) : (
-                  recipients.map((r) => (
+                  table.rows.map((r) => (
                     <tr key={r.id}>
                       <td>{r.email}</td>
                       <td>
-                        <Badge bg={String(r.recipient_type).toUpperCase() === 'CC' ? 'secondary' : 'primary'}>
-                          {String(r.recipient_type).toUpperCase() === 'CC' ? 'CC' : 'To'}
-                        </Badge>
+                        <Badge bg={typeLabel(r) === 'CC' ? 'secondary' : 'primary'}>{typeLabel(r)}</Badge>
                       </td>
                       <td className="text-muted">{r.label || '-'}</td>
                       <td className="text-center">
@@ -172,18 +208,26 @@ const AlertSettingsPage = () => {
                         />
                       </td>
                       <td className="text-end text-nowrap">
-                        <Pencil
-                          size={15}
-                          role="button"
-                          className="text-primary me-2"
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0 me-3 text-primary icon-btn"
+                          title="แก้ไขผู้รับ"
+                          aria-label={`แก้ไขผู้รับ ${r.email}`}
                           onClick={() => openEdit(r)}
-                        />
-                        <Trash2
-                          size={15}
-                          role="button"
-                          className="text-danger"
+                        >
+                          <i className="bi bi-pencil-square" aria-hidden="true" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0 text-danger icon-btn"
+                          title="ลบผู้รับ"
+                          aria-label={`ลบผู้รับ ${r.email}`}
                           onClick={() => setConfirm(r)}
-                        />
+                        >
+                          <i className="bi bi-trash" aria-hidden="true" />
+                        </Button>
                       </td>
                     </tr>
                   ))
@@ -193,6 +237,22 @@ const AlertSettingsPage = () => {
           )}
         </Card.Body>
       </Card>
+
+      {!loading && table.filteredCount > 0 && (
+        <TablePagination
+          id="alert"
+          unit="ราย"
+          page={table.page}
+          pageCount={table.pageCount}
+          pageSize={table.pageSize}
+          onPageChange={table.setPage}
+          onPageSizeChange={table.setPageSize}
+          from={table.from}
+          to={table.to}
+          filteredCount={table.filteredCount}
+          total={table.total}
+        />
+      )}
 
       {/* add/edit modal */}
       <Modal show={!!editing} onHide={() => setEditing(null)} centered>
@@ -256,13 +316,7 @@ const AlertSettingsPage = () => {
         </Modal.Footer>
       </Modal>
 
-      <ToastContainer position="bottom-end" className="p-3">
-        {toast && (
-          <Toast bg={toast.variant} onClose={() => setToast(null)} show delay={3500} autohide>
-            <Toast.Body className="text-white">{toast.message}</Toast.Body>
-          </Toast>
-        )}
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </Container>
   );
 };

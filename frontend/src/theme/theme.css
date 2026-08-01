@@ -1,14 +1,86 @@
-/* MSE Auto Plan — brand theme (สีหลักจากระบบเดิม #154395) */
+/* MSE Auto Plan — brand theme
+ * สีทุกค่าในไฟล์นี้คือสีที่ระบบใช้อยู่เดิม (ยกมาจาก Flutter/Material palette) แค่ตั้งชื่อให้เรียกซ้ำได้
+ * ห้ามเพิ่มเฉดใหม่ — ถ้าต้องการสีที่ยังไม่มี ให้ใช้ตัวที่ใกล้เคียงที่สุดในตารางนี้
+ */
 :root {
+  /* แบรนด์ */
   --mse-primary: #154395;
   --mse-primary-dark: #0e2f6b;
+  --mse-primary-soft: #e8eaf6;
   --mse-accent: #ff9800;
+  --mse-info: #1565c0;
+
+  /* สถานะ */
+  --mse-ok: #2e7d32;
+  --mse-ok-bg: #e8f5e9;
+  --mse-ng: #c62828;
+  --mse-ng-bg: #ffebee;
+  --mse-warn: #f57c00;
+  --mse-warn-bg: #fff3e0;
+
+  /* พื้นผิว */
+  --mse-surface: #fff;
+  --mse-canvas: #f4f6fa;
+  --mse-border: #dee2e6;
+  --mse-head-bg: #e8eaf6;
+  --mse-muted: #6c757d;
+
+  /* รูปทรง */
+  --mse-radius: 10px;
+  --mse-radius-sm: 6px;
+
+  /* สเกลตัวอักษร */
+  --fs-page: 1.25rem;
+  --fs-section: 1.05rem;
+  --fs-body: 0.95rem;
+  --fs-meta: 0.8rem;
 }
 
+body {
+  background-color: var(--mse-canvas);
+}
+
+/* ===== navbar ===== */
 .navbar-mse {
   background-color: var(--mse-primary) !important;
 }
 
+/* ลิงก์ใน navbar: active ขีดเส้นใต้ให้เห็นว่าอยู่หน้าไหน (เดิมต่างแค่ความทึบ มองแทบไม่ออก) */
+.navbar-mse .nav-link,
+.navbar-mse .dropdown-toggle.nav-link {
+  color: rgba(255, 255, 255, 0.82);
+  border-bottom: 2px solid transparent;
+  padding-bottom: 0.35rem;
+}
+
+.navbar-mse .nav-link:hover,
+.navbar-mse .nav-link:focus-visible {
+  color: #fff;
+}
+
+/* .nav-item.active = กลุ่ม dropdown ที่หน้าปัจจุบันเป็นลูกของมัน
+ * (react-bootstrap วาง className ของ NavDropdown ไว้ที่ wrapper ไม่ใช่ที่ตัว .nav-link ข้างใน) */
+.navbar-mse .nav-link.active,
+.navbar-mse .nav-item.active > .nav-link,
+.navbar-mse .nav-item.show > .nav-link {
+  color: #fff;
+  font-weight: 600;
+  border-bottom-color: var(--mse-accent);
+}
+
+.navbar-mse .dropdown-menu {
+  border: 0;
+  border-radius: var(--mse-radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.navbar-mse .dropdown-item.active,
+.navbar-mse .dropdown-item:active {
+  background-color: var(--mse-primary);
+  color: #fff;
+}
+
+/* ===== ปุ่มแบรนด์ ===== */
 .btn-mse {
   background-color: var(--mse-primary);
   border-color: var(--mse-primary);
@@ -22,8 +94,131 @@
   color: #fff;
 }
 
+.btn-mse:disabled {
+  background-color: var(--mse-primary);
+  border-color: var(--mse-primary);
+  color: #fff;
+}
+
 .text-mse {
   color: var(--mse-primary);
+}
+
+/* โฟกัสต้องมองเห็นได้ทุกปุ่ม (เดิม .btn-mse ไม่มีวงโฟกัสเลย) */
+.btn:focus-visible,
+.nav-link:focus-visible,
+.dropdown-item:focus-visible,
+.form-control:focus-visible {
+  outline: 3px solid var(--mse-accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* ===== หัวหน้า (PageHeader) ===== */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.page-header__title {
+  font-size: var(--fs-page);
+  font-weight: 700;
+  color: var(--mse-primary);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.page-header__subtitle {
+  font-size: var(--fs-meta);
+  color: var(--mse-muted);
+  margin: 0.15rem 0 0;
+}
+
+.page-header__actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ===== toolbar ===== */
+.mse-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.mse-toolbar__end {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ===== chip สถานะ ===== */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.chip-ok {
+  background-color: var(--mse-ok-bg);
+  color: var(--mse-ok);
+}
+
+.chip-ng {
+  background-color: var(--mse-ng-bg);
+  color: var(--mse-ng);
+}
+
+.chip-warn {
+  background-color: var(--mse-warn-bg);
+  color: var(--mse-warn);
+}
+
+.chip-info {
+  background-color: var(--mse-primary-soft);
+  color: var(--mse-primary);
+}
+
+.chip-muted {
+  background-color: #eee;
+  color: #555;
+}
+
+/* ตัวเลขหลักตรงกันทุกแถว — ใช้กับคอลัมน์ตัวเลข/วันที่/รหัส Batch */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== ตาราง ===== */
+.table > thead {
+  background-color: var(--mse-head-bg);
+}
+
+/* ไม่ใส่ white-space: nowrap — ตารางแคบ (ผู้ใช้งาน/ปฏิทิน/ผู้รับอีเมล) ไม่มีกรอบเลื่อนแนวนอน
+ * หัวคอลัมน์ต้องตัดบรรทัดได้เหมือนเดิม ไม่งั้นดันหน้าให้เลื่อนซ้ายขวา */
+.table > thead th {
+  font-size: var(--fs-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #37474f;
 }
 
 /* ตารางกว้าง — เลื่อนแนวนอนในกรอบตัวเอง */
@@ -35,6 +230,51 @@
 .sticky-col {
   position: sticky;
   left: 0;
-  background-color: #fff;
+  background-color: var(--mse-surface);
   z-index: 2;
+}
+
+/* ===== การ์ด ===== */
+.card {
+  border-color: var(--mse-border);
+  border-radius: var(--mse-radius);
+}
+
+/* ===== หน้า Shop Floor (ใช้นิ้วกดบนจอสัมผัส) ===== */
+.touch-target {
+  min-height: 48px;
+  font-size: 1.05rem;
+}
+
+/* ปุ่มไอคอนในตาราง: พื้นที่กดกว้างขึ้นโดยไม่ดันความสูงแถว */
+.icon-btn {
+  min-width: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== empty state ===== */
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--mse-muted);
+}
+
+.empty-state .bi {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 0.75rem;
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

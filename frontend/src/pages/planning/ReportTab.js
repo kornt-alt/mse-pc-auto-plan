@@ -1,7 +1,6 @@
 // Shipment Date — เทียบแผน before/after จับคู่ด้วย Batch (port 1:1 จาก report_tab.dart)
 import React, { useCallback } from 'react';
 import { Button } from 'react-bootstrap';
-import { Download, ArrowUp, ArrowDown } from 'lucide-react';
 import { exportCsv } from '../../utils/csvExport';
 
 // วิเคราะห์แถว: ข้อมูลเก่า (before), สถานะ, ส่วนต่างวัน (report_tab.dart L307-362)
@@ -64,7 +63,7 @@ const ReportTab = ({ reportData, previousReportData }) => {
     <div className="d-flex flex-column align-items-center">
       <div className="py-2">
         <Button variant="success" size="sm" onClick={handleExport}>
-          <Download size={14} className="me-1" />
+          <i className="bi bi-download me-1" aria-hidden="true" />
           Export CSV
         </Button>
       </div>
@@ -112,9 +111,9 @@ const ReportTab = ({ reportData, previousReportData }) => {
                         }}
                       >
                         {a.dayDiff > 0 ? (
-                          <ArrowUp size={12} style={{ verticalAlign: 'text-top' }} />
+                          <i className="bi bi-arrow-up" style={{ fontSize: '0.75rem' }} aria-hidden="true" />
                         ) : (
-                          <ArrowDown size={12} style={{ verticalAlign: 'text-top' }} />
+                          <i className="bi bi-arrow-down" style={{ fontSize: '0.75rem' }} aria-hidden="true" />
                         )}
                         {a.dayDiff > 0 ? ` (+${a.dayDiff} วัน)` : ` (-${Math.abs(a.dayDiff)} วัน)`}
                       </span>

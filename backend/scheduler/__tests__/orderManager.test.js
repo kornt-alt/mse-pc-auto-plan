@@ -62,7 +62,7 @@ test('parseRawInput: OriginalOrders → original_batches', () => {
 });
 
 test('packOrders: merge ภายใน 30 วัน + ชื่อ PACK-{setup_group}-{dueDateNoDashes}', () => {
-  const om = new OrderManager(true, 30);
+  const om = new OrderManager(true, { pack_window_days: 30 });
   const [finals] = om.processOrders([
     order({ Batch: 'A', dueDate: '2026-08-01', qty: 10 }),
     order({ Batch: 'B', dueDate: '2026-08-31', qty: 20 }), // gap 30 → merge
@@ -79,7 +79,7 @@ test('packOrders: merge ภายใน 30 วัน + ชื่อ PACK-{setup_
 });
 
 test('packOrders: ขอบ window — gap 31 วันไม่ merge', () => {
-  const om = new OrderManager(true, 30);
+  const om = new OrderManager(true, { pack_window_days: 30 });
   const [finals] = om.processOrders([
     order({ Batch: 'A', dueDate: '2026-08-01' }),
     order({ Batch: 'B', dueDate: '2026-09-01' }), // gap 31 → แยก
@@ -93,7 +93,7 @@ test('packOrders: ขอบ window — gap 31 วันไม่ merge', () => {
 
 test('packOrders: gap นับจาก pack ปัจจุบัน (dueDate ขยายตามตัวล่าสุด)', () => {
   // A(8/1) + B(8/25) merge → due 8/25; C(9/20) ห่างจาก 8/25 = 26 วัน → merge ต่อ
-  const om = new OrderManager(true, 30);
+  const om = new OrderManager(true, { pack_window_days: 30 });
   const [finals] = om.processOrders([
     order({ Batch: 'A', dueDate: '2026-08-01', qty: 1 }),
     order({ Batch: 'B', dueDate: '2026-08-25', qty: 2 }),
@@ -105,7 +105,7 @@ test('packOrders: gap นับจาก pack ปัจจุบัน (dueDate 
 });
 
 test('packOrders: คนละ group key (planningMode ต่าง) ไม่ merge', () => {
-  const om = new OrderManager(true, 30);
+  const om = new OrderManager(true, { pack_window_days: 30 });
   const [finals] = om.processOrders([
     order({ Batch: 'A', planningMode: 'forward' }),
     order({ Batch: 'B', planningMode: 'backward' }),
@@ -114,7 +114,7 @@ test('packOrders: คนละ group key (planningMode ต่าง) ไม่ m
 });
 
 test('packOrders: order เดี่ยวไม่เปลี่ยนชื่อ', () => {
-  const om = new OrderManager(true, 30);
+  const om = new OrderManager(true, { pack_window_days: 30 });
   const [finals] = om.processOrders([order({ Batch: 'SOLO' })]);
   assert.equal(finals[0].Batch, 'SOLO');
 });
@@ -147,4 +147,80 @@ test('statusMap เป็น Map คง insertion order แม้ batch เป�
     order({ Batch: '2601140001', priority: 2, setup_group: 'GB' }),
   ]);
   assert.deepEqual([...statusMap.keys()], ['2601140009', '2601140001']);
+});
+
+// ===== ฟีเจอร์ Mat'l / Confirm / Simulation =====
+
+test('constructor: settings.pack_window_days ใช้แทน default', () => {
+  const om = new OrderManager(true, { pack_window_days: 5 });
+  assert.equal(om.packWindowDays, 5);
+  const fallback = new OrderManager(true, {}); // ไม่มี key → default 30
+  assert.equal(fallback.packWindowDays, 30);
+  const nullSettings = new OrderManager(true, null);
+  assert.equal(nullSettings.packWindowDays, 30);
+});
+
+test('parseRawInput: confirm_reply_date สวมรอยเป็น dueDate + is_vip=true', () => {
+  const om = new OrderManager(false);
+  const clean = om.parseRawInput({
+    Batch: 'V1', dueDate: '2026-09-30', confirm_reply_date: '2026-08-10',
+  });
+  assert.equal(clean.dueDate, '2026-08-10'); // confirm ชนะ dueDate เดิม
+  assert.equal(clean.confirm_reply_date, '2026-08-10');
+  assert.equal(clean.is_vip, true);
+});
+
+test('parseRawInput: ไม่มี confirm → dueDate เดิม, is_vip=false; effectiveReadyDate/has_actuals default', () => {
+  const om = new OrderManager(false);
+  const clean = om.parseRawInput({ Batch: 'N1', dueDate: '2026-09-30' });
+  assert.equal(clean.dueDate, '2026-09-30');
+  assert.equal(clean.is_vip, false);
+  assert.equal(clean.confirm_reply_date, '');
+  assert.equal(clean.effectiveReadyDate, '1970-01-01'); // default เมื่อไม่ส่งมา
+  assert.equal(clean.has_actuals, false);
+  const passed = om.parseRawInput({ Batch: 'N2', effectiveReadyDate: '2026-07-20', has_actuals: true });
+  assert.equal(passed.effectiveReadyDate, '2026-07-20');
+  assert.equal(passed.has_actuals, true);
+});
+
+test('packOrders: effectiveReadyDate ต่างกัน → แยกถุง (EFF_DATE ในคีย์)', () => {
+  const om = new OrderManager(true, { pack_window_days: 30 });
+  const [finals] = om.processOrders([
+    order({ Batch: 'A', dueDate: '2026-08-01', effectiveReadyDate: '2026-07-17' }),
+    order({ Batch: 'B', dueDate: '2026-08-02', effectiveReadyDate: '2026-07-25' }),
+  ]);
+  assert.equal(finals.length, 2); // วันพร้อมต่างกันแม้ due ใกล้กัน
+});
+
+test('packOrders: VIP (มี confirm) แยกจาก NORMAL และแยกตาม confirm date', () => {
+  const om = new OrderManager(true, { pack_window_days: 30 });
+  const [finals] = om.processOrders([
+    order({ Batch: 'N', dueDate: '2026-08-10' }),                                  // NORMAL
+    order({ Batch: 'V1', confirm_reply_date: '2026-08-10', effectiveReadyDate: '1970-01-01' }), // VIP:8/10
+    order({ Batch: 'V2', confirm_reply_date: '2026-08-10', effectiveReadyDate: '1970-01-01' }), // VIP:8/10 (เดียวกัน)
+    order({ Batch: 'V3', confirm_reply_date: '2026-08-20', effectiveReadyDate: '1970-01-01' }), // VIP:8/20
+  ]);
+  // NORMAL(N) แยก 1, VIP 8/10 (V1+V2 มัดรวม) 1, VIP 8/20 (V3) 1 = 3 ถุง
+  assert.equal(finals.length, 3);
+  const vipPack = finals.find((o) => o.original_batches.length === 2);
+  assert.deepEqual(vipPack.original_batches.map((b) => b.batch).sort(), ['V1', 'V2']);
+});
+
+test('packOrders: has_actuals บังคับฉายเดี่ยว (ACTUAL:<batch> ในคีย์)', () => {
+  const om = new OrderManager(true, { pack_window_days: 30 });
+  const [finals] = om.processOrders([
+    order({ Batch: 'A', dueDate: '2026-08-01', has_actuals: true }),
+    order({ Batch: 'B', dueDate: '2026-08-02', has_actuals: true }), // ทุกอย่างเหมือน A แต่ยังแยก
+  ]);
+  assert.equal(finals.length, 2);
+  assert.ok(finals.every((o) => o.original_batches.length === 1));
+});
+
+test('sortForScheduler: VIP ขึ้นก่อนแม้ priority แย่กว่า', () => {
+  const om = new OrderManager(false);
+  const [finals] = om.processOrders([
+    order({ Batch: 'P', priority: 1, dueDate: '2026-08-01', setup_group: 'G1' }),                 // NORMAL pri 1
+    order({ Batch: 'V', priority: 50, confirm_reply_date: '2026-08-05', setup_group: 'G2' }),     // VIP pri 50
+  ]);
+  assert.deepEqual(finals.map((o) => o.Batch), ['V', 'P']); // VIP ก่อน แม้ priority มากกว่า
 });

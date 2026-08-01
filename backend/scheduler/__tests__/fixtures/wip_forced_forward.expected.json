@@ -90,6 +90,10 @@
  ],
  "total_plan_map": {
   "2600000401": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000401",
    "qty": 200.0,
    "Model": "MODEL-A",
@@ -113,6 +117,10 @@
    "_chosenFlow": 1
   },
   "2600000402": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000402",
    "qty": 100.0,
    "Model": "MODEL-A",
@@ -136,6 +144,10 @@
    "_chosenFlow": 1
   },
   "2600000403": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000403",
    "qty": 80.0,
    "Model": "MODEL-HEAT",

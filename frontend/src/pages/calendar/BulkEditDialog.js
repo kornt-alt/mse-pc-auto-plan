@@ -22,11 +22,11 @@ const BulkEditDialog = ({ show, onHide, onSubmit }) => {
 
   const handleSave = () => {
     if (!startDate || !endDate) {
-      setError('⚠️ กรุณาเลือกวันที่ให้ครบ!');
+      setError('กรุณาเลือกวันที่ให้ครบ');
       return;
     }
     if (startDate > endDate) {
-      setError('⚠️ วันที่เริ่มต้น ต้องมาก่อนวันที่สิ้นสุด!');
+      setError('วันที่เริ่มต้นต้องมาก่อนวันที่สิ้นสุด');
       return;
     }
     onHide();
@@ -42,7 +42,8 @@ const BulkEditDialog = ({ show, onHide, onSubmit }) => {
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }} className="text-mse fw-bold">
-          🗓️ ตั้งค่าเวลาแบบกลุ่ม
+          <i className="bi bi-calendar-range me-2" aria-hidden="true" />
+          ตั้งค่าเวลาแบบกลุ่ม
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>

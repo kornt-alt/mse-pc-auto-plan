@@ -161,6 +161,10 @@
  ],
  "total_plan_map": {
   "2600000005": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000005",
    "qty": 150.0,
    "Model": "MODEL-FIX",
@@ -183,6 +187,10 @@
    "StatusLOT": "FIXED (Locked)"
   },
   "PACK-SG-ALPHA-20260815": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "PACK-SG-ALPHA-20260815",
    "qty": 1000.0,
    "Model": "MODEL-A",
@@ -214,6 +222,10 @@
    "_chosenFlow": 1
   },
   "2600000003": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000003",
    "qty": 100.0,
    "Model": "MODEL-HEAT",

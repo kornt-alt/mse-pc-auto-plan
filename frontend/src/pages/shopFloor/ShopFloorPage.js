@@ -4,15 +4,14 @@ import {
   Button,
   Form,
   Table,
-  Toast,
-  ToastContainer,
   Modal,
   Spinner,
   InputGroup,
   Badge,
 } from 'react-bootstrap';
-import { QrCode, Info, FileText, ListOrdered } from 'lucide-react';
-import { apiCall } from '../../api/client';
+import { apiCall, getCurrentUser } from '../../api/client';
+import PageHeader from '../../components/shared/PageHeader';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import useScanInput from '../../components/shared/useScanInput';
 import MachineQueuePanel from './MachineQueuePanel';
 import NumpadDialog from './NumpadDialog';
@@ -29,6 +28,12 @@ const calcWorkingDate = () => {
   if (now.getHours() < 7) now.setDate(now.getDate() - 1);
   const pad2 = (n) => String(n).padStart(2, '0');
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+};
+
+// รหัสพนักงานตั้งต้นของช่องสแกน — ผู้ใช้เดิมที่ยังไม่มี employee_code จะได้ username แทน
+const defaultEmpCode = () => {
+  const user = getCurrentUser();
+  return user.employee_code || user.username || '';
 };
 
 const ShopFloorPage = () => {
@@ -48,15 +53,8 @@ const ShopFloorPage = () => {
   const [historyStep, setHistoryStep] = useState(null); // processStep ที่เปิดประวัติ
   const [queueMachine, setQueueMachine] = useState(null); // เครื่องที่เปิด queue popup
   const [showDrawing, setShowDrawing] = useState(false);
-  const [toast, setToast] = useState(null);
-
-  const showToast = useCallback((message, variant = 'success') => {
-    setToast({ message, variant });
-  }, []);
-  const showError = useCallback(
-    (message) => showToast(`❌ ${message}`, 'danger'),
-    [showToast]
-  );
+  const { toast, showToast, hideToast } = useToast();
+  const showError = useCallback((message) => showToast(message, 'danger'), [showToast]);
 
   const clearData = useCallback(() => {
     setTrackingData([]);
@@ -66,7 +64,9 @@ const ShopFloorPage = () => {
   }, []);
 
   // ===== operator login (ไม่มี API — แค่เก็บรหัสไว้ส่งตอนบันทึก ตามเดิม) =====
-  const empScan = useScanInput(5, (code) => doLogin(code));
+  // เติมรหัสพนักงานของคนที่ล็อกอินอยู่ให้เลย (คนที่เข้าด้วยการกรอกรหัส/แตะบัตรจะได้ไม่ต้องกรอกซ้ำ)
+  // ยังต้องเลือกกะแล้วกด "เข้าใช้งาน" เองเหมือนเดิม และแก้รหัสในช่องได้ถ้าเปลี่ยนคนทำงาน
+  const empScan = useScanInput(5, (code) => doLogin(code), undefined, defaultEmpCode());
 
   function doLogin(code) {
     const c = (code ?? empScan.value).trim();
@@ -143,7 +143,7 @@ const ShopFloorPage = () => {
             method: 'PUT',
             body: JSON.stringify({ qty_ok: ok, qty_ng: ng, mode_ng: ngMode }),
           });
-          showToast('✅ แก้ไขข้อมูลสำเร็จ!');
+          showToast('แก้ไขข้อมูลแล้ว');
         } else {
           await apiCall('/production/record', {
             method: 'POST',
@@ -159,7 +159,7 @@ const ShopFloorPage = () => {
               working_shift: shift,
             }),
           });
-          showToast('✅ บันทึกยอดสำเร็จ!');
+          showToast('บันทึกยอดแล้ว');
         }
         if (isForceClosed) {
           await apiCall('/production/force-close', {
@@ -172,7 +172,7 @@ const ShopFloorPage = () => {
               employee: empCode, // FIX: ส่งรหัสพนักงานให้ backend บันทึก closed_by
             }),
           });
-          showToast('✅ บังคับปิดจ๊อบสำเร็จ!');
+          showToast('บังคับปิดจ๊อบแล้ว');
         }
       } catch (err) {
         showError(editRecord ? 'แก้ไขไม่สำเร็จ!' : err.message || 'บันทึกไม่สำเร็จ!');
@@ -186,7 +186,7 @@ const ShopFloorPage = () => {
     async (record) => {
       try {
         await apiCall(`/production/record/${record.id}`, { method: 'DELETE' });
-        showToast('🗑️ ลบข้อมูลสำเร็จ!', 'warning');
+        showToast('ลบข้อมูลแล้ว', 'warning');
       } catch {
         showError('ลบข้อมูลไม่สำเร็จ!');
       }
@@ -211,7 +211,7 @@ const ShopFloorPage = () => {
   if (!isLoggedIn) {
     return (
       <div className="container-fluid py-3">
-        <h5 className="text-mse fw-bold text-center mb-3">LOG IN</h5>
+        <PageHeader icon="bi-box-arrow-in-right" title="เข้าใช้งาน Shop Floor" />
         <Card className="shadow-sm mb-3">
           <Card.Body>
             <div className="row g-3 align-items-end">
@@ -219,14 +219,15 @@ const ShopFloorPage = () => {
                 <Form.Label className="fw-bold small">รหัสพนักงาน (สแกน/พิมพ์)</Form.Label>
                 <InputGroup>
                   <InputGroup.Text>
-                    <QrCode size={16} />
+                    <i className="bi bi-upc-scan" aria-hidden="true" />
                   </InputGroup.Text>
                   <Form.Control
-                    type="password"
+                    type="text"
+                    className="touch-target"
                     value={empScan.value}
                     onChange={empScan.onChange}
                     onKeyDown={empScan.onKeyDown}
-                    placeholder="รหัสพนักงาน 5 ตัว"
+                    placeholder="สแกน/พิมพ์รหัสพนักงาน"
                     autoFocus
                   />
                 </InputGroup>
@@ -237,9 +238,10 @@ const ShopFloorPage = () => {
                   {SHIFTS.map((s) => (
                     <Button
                       key={s}
-                      size="sm"
+                      className="touch-target px-4"
                       variant={shift === s ? 'primary' : 'outline-primary'}
-                      style={shift === s ? { backgroundColor: '#1565c0' } : {}}
+                      style={shift === s ? { backgroundColor: 'var(--mse-info)' } : {}}
+                      aria-pressed={shift === s}
                       onClick={() => setShift(s)}
                     >
                       {s}
@@ -248,8 +250,9 @@ const ShopFloorPage = () => {
                 </div>
               </div>
               <div className="col-md-2">
-                <Button className="w-100 btn-mse" onClick={() => doLogin()}>
-                  LOG IN
+                <Button className="w-100 btn-mse touch-target" onClick={() => doLogin()}>
+                  <i className="bi bi-box-arrow-in-right me-1" aria-hidden="true" />
+                  เข้าใช้งาน
                 </Button>
               </div>
               <div className="col-md-3">
@@ -277,9 +280,12 @@ const ShopFloorPage = () => {
     <div className="container-fluid py-3">
       <div
         className="d-flex flex-wrap align-items-center gap-2 px-3 py-2 mb-3 rounded text-white"
-        style={{ backgroundColor: '#1565c0' }}
+        style={{ backgroundColor: 'var(--mse-info)' }}
       >
-        <strong>SHOP FLOOR</strong>
+        <strong>
+          <i className="bi bi-hdd-stack me-2" aria-hidden="true" />
+          SHOP FLOOR
+        </strong>
         <Badge bg="light" text="dark">
           Emp: {empCode}
         </Badge>
@@ -290,7 +296,8 @@ const ShopFloorPage = () => {
           Date: {workingDate}
         </Badge>
         <div className="ms-auto">
-          <Button variant="success" size="sm" onClick={doLogout}>
+          <Button variant="success" className="touch-target" onClick={doLogout}>
+            <i className="bi bi-box-arrow-right me-1" aria-hidden="true" />
             จบงาน
           </Button>
         </div>
@@ -301,9 +308,10 @@ const ShopFloorPage = () => {
           <div className="d-flex gap-2 align-items-center">
             <InputGroup style={{ maxWidth: 360 }}>
               <InputGroup.Text>
-                <QrCode size={16} />
+                <i className="bi bi-upc-scan" aria-hidden="true" />
               </InputGroup.Text>
               <Form.Control
+                className="touch-target"
                 value={batchScan.value}
                 onChange={batchScan.onChange}
                 onKeyDown={batchScan.onKeyDown}
@@ -311,7 +319,8 @@ const ShopFloorPage = () => {
                 autoFocus
               />
             </InputGroup>
-            <Button variant="success" onClick={() => fetchTracking(batchScan.value)}>
+            <Button variant="success" className="touch-target" onClick={() => fetchTracking(batchScan.value)}>
+              <i className="bi bi-search me-1" aria-hidden="true" />
               ค้นหา
             </Button>
             {loading && <Spinner animation="border" size="sm" />}
@@ -320,25 +329,25 @@ const ShopFloorPage = () => {
       </Card>
 
       {trackingData.length === 0 ? (
-        <div className="text-center text-muted py-5">
-          <QrCode size={64} className="mb-3" />
-          <div>กรุณาสแกน Batch Barcode เพื่อเริ่มงาน</div>
+        <div className="empty-state">
+          <i className="bi bi-upc-scan" style={{ fontSize: '4rem' }} aria-hidden="true" />
+          <div>สแกน Batch Barcode เพื่อเริ่มงาน</div>
         </div>
       ) : (
         <>
           <div
             className="d-flex flex-wrap align-items-center gap-3 px-3 py-2 rounded"
-            style={{ backgroundColor: '#ff9800', color: '#fff' }}
+            style={{ backgroundColor: 'var(--mse-accent)', color: '#fff' }}
           >
             <strong>Batch No: {batchId}</strong>
             <Button
               variant="outline-light"
-              size="sm"
+              className="touch-target"
               onClick={() => setShowDrawing(true)}
               disabled={!orderModel}
             >
-              <FileText size={14} className="me-1" />
-              Dwg
+              <i className="bi bi-file-earmark-text me-1" aria-hidden="true" />
+              แบบงาน
             </Button>
             <span>
               Model: {orderModel} {orderDesc}
@@ -365,32 +374,49 @@ const ShopFloorPage = () => {
                       key={`${row.processStep}-${idx}`}
                       style={{
                         cursor: 'pointer',
-                        backgroundColor: hasData ? '#e8f5e9' : '#fff',
+                        backgroundColor: hasData ? 'var(--mse-ok-bg)' : 'var(--mse-surface)',
                       }}
                       onClick={() => openNumpad(idx)}
                     >
-                      <td className="fw-bold">{row.processStep}</td>
+                      <td className="fw-bold">
+                        {row.processStep}
+                        {row.isForceClosed && (
+                          <>
+                            <span
+                              className="chip chip-ng ms-2"
+                              title={`ปิดจบงาน: ${row.forceCloseReason}`}
+                            >
+                              <i className="bi bi-door-closed-fill me-1" aria-hidden="true" />
+                              ปิดจบงาน
+                            </span>
+                            <div className="text-muted" style={{ fontSize: '0.75rem', fontWeight: 'normal' }}>
+                              เหตุผล: {row.forceCloseReason}
+                            </div>
+                          </>
+                        )}
+                      </td>
                       <td>
                         {row.machine}
                         {row.machine && row.machine !== 'Finished' && (
                           <Button
                             variant="link"
                             size="sm"
-                            className="p-0 ms-2"
+                            className="p-0 ms-2 icon-btn"
                             title={`ดูคิวงานของเครื่อง ${row.machine}`}
+                            aria-label={`ดูคิวงานของเครื่อง ${row.machine}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               setQueueMachine(row.machine);
                             }}
                           >
-                            <ListOrdered size={15} />
+                            <i className="bi bi-list-ol" aria-hidden="true" />
                           </Button>
                         )}
                       </td>
-                      <td className="text-end fw-bold" style={{ color: '#2e7d32' }}>
+                      <td className="text-end fw-bold num" style={{ color: 'var(--mse-ok)' }}>
                         {row.qtyOK ?? '-'}
                       </td>
-                      <td className="text-end fw-bold" style={{ color: '#c62828' }}>
+                      <td className="text-end fw-bold num" style={{ color: 'var(--mse-ng)' }}>
                         {row.qtyNG ?? '-'}
                       </td>
                       <td>
@@ -399,14 +425,15 @@ const ShopFloorPage = () => {
                           <Button
                             variant="link"
                             size="sm"
-                            className="p-0 ms-2"
+                            className="p-0 ms-2 icon-btn"
                             title="ดูประวัติการบันทึก"
+                            aria-label={`ดูประวัติการบันทึกของ ${row.processStep}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               setHistoryStep(row.processStep);
                             }}
                           >
-                            <Info size={15} />
+                            <i className="bi bi-info-circle" aria-hidden="true" />
                           </Button>
                         )}
                       </td>
@@ -435,6 +462,15 @@ const ShopFloorPage = () => {
         show={!!historyRow}
         stepName={historyStep ?? ''}
         history={historyRow?.history ?? []}
+        forceClose={
+          historyRow?.isForceClosed
+            ? {
+                reason: historyRow.forceCloseReason,
+                closedBy: historyRow.closedBy,
+                closedAt: historyRow.closedAt,
+              }
+            : null
+        }
         empCode={empCode}
         onEdit={handleEditFromHistory}
         onDelete={handleDeleteRecord}
@@ -466,19 +502,7 @@ const ShopFloorPage = () => {
         onHide={() => setShowDrawing(false)}
       />
 
-      <ToastContainer position="bottom-end" className="p-3" style={{ zIndex: 2000 }}>
-        <Toast
-          show={!!toast}
-          onClose={() => setToast(null)}
-          delay={3500}
-          autohide
-          bg={toast?.variant === 'danger' ? 'danger' : toast?.variant === 'warning' ? 'warning' : 'success'}
-        >
-          <Toast.Body className={toast?.variant === 'warning' ? '' : 'text-white'}>
-            {toast?.message}
-          </Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Card, Form, Button, Table, Spinner, Toast, ToastContainer, InputGroup } from 'react-bootstrap';
-import { RefreshCw, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Card, Form, Button, Table, Spinner, InputGroup } from 'react-bootstrap';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import { apiCall } from '../../api/client';
 
 // WIP สรุปภาพรวม (Dashboard) — port จาก wip_summary_screen.dart
@@ -54,7 +54,7 @@ const SummaryTab = () => {
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [suggestions, setSuggestions] = useState([]);
-  const [toast, setToast] = useState(null);
+  const { toast, showToast, hideToast } = useToast();
   const searchRef = useRef('');
 
   const fetchSummary = useCallback(async (page) => {
@@ -68,11 +68,11 @@ const SummaryTab = () => {
       setIsLastPage(!(res.has_next ?? false));
       setProcessOrder((res.sorted_steps || []).map(String));
     } catch (err) {
-      setToast({ message: `เชื่อมต่อ API ไม่ได้: ${err.message}` });
+      showToast(`เชื่อมต่อ API ไม่ได้: ${err.message}`, 'danger');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     fetchSummary(1);
@@ -121,8 +121,8 @@ const SummaryTab = () => {
               }}
             />
             {searchText && (
-              <Button variant="outline-secondary" onClick={clearSearch}>
-                <X size={14} />
+              <Button variant="outline-secondary" onClick={clearSearch} title="ล้างคำค้นหา" aria-label="ล้างคำค้นหา">
+                <i className="bi bi-x-lg" aria-hidden="true" />
               </Button>
             )}
           </InputGroup>
@@ -133,7 +133,7 @@ const SummaryTab = () => {
           </datalist>
         </div>
         <Button variant="link" className="text-mse fw-bold" onClick={() => fetchSummary(1)}>
-          <RefreshCw size={14} className="me-1" />
+          <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />
           รีเฟรชข้อมูล
         </Button>
       </div>
@@ -143,8 +143,9 @@ const SummaryTab = () => {
           <Spinner animation="border" />
         </div>
       ) : wipData.length === 0 ? (
-        <div className="text-center py-5" style={{ color: '#9e9e9e', fontSize: 18 }}>
-          ไม่มีข้อมูล WIP
+        <div className="empty-state">
+          <i className="bi bi-inbox" aria-hidden="true" />
+          <div>ไม่มีข้อมูล WIP</div>
         </div>
       ) : (
         <Card className="shadow-sm">
@@ -242,11 +243,11 @@ const SummaryTab = () => {
       <div className="d-flex justify-content-center align-items-center gap-3 mt-3">
         <Button
           size="sm"
-          style={{ backgroundColor: '#283593', border: 'none' }}
+          className="btn-mse"
           disabled={currentPage <= 1 || loading}
           onClick={() => fetchSummary(currentPage - 1)}
         >
-          <ChevronLeft size={14} className="me-1" />
+          <i className="bi bi-chevron-left me-1" aria-hidden="true" />
           ก่อนหน้า
         </Button>
         {loading ? (
@@ -256,20 +257,16 @@ const SummaryTab = () => {
         )}
         <Button
           size="sm"
-          style={{ backgroundColor: '#283593', border: 'none' }}
+          className="btn-mse"
           disabled={isLastPage || loading}
           onClick={() => fetchSummary(currentPage + 1)}
         >
           ถัดไป
-          <ChevronRight size={14} className="ms-1" />
+          <i className="bi bi-chevron-right ms-1" aria-hidden="true" />
         </Button>
       </div>
 
-      <ToastContainer position="bottom-end" className="p-3" style={{ zIndex: 2000 }}>
-        <Toast show={!!toast} onClose={() => setToast(null)} delay={3500} autohide bg="danger">
-          <Toast.Body className="text-white">{toast?.message}</Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <ToastHost toast={toast} onClose={hideToast} />
     </div>
   );
 };

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Container, Table, Button, Form, Modal, Spinner, Badge,
-  Toast, ToastContainer, InputGroup,
+  Container, Table, Button, Form, Spinner, Badge, InputGroup,
 } from 'react-bootstrap';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -11,16 +10,31 @@ import {
   SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import {
-  GripVertical, Pencil, CheckCircle, Trash2, Search, X, PlusSquare,
-  Lock, Unlock, Undo2, RotateCcw, Wand2, ArrowDownUp, History, RefreshCw,
-  AlertTriangle, Clock, MailCheck,
-} from 'lucide-react';
 import { apiCall } from '../../api/client';
 import { usePlanData } from '../../context/PlanDataContext';
+import PageHeader from '../../components/shared/PageHeader';
+import Toolbar from '../../components/shared/Toolbar';
+import ToastHost, { useToast } from '../../components/shared/ToastHost';
+import ConfirmModal from '../../components/shared/ConfirmModal';
 import OrderFormDialog from './OrderFormDialog';
 import TrackingDialog from './TrackingDialog';
 import HistoryDialog from './HistoryDialog';
+import DateEditDialog from './DateEditDialog';
+import SettingsDialog from './SettingsDialog';
+import PlanPreviewDialog from './PlanPreviewDialog';
+import { buildPlanDiff, computeSortByDueDate } from './planDiff';
+import { buildPlanDetail } from './planDetail';
+import OrderFilterPanel from './OrderFilterPanel';
+import {
+  EMPTY_FILTERS, dateFilterActive, countActiveDateFilters, matchOrderDates,
+} from './orderFilters';
+
+// meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
+const DATE_EDIT_META = {
+  material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันวัตถุดิบเข้า (Material Ready)', label: 'เลือกวันที่วัตถุดิบเข้า', icon: 'bi-box-seam' },
+  confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
+  release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
+};
 
 // ===== helpers =====
 const todayMidnight = () => {
@@ -36,21 +50,46 @@ const dueDateInfo = (dueDateStr) => {
   due.setHours(0, 0, 0, 0);
   const diffDays = Math.round((due - todayMidnight()) / 86400000);
   if (diffDays < 0) return { className: 'text-danger fw-bold', icon: 'overdue' };
-  if (diffDays <= 2) return { className: 'fw-bold', icon: 'near', style: { color: '#f57c00' } };
+  if (diffDays <= 2) return { className: 'fw-bold', icon: 'near', style: { color: 'var(--mse-warn)' } };
   return { className: '', icon: null };
-};
-
-const formatReleaseDate = (value) => {
-  if (!value || value === 'none') return '-';
-  const d = new Date(String(value).slice(0, 10));
-  if (Number.isNaN(d.getTime())) return '-';
-  d.setHours(0, 0, 0, 0);
-  return d > todayMidnight() ? String(value).slice(0, 10) : '-';
 };
 
 const formatWip = (wip) => {
   if (!wip || ['-', '0', 'null'].includes(String(wip))) return '-';
   return String(wip);
+};
+
+const shortDate = (v) => (v ? String(v).slice(0, 10) : '-');
+
+// marker เล็ก ๆ บอกว่าช่องวันนี้มีประวัติการแก้/ไฟล์แนบกี่รายการ
+const logMarker = (n) =>
+  Number(n) > 0 ? (
+    <i
+      className="bi bi-clock-history ms-1 text-muted"
+      title={`มีประวัติ/ไฟล์แนบ ${n} รายการ`}
+      aria-label={`มีประวัติ/ไฟล์แนบ ${n} รายการ`}
+      style={{ fontSize: '0.72rem' }}
+    />
+  ) : null;
+
+// program_notes → chip สี (จาก backend: Please pull in material / Material enough / N/A)
+const programNoteChip = (note) => {
+  if (!note) return <span className="text-muted">-</span>;
+  if (note === 'Please pull in material') {
+    return (
+      <span className="chip chip-ng" title="วัตถุดิบเข้าช้ากว่าวันเริ่มผลิต">
+        <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" /> ดึงวัตถุดิบเข้า
+      </span>
+    );
+  }
+  if (note === 'Material enough') {
+    return (
+      <span className="chip chip-ok" title="วัตถุดิบพร้อมก่อนเริ่มผลิต">
+        <i className="bi bi-check-circle-fill" aria-hidden="true" /> วัตถุดิบพร้อม
+      </span>
+    );
+  }
+  return <span className="text-muted small">{note}</span>;
 };
 
 // แผน "ค้าง" ถ้ามีการแก้ไขหลังวางแผนล่าสุด (เทียบ string 'YYYY-MM-DD HH:MM:SS')
@@ -61,7 +100,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTracking, onMissingAlert }) => {
+const SortableRow = ({ order, dragLocked, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -81,47 +120,55 @@ const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTrackin
         <span
           {...attributes}
           {...listeners}
-          style={{ cursor: searchActive ? 'not-allowed' : 'grab', color: searchActive ? '#dee2e6' : '#6c757d' }}
+          title={dragLocked ? 'ล้างคำค้นหา/ตัวกรองก่อนจึงจะจัดลำดับได้' : 'ลากเพื่อจัดลำดับ'}
+          style={{
+            cursor: dragLocked ? 'not-allowed' : 'grab',
+            color: dragLocked ? 'var(--mse-border)' : 'var(--mse-muted)',
+          }}
         >
-          <GripVertical size={16} />
+          <i className="bi bi-grip-vertical" aria-hidden="true" />
         </span>
       </td>
       <td className="text-nowrap">
-        <Button variant="link" size="sm" className="p-0 me-1 text-primary" title="แก้ไข" onClick={() => onEdit(order)}>
-          <Pencil size={15} />
+        <Button variant="link" size="sm" className="p-0 me-2 text-primary icon-btn" title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(order)}>
+          <i className="bi bi-pencil-square" aria-hidden="true" />
         </Button>
-        <Button variant="link" size="sm" className="p-0 me-1 text-success" title="ปิดจ๊อบ" onClick={() => onClose(order)}>
-          <CheckCircle size={15} />
+        <Button variant="link" size="sm" className="p-0 me-2 text-success icon-btn" title="ปิดจ๊อบ" aria-label="ปิดจ๊อบ" onClick={() => onClose(order)}>
+          <i className="bi bi-check-circle" aria-hidden="true" />
         </Button>
-        <Button variant="link" size="sm" className="p-0 text-danger" title="ลบ" onClick={() => onDelete(order)}>
-          <Trash2 size={15} />
+        <Button variant="link" size="sm" className="p-0 text-danger icon-btn" title="ลบ" aria-label="ลบ" onClick={() => onDelete(order)}>
+          <i className="bi bi-trash" aria-hidden="true" />
         </Button>
       </td>
       <td>
         <Button
           variant="link"
           size="sm"
-          className="p-0 fw-bold text-decoration-underline"
+          className="p-0 fw-bold text-decoration-underline num"
           onClick={() => onTracking(order.batch)}
         >
           {order.batch}
         </Button>
-        {order.is_new ? <span className="text-danger fw-bold ms-1">New</span> : null}
+        {order.is_new ? <span className="chip chip-ng ms-1">ใหม่</span> : null}
       </td>
       <td>
         {order.model}
         {order.is_missing_routing ? (
           order.has_actual_master ? (
-            <MailCheck size={15} className="text-success ms-1" title="Engineer จัดทำ Master เรียบร้อยแล้ว ✅" />
+            <i
+              className="bi bi-envelope-check text-success ms-1"
+              title="Engineer จัดทำ Master เรียบร้อยแล้ว"
+            />
           ) : (
             <Button
               variant="link"
               size="sm"
-              className="p-0 ms-1"
+              className="p-0 ms-1 text-warning icon-btn"
               title="แจ้ง Engineer ว่ายังไม่มี Routing"
+              aria-label="แจ้ง Engineer ว่ายังไม่มี Routing"
               onClick={() => onMissingAlert(order)}
             >
-              ❓
+              <i className="bi bi-question-circle-fill" aria-hidden="true" />
             </Button>
           )
         ) : null}
@@ -129,16 +176,69 @@ const SortableRow = ({ order, searchActive, onEdit, onClose, onDelete, onTrackin
       <td className="text-truncate" style={{ maxWidth: 200 }} title={order.description || ''}>
         {order.description || '-'}
       </td>
-      <td>{formatWip(order.wip)}</td>
+      <td className="num">{formatWip(order.wip)}</td>
       <td>{order.planning_mode === 'backward' ? 'Backward' : 'Forward'}</td>
-      <td>{order.qty}</td>
-      <td className={due.className} style={due.style}>
-        {due.icon === 'overdue' && <AlertTriangle size={14} className="me-1" />}
-        {due.icon === 'near' && <Clock size={14} className="me-1" />}
+      <td className="num">{order.qty}</td>
+      <td className={`num ${due.className}`} style={due.style}>
+        {due.icon === 'overdue' && (
+          <i className="bi bi-exclamation-triangle-fill me-1" title="เลยกำหนดส่ง" />
+        )}
+        {due.icon === 'near' && <i className="bi bi-clock-fill me-1" title="ใกล้ถึงกำหนดส่ง" />}
         {String(order.due_date || '').slice(0, 10)}
       </td>
-      <td>{order.planMode || order.plan_mode || 'NEW'}</td>
-      <td>{formatReleaseDate(order.release_date)}</td>
+      <td>
+        {(() => {
+          const mode = order.planMode || order.plan_mode || 'NEW';
+          return (
+            <span className={`chip ${mode === 'FIXED' ? 'chip-warn' : 'chip-info'}`}>
+              <i className={`bi ${mode === 'FIXED' ? 'bi-lock-fill' : 'bi-unlock'}`} aria-hidden="true" />
+              {mode}
+            </span>
+          );
+        })()}
+      </td>
+      <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className={`p-0 text-decoration-none num ${order.release_date ? 'fw-bold text-mse' : 'text-muted'}`}
+          disabled={datesLocked}
+          title={canEditDates ? 'แก้วัน Release งาน' : 'ดูประวัติวัน Release'}
+          onClick={() => onEditDate('release', order)}
+        >
+          {order.release_date ? shortDate(order.release_date) : '-'}
+        </Button>
+        {logMarker(order.date_log_counts?.release)}
+      </td>
+      <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className="p-0 text-decoration-none num"
+          disabled={datesLocked}
+          title={canEditDates ? 'แก้วันวัตถุดิบเข้า (Material Ready)' : 'ดูประวัติวันวัตถุดิบเข้า'}
+          onClick={() => onEditDate('material', order)}
+        >
+          {shortDate(order.material_ready_date)}
+        </Button>
+        {logMarker(order.date_log_counts?.material)}
+      </td>
+      <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className={`p-0 text-decoration-none num ${order.confirm_reply_date ? 'fw-bold text-mse' : 'text-muted'}`}
+          disabled={datesLocked}
+          title={canEditDates ? 'แก้วัน Confirm ส่งมอบ (VIP)' : 'ดูประวัติวัน Confirm'}
+          onClick={() => onEditDate('confirm', order)}
+        >
+          {order.confirm_reply_date ? shortDate(order.confirm_reply_date) : '-'}
+        </Button>
+        {logMarker(order.date_log_counts?.confirm)}
+      </td>
+      <td className="num">{shortDate(order.start_date)}</td>
+      <td className="num">{shortDate(order.fg_date)}</td>
+      <td>{programNoteChip(order.program_notes)}</td>
       <td className="text-center">
         <Badge bg={(order.priority ?? 99) < 10 ? 'danger' : 'secondary'} pill>
           {order.priority ?? 99}
@@ -153,14 +253,23 @@ const OrderControlTower = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFilters, setDateFilters] = useState(EMPTY_FILTERS); // ตัวกรองช่วงวันที่ 6 คอลัมน์
+  const [showFilters, setShowFilters] = useState(false); // เปิด/ปิดแผงตัวกรอง
   const [timestamps, setTimestamps] = useState({ last_plan: '-', last_edit: '-' });
+  const [settings, setSettings] = useState(null); // system_settings — ใช้ทำ legend ใน preview
 
-  // snapshot สำหรับ Undo — เก็บก่อนรัน Initial Plan/Replan
+  // snapshot สำหรับ Undo — เก็บก่อนยืนยัน Replan/เรียง/บันทึกลำดับ
   const [previousOrderList, setPreviousOrderList] = useState(null);
   // baseline = สภาพ orders ตอนโหลดครั้งแรก (deep copy) ใช้เป็น snapshot ของ Replan
-  // (order_management_screen.dart L122-123)
   const baselineRef = useRef(null);
+  // สภาพ orders ก่อนเริ่มลากรอบนี้ (ใช้เป็น "ก่อน" ของ preview + snapshot Undo ของการบันทึกลำดับ)
+  const preReorderRef = useRef(null);
   const [isPlanning, setIsPlanning] = useState(false);
+
+  // มีการลากจัดลำดับที่ยังไม่บันทึก (optimistic ในจอ ยังไม่ persist)
+  const [reorderDirty, setReorderDirty] = useState(false);
+  // preview dialog: { mode:'replan'|'sort'|'drag'|'lock'|'unlock', loading, diff, detail, onConfirm }
+  const [preview, setPreview] = useState(null);
 
   const navigate = useNavigate();
   const { setFromRunResponse } = usePlanData();
@@ -169,16 +278,38 @@ const OrderControlTower = () => {
   const [trackingBatch, setTrackingBatch] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, variant, onConfirm}
-  const [toast, setToast] = useState(null); // {message, variant}
+  const [dateEdit, setDateEdit] = useState(null); // { kind:'material'|'confirm'|'release', order }
+  const [showSettings, setShowSettings] = useState(false);
+
+  const currentUser = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
+  }, []);
+  const canManageSettings = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
+  // PCMC (=PLANNER) หรือ ADMIN เท่านั้นที่แก้/แนบวันได้ — MFG เปิดดูประวัติ+ดาวน์โหลดได้อย่างเดียว
+  const canEditDates = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  const showToast = useCallback((message, variant = 'success') => {
-    setToast({ message, variant });
-  }, []);
+  const { toast, showToast, hideToast } = useToast();
 
   // ต้อง stable — ถ้าเป็น inline function จะทำให้ useEffect ใน OrderFormDialog รีเซ็ตฟอร์มทุก re-render
   const showErrorToast = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
+  // stable onHide สำหรับ dialog ที่มี useEffect init ผูกกับ prop เหล่านี้
+  const closeSettings = useCallback(() => setShowSettings(false), []);
+  const closeDateEdit = useCallback(() => setDateEdit(null), []);
+  const onSettingsSaved = useCallback((msg) => {
+    showToast(msg);
+    apiCall('/system/settings').then(setSettings).catch(() => {}); // อัปเดต legend
+  }, [showToast]);
+
+  // 409 (มีการวางแผนซ้อน) → warning / อื่นๆ → danger
+  const planErrorToast = useCallback(
+    (err) => {
+      const msg = String(err.message || err);
+      showToast(msg, msg.includes('กำลังทำงานอยู่') ? 'warning' : 'danger');
+    },
+    [showToast],
+  );
 
   const fetchTimestamps = useCallback(async () => {
     try {
@@ -207,30 +338,47 @@ const OrderControlTower = () => {
   useEffect(() => {
     fetchOrders();
     fetchTimestamps();
+    // settings สำหรับ legend — เงียบถ้าดึงไม่ได้ (legend ใช้ค่า default แทน)
+    apiCall('/system/settings').then(setSettings).catch(() => {});
   }, [fetchOrders, fetchTimestamps]);
 
   const filteredOrders = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter(
-      (o) =>
-        String(o.batch || '').toLowerCase().includes(q) ||
-        String(o.model || '').toLowerCase().includes(q) ||
-        String(o.description || '').toLowerCase().includes(q)
-    );
-  }, [orders, searchQuery]);
+    let list = orders;
+    if (q) {
+      list = list.filter(
+        (o) =>
+          String(o.batch || '').toLowerCase().includes(q) ||
+          String(o.model || '').toLowerCase().includes(q) ||
+          String(o.description || '').toLowerCase().includes(q)
+      );
+    }
+    if (dateFilterActive(dateFilters)) {
+      list = list.filter((o) => matchOrderDates(o, dateFilters));
+    }
+    return list;
+  }, [orders, searchQuery, dateFilters]);
 
   const searchActive = searchQuery.trim() !== '';
+  // ตัวกรองใด ๆ (ค้นหา หรือ วันที่) กำลังทำงาน → ล็อกการลากจัดลำดับ
+  const filterActive = searchActive || dateFilterActive(dateFilters);
+  const activeDateCount = countActiveDateFilters(dateFilters);
+
+  const handleFilterChange = useCallback(
+    (key, patch) => setDateFilters((f) => ({ ...f, [key]: { ...f[key], ...patch } })),
+    []
+  );
+  const resetDateFilters = useCallback(() => setDateFilters(EMPTY_FILTERS), []);
   const outdated = isPlanOutdated(timestamps.last_plan, timestamps.last_edit);
   const allFixed = orders.length > 0 && orders.every((o) => (o.plan_mode || 'NEW') === 'FIXED');
   const maxPriority = orders.reduce((max, o) => Math.max(max, o.priority ?? 0), 0);
 
-  // ===== drag reorder =====
-  const handleDragEnd = async (event) => {
+  // ===== drag reorder (optimistic ในจอ — ยังไม่ persist จนกว่าจะยืนยันใน preview) =====
+  const handleDragEnd = (event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    if (searchActive) {
-      showToast('กรุณาล้างคำค้นหา (กด X) ก่อนทำการจัดลำดับใหม่', 'warning');
+    if (filterActive) {
+      showToast('กรุณาล้างคำค้นหา/ตัวกรองก่อนทำการจัดลำดับใหม่', 'warning');
       return;
     }
 
@@ -238,22 +386,166 @@ const OrderControlTower = () => {
     const newIndex = orders.findIndex((o) => o.batch === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
 
-    // optimistic: ย้ายแถว + renumber priority = 1..n ทั้งลิสต์ (ตามหน้าจอเดิม)
+    // จำสภาพก่อนลากรอบแรก ไว้เป็น "ก่อน" ของ preview + snapshot Undo
+    if (!reorderDirty) {
+      preReorderRef.current = JSON.parse(JSON.stringify(orders));
+    }
     const moved = arrayMove(orders, oldIndex, newIndex).map((o, i) => ({ ...o, priority: i + 1 }));
     setOrders(moved);
-
-    try {
-      await apiCall('/orders/reorder', {
-        method: 'PUT',
-        body: JSON.stringify({
-          updates: moved.map((o) => ({ batch: o.batch, priority: o.priority })),
-        }),
-      });
-      fetchTimestamps();
-    } catch {
-      showToast('บันทึกไม่สำเร็จ', 'danger');
-    }
+    setReorderDirty(true);
   };
+
+  const cancelReorder = useCallback(async () => {
+    setReorderDirty(false);
+    preReorderRef.current = null;
+    await fetchOrders(); // คืนลำดับจริงจาก DB
+    showToast('ยกเลิกการจัดลำดับแล้ว', 'info');
+  }, [fetchOrders, showToast]);
+
+  // ===== date edit (Material / Confirm / Release) =====
+  // onSubmit ส่ง { value, note, file } — ยิงเป็น FormData (multipart) เพื่อแนบไฟล์ได้
+  const submitDateEdit = useCallback(async ({ value, note, file }) => {
+    if (!dateEdit) return;
+    const { kind, order } = dateEdit;
+    const meta = DATE_EDIT_META[kind];
+    try {
+      const fd = new FormData();
+      // append '' ตรง ๆ สำหรับล้างค่า — อย่าใช้ value||null (FormData.append(key,null) ส่ง string "null" → 400)
+      fd.append(meta.bodyKey, value == null ? '' : value);
+      if (note) fd.append('note', note);
+      if (file) fd.append('file', file);
+      const res = await apiCall(`/orders/${encodeURIComponent(order.batch)}/${meta.endpoint}`, {
+        method: 'PUT',
+        body: fd,
+      });
+      setOrders((prev) => prev.map((o) => {
+        if (o.batch !== order.batch) return o;
+        const upd = { ...o, [meta.bodyKey]: res[meta.bodyKey] ?? (value || null) };
+        if (kind === 'material' && res.program_notes !== undefined) upd.program_notes = res.program_notes;
+        // bump ตัวนับ marker ถ้า backend บันทึก log สำเร็จ
+        if (res.log_entry) {
+          const counts = { ...(o.date_log_counts || {}) };
+          counts[kind] = (Number(counts[kind]) || 0) + 1;
+          upd.date_log_counts = counts;
+        }
+        return upd;
+      }));
+      fetchTimestamps();
+      setDateEdit(null);
+      showToast('บันทึกวันที่เรียบร้อย');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    }
+  }, [dateEdit, fetchTimestamps, showToast]);
+
+  // ===== preview dialog control =====
+  const closePreview = useCallback(() => setPreview(null), []);
+
+  // รัน simulation (ไม่บันทึก) แล้วเปิด preview พร้อม diff + detail — ใช้ร่วมทุกโหมด
+  const openPreview = useCallback(async ({
+    mode, beforeRows, afterPriorities, afterModes, planModeOverrides, onConfirm,
+  }) => {
+    setPreview({ mode, loading: true, diff: null, detail: null, onConfirm });
+    try {
+      const body = { is_simulation: true };
+      if (afterPriorities) body.priority_overrides = afterPriorities;
+      if (planModeOverrides) body.plan_mode_overrides = planModeOverrides;
+      const decoded = await apiCall('/schedule/replan', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      const diff = buildPlanDiff({
+        beforeRows,
+        afterReport: decoded.report ?? [],
+        afterPriorities: afterPriorities ?? null,
+        afterModes: afterModes ?? null,
+      });
+      // deep detail: เครื่อง/process กินเวลาเท่าไหร่ + คอขวด (จาก decoded.data)
+      const detail = buildPlanDetail(decoded.data ?? []);
+      setPreview((p) => (p && p.mode === mode ? { ...p, loading: false, diff, detail } : p));
+    } catch (err) {
+      setPreview(null);
+      planErrorToast(err);
+    }
+  }, [planErrorToast]);
+
+  // ---- Replan: sim → preview → ยืนยัน → replan จริง (ไม่เด้งหน้า Planning) ----
+  const doReplan = useCallback(async () => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
+    setIsPlanning(true);
+    try {
+      const decoded = await apiCall('/schedule/replan', { method: 'POST' });
+      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast('Replan สำเร็จ — กด "ดูแผน" เพื่อไปหน้าวางแผน', 'success');
+    } catch (err) {
+      planErrorToast(err);
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, showToast, planErrorToast]);
+
+  const handleReplan = useCallback(() => {
+    openPreview({ mode: 'replan', beforeRows: orders, onConfirm: doReplan });
+  }, [openPreview, orders, doReplan]);
+
+  // ---- เรียงตาม Due Date: คำนวณลำดับใหม่ client-side → sim → preview → ยืนยัน → persist ----
+  const doSort = useCallback(async () => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
+    setIsPlanning(true);
+    try {
+      await apiCall('/orders/bulk/sort-priority', { method: 'PUT' });
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast('เรียงลำดับ Priority สำเร็จ — กด Replan เพื่อคำนวณแผนใหม่', 'success');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, fetchOrders, fetchTimestamps, showToast]);
+
+  const handleSortByDueDate = useCallback(() => {
+    const afterPriorities = computeSortByDueDate(orders);
+    openPreview({ mode: 'sort', beforeRows: orders, afterPriorities, onConfirm: doSort });
+  }, [openPreview, orders, doSort]);
+
+  // ---- บันทึกลำดับ (จากการลาก): sim → preview → ยืนยัน → persist reorder ----
+  const doSaveReorder = useCallback(async () => {
+    const updates = orders.map((o, i) => ({ batch: o.batch, priority: i + 1 }));
+    setPreviousOrderList(JSON.parse(JSON.stringify(preReorderRef.current ?? [])));
+    setIsPlanning(true);
+    try {
+      await apiCall('/orders/reorder', { method: 'PUT', body: JSON.stringify({ updates }) });
+      setReorderDirty(false);
+      preReorderRef.current = null;
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast('บันทึกลำดับสำเร็จ — กด Replan เพื่อคำนวณแผนใหม่', 'success');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, fetchOrders, fetchTimestamps, showToast]);
+
+  const handleSaveReorder = useCallback(() => {
+    const afterPriorities = {};
+    orders.forEach((o, i) => { afterPriorities[o.batch] = i + 1; });
+    openPreview({
+      mode: 'drag',
+      beforeRows: preReorderRef.current ?? orders,
+      afterPriorities,
+      onConfirm: doSaveReorder,
+    });
+  }, [openPreview, orders, doSaveReorder]);
 
   // ===== actions =====
   const handleCloseOrder = (order) => {
@@ -265,7 +557,7 @@ const OrderControlTower = () => {
       onConfirm: async () => {
         try {
           await apiCall(`/orders/${encodeURIComponent(order.batch)}/close`, { method: 'PUT' });
-          showToast(`✅ ปิดจ๊อบ ${order.batch} เรียบร้อยแล้ว`);
+          showToast(`ปิดจ๊อบ ${order.batch} เรียบร้อยแล้ว`);
           fetchOrders();
           fetchTimestamps();
         } catch (err) {
@@ -282,7 +574,7 @@ const OrderControlTower = () => {
         method: 'POST',
         body: JSON.stringify({ batch_id: order.batch, model_name: order.model }),
       });
-      showToast(res.message || '✅ ส่งอีเมลแจ้ง Engineer แล้ว');
+      showToast(res.message || 'ส่งอีเมลแจ้ง Engineer แล้ว');
     } catch (err) {
       showToast(err.message, 'danger');
     }
@@ -290,14 +582,14 @@ const OrderControlTower = () => {
 
   const handleDeleteOrder = (order) => {
     setConfirm({
-      title: 'ยืนยันการลบ 🗑️',
+      title: 'ยืนยันการลบออเดอร์',
       body: `คุณต้องการลบออเดอร์ Batch: ${order.batch} ใช่หรือไม่?\n(ข้อมูลจะถูกลบออกจากระบบทันที)`,
       confirmLabel: 'ลบเลย',
       variant: 'danger',
       onConfirm: async () => {
         try {
           await apiCall(`/orders/${encodeURIComponent(order.batch)}`, { method: 'DELETE' });
-          showToast('✅ ลบออเดอร์สำเร็จ');
+          showToast('ลบออเดอร์สำเร็จ');
           fetchOrders();
         } catch (err) {
           showToast(err.message, 'danger');
@@ -306,116 +598,41 @@ const OrderControlTower = () => {
     });
   };
 
-  const handleToggleAllMode = () => {
+  // ---- Lock/Unlock ทั้งหมด: sim ด้วย plan_mode override → preview ผลกระทบ → ยืนยัน → persist mode ----
+  const doToggleMode = useCallback(async (target) => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
+    setIsPlanning(true);
+    try {
+      await apiCall(`/orders/bulk/mode?target_mode=${target}`, {
+        method: 'PUT',
+        body: JSON.stringify({ batches: orders.map((o) => o.batch) }),
+      });
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      setPreview(null);
+      showToast(`เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ — กด Replan เพื่อคำนวณแผนใหม่`, 'success');
+    } catch (err) {
+      showToast(err.message, 'danger');
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, fetchOrders, fetchTimestamps, showToast]);
+
+  const handleToggleAllMode = useCallback(() => {
     const target = allFixed ? 'NEW' : 'FIXED';
-    setConfirm({
-      title: target === 'FIXED' ? '🔒 ล็อกแผนทั้งหมด (All FIXED)' : '🔓 ปลดล็อกแผนทั้งหมด (All NEW)',
-      body: `ต้องการเปลี่ยนสถานะทุกออเดอร์เป็น ${target} ใช่หรือไม่?`,
-      confirmLabel: 'ยืนยัน',
-      variant: target === 'FIXED' ? 'warning' : 'success',
-      onConfirm: async () => {
-        try {
-          await apiCall(`/orders/bulk/mode?target_mode=${target}`, {
-            method: 'PUT',
-            body: JSON.stringify({ batches: orders.map((o) => o.batch) }),
-          });
-          showToast(`✅ เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ`);
-          fetchOrders();
-        } catch (err) {
-          showToast(err.message, 'danger');
-        }
-      },
+    const afterModes = {};
+    orders.forEach((o) => { afterModes[o.batch] = target; });
+    openPreview({
+      mode: target === 'FIXED' ? 'lock' : 'unlock',
+      beforeRows: orders,
+      afterModes,
+      planModeOverrides: afterModes,
+      onConfirm: () => doToggleMode(target),
     });
-  };
+  }, [allFixed, orders, openPreview, doToggleMode]);
 
-  const handleSortByDueDate = () => {
-    setConfirm({
-      title: 'เรียงลำดับ Priority ใหม่',
-      body:
-        'ระบบจะทำการเรียงลำดับ Priority ของทุกออเดอร์ใหม่ โดยยึดตาม Due Date จากวันที่ใกล้ที่สุดไปไกลที่สุด\n\nต้องการดำเนินการต่อหรือไม่?',
-      confirmLabel: 'ยืนยัน',
-      variant: 'primary',
-      onConfirm: async () => {
-        try {
-          await apiCall('/orders/bulk/sort-priority', { method: 'PUT' });
-          showToast('✅ เรียงลำดับ Priority สำเร็จ!');
-          fetchOrders();
-        } catch (err) {
-          showToast(err.message, 'danger');
-        }
-      },
-    });
-  };
-
-  // ===== scheduler actions (Phase 2) =====
-  // 409 (มีการวางแผนซ้อน) → warning / อื่นๆ → danger
-  const planErrorToast = useCallback(
-    (err) => {
-      const msg = String(err.message || err);
-      showToast(msg, msg.includes('กำลังทำงานอยู่') ? 'warning' : 'danger');
-    },
-    [showToast],
-  );
-
-  // Initial Plan (order_management_screen.dart L332-383)
-  const runInitialPlan = async () => {
-    setPreviousOrderList(JSON.parse(JSON.stringify(orders))); // snapshot ก่อนคำนวณ
-    setIsPlanning(true);
-    showToast('กำลังคำนวณ Initial Plan...', 'info');
-    try {
-      const decoded = await apiCall('/schedule/run', { method: 'POST' });
-      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
-      fetchTimestamps();
-      navigate('/planning');
-    } catch (err) {
-      planErrorToast(err);
-    } finally {
-      setIsPlanning(false);
-    }
-  };
-
-  const handleInitialPlan = () => {
-    // กล่องเตือนสีแดงเดิม (order_management_screen.dart L1064-1128)
-    setConfirm({
-      title: '⚠️ ยืนยันการรัน Initial Plan',
-      body: 'คุณต้องการล้างแผนการผลิตทั้งหมดใช่หรือไม่?',
-      confirmLabel: 'ยืนยัน (ล้างแผน)',
-      variant: 'danger',
-      onConfirm: runInitialPlan,
-    });
-  };
-
-  // Replan (order_management_screen.dart L386-442) — snapshot จาก baseline (deep copy)
-  const runReplan = async (saveHistory = true) => {
-    if (saveHistory) {
-      setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? [])));
-    }
-    setIsPlanning(true);
-    showToast('กำลังคำนวณ Replan (ล็อกเวลา FIXED)...', 'info');
-    try {
-      const decoded = await apiCall('/schedule/replan', { method: 'POST' });
-      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
-      fetchTimestamps();
-      navigate('/planning');
-    } catch (err) {
-      planErrorToast(err);
-    } finally {
-      setIsPlanning(false);
-    }
-  };
-
-  const handleReplan = () => {
-    // FIX: ของเก่ารันทันทีไม่มี confirm — user เลือกเพิ่ม dialog (2026-07-16)
-    setConfirm({
-      title: 'ยืนยันการรัน Replan',
-      body: 'ระบบจะคำนวณแผนการผลิตใหม่ทั้งหมด (ล็อกเวลาเฉพาะออเดอร์ FIXED)\n\nต้องการดำเนินการต่อหรือไม่?',
-      confirmLabel: 'ยืนยัน Replan',
-      variant: 'info',
-      onConfirm: () => runReplan(true),
-    });
-  };
-
-  // Undo (order_management_screen.dart L270-329): restore -> refetch -> auto-replan
+  // Undo — restore snapshot แล้ว refetch (ไม่ replan อัตโนมัติ; ผู้ใช้กด Replan เอง)
   const handleUndo = async () => {
     if (!previousOrderList) return;
     setIsPlanning(true);
@@ -426,11 +643,9 @@ const OrderControlTower = () => {
       });
       baselineRef.current = null; // ให้ fetchOrders จำ baseline ใหม่จากข้อมูลที่เพิ่ง restore
       await fetchOrders();
+      await fetchTimestamps();
       setPreviousOrderList(null);
-      showToast('⏪ โหลดแผนเดิมสำเร็จ! กำลังคำนวณตารางใหม่...', 'warning');
-      // หน่วงให้เห็นว่าตารางกลับเป็นของเดิมก่อน (เหมือนเดิม 1.5 วิ) แล้ว replan อัตโนมัติ
-      await new Promise((r) => setTimeout(r, 1500));
-      await runReplan(false); // auto-replan ไม่เก็บ history และไม่ต้อง confirm
+      showToast('⏪ คืนลำดับเดิมสำเร็จ — กด Replan เพื่อคำนวณแผนใหม่', 'warning');
     } catch (err) {
       showToast(err.message, 'danger');
     } finally {
@@ -438,13 +653,77 @@ const OrderControlTower = () => {
     }
   };
 
+  const busy = isPlanning || !!preview;
+
   return (
     <Container fluid className="pb-4">
+      <PageHeader
+        icon="bi-list-check"
+        title="Order Management"
+        subtitle="จัดลำดับความสำคัญของออเดอร์ แล้วสั่งคำนวณแผนการผลิต"
+        status={
+          <div className="d-flex align-items-center gap-3 border rounded bg-white px-3 py-1">
+            <span
+              className={`chip ${outdated ? 'chip-ng' : 'chip-ok'}`}
+              title={outdated ? 'มีการแก้ไขหลังวางแผนล่าสุด' : 'แผนเป็นปัจจุบัน'}
+            >
+              <i className={`bi ${outdated ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill'}`} />
+              {outdated ? 'แผนไม่เป็นปัจจุบัน' : 'แผนเป็นปัจจุบัน'}
+            </span>
+            <small className="fw-bold text-mse num">Last plan: {timestamps.last_plan}</small>
+            <small className="fw-bold num" style={{ color: 'var(--mse-warn)' }}>
+              Last edit: {timestamps.last_edit}
+            </small>
+          </div>
+        }
+        actions={
+          <>
+            <Button
+              variant="outline-primary"
+              title="ดูแผนล่าสุด"
+              aria-label="ดูแผนล่าสุด"
+              onClick={() => navigate('/planning')}
+            >
+              <i className="bi bi-calendar3 me-1" aria-hidden="true" /> ดูแผน
+            </Button>
+            {canManageSettings && (
+              <Button
+                variant="outline-secondary"
+                title="ตั้งค่าการวางแผน"
+                aria-label="ตั้งค่าการวางแผน"
+                onClick={() => setShowSettings(true)}
+              >
+                <i className="bi bi-sliders" aria-hidden="true" />
+              </Button>
+            )}
+            <Button
+              variant="outline-secondary"
+              title="ประวัติการผลิต"
+              aria-label="ประวัติการผลิต"
+              onClick={() => setShowHistory(true)}
+            >
+              <i className="bi bi-clock-history" aria-hidden="true" />
+            </Button>
+            <Button
+              variant="outline-secondary"
+              title="รีเฟรช"
+              aria-label="รีเฟรช"
+              onClick={() => {
+                fetchOrders();
+                fetchTimestamps();
+              }}
+            >
+              <i className="bi bi-arrow-clockwise" aria-hidden="true" />
+            </Button>
+          </>
+        }
+      />
+
       {/* ===== toolbar ===== */}
-      <div className="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <Toolbar>
         <InputGroup style={{ maxWidth: 320 }}>
           <InputGroup.Text>
-            <Search size={15} />
+            <i className="bi bi-search" aria-hidden="true" />
           </InputGroup.Text>
           <Form.Control
             placeholder="ค้นหา Batch หรือ Model..."
@@ -452,87 +731,83 @@ const OrderControlTower = () => {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
           {searchActive && (
-            <Button variant="outline-secondary" onClick={() => setSearchQuery('')}>
-              <X size={15} />
+            <Button variant="outline-secondary" onClick={() => setSearchQuery('')} title="ล้างคำค้นหา" aria-label="ล้างคำค้นหา">
+              <i className="bi bi-x-lg" aria-hidden="true" />
             </Button>
           )}
         </InputGroup>
 
-        <Button className="btn-mse" onClick={() => setFormOrder(null)}>
-          <PlusSquare size={16} className="me-1" /> New Order
+        <Button
+          variant={showFilters || activeDateCount ? 'primary' : 'outline-primary'}
+          onClick={() => setShowFilters((s) => !s)}
+          aria-expanded={showFilters}
+          title="ตัวกรองวันที่"
+        >
+          <i className="bi bi-funnel me-1" aria-hidden="true" /> ตัวกรอง
+          {activeDateCount > 0 && (
+            <Badge bg="light" text="dark" className="ms-1">{activeDateCount}</Badge>
+          )}
         </Button>
 
-        {/* status panel */}
-        <div className="d-flex align-items-center gap-3 border rounded bg-white px-3 py-1">
-          <span
-            style={{
-              width: 14,
-              height: 14,
-              borderRadius: '50%',
-              backgroundColor: outdated ? '#ff5252' : '#28a745',
-              boxShadow: `0 0 8px ${outdated ? 'rgba(255,82,82,0.4)' : 'rgba(40,167,69,0.4)'}`,
-              display: 'inline-block',
-            }}
-            title={outdated ? 'มีการแก้ไขหลังวางแผนล่าสุด' : 'แผนเป็นปัจจุบัน'}
-          />
-          <small className="fw-bold text-primary">Last plan: {timestamps.last_plan}</small>
-          <small className="fw-bold" style={{ color: '#ff5722' }}>
-            Last Edit: {timestamps.last_edit}
-          </small>
-        </div>
+        <Button className="btn-mse" onClick={() => setFormOrder(null)} disabled={reorderDirty}>
+          <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
+        </Button>
 
-        <div className="ms-auto d-flex gap-2 flex-wrap">
-          <Button variant={allFixed ? 'success' : 'warning'} size="sm" onClick={handleToggleAllMode}>
-            {allFixed ? <Unlock size={15} className="me-1" /> : <Lock size={15} className="me-1" />}
-            {allFixed ? 'All NEW' : 'All FIXED'}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!previousOrderList || isPlanning}
-            onClick={handleUndo}
-            style={previousOrderList && !isPlanning ? { backgroundColor: '#f57c00', borderColor: '#f57c00' } : {}}
-          >
-            <Undo2 size={15} className="me-1" /> Undo
-          </Button>
-          <Button variant="danger" size="sm" disabled={isPlanning} onClick={handleInitialPlan}>
-            {isPlanning ? (
-              <Spinner animation="border" size="sm" className="me-1" />
-            ) : (
-              <RotateCcw size={15} className="me-1" />
-            )}
-            Initial Plan
-          </Button>
-          <Button
-            variant="info"
-            size="sm"
-            disabled={isPlanning}
-            className="text-white"
-            onClick={handleReplan}
-          >
-            {isPlanning ? (
-              <Spinner animation="border" size="sm" className="me-1" />
-            ) : (
-              <Wand2 size={15} className="me-1" />
-            )}
-            Replan
-          </Button>
-          <Button
-            size="sm"
-            style={{ backgroundColor: '#7b1fa2', borderColor: '#7b1fa2' }}
-            disabled={isPlanning}
-            onClick={handleSortByDueDate}
-          >
-            <ArrowDownUp size={15} className="me-1" /> Sort by Due Date
-          </Button>
-          <Button variant="outline-secondary" size="sm" title="ประวัติการผลิต" onClick={() => setShowHistory(true)}>
-            <History size={15} />
-          </Button>
-          <Button variant="outline-secondary" size="sm" title="รีเฟรช" onClick={() => { fetchOrders(); fetchTimestamps(); }}>
-            <RefreshCw size={15} />
-          </Button>
-        </div>
-      </div>
+        <Toolbar.End>
+          {reorderDirty ? (
+            <>
+              <span className="chip chip-warn align-self-center">
+                <i className="bi bi-exclamation-circle" aria-hidden="true" /> มีลำดับที่ยังไม่บันทึก
+              </span>
+              <Button variant="primary" disabled={busy} onClick={handleSaveReorder}>
+                {isPlanning ? (
+                  <Spinner animation="border" size="sm" className="me-1" />
+                ) : (
+                  <i className="bi bi-eye me-1" aria-hidden="true" />
+                )}
+                ดูผล &amp; บันทึกลำดับ
+              </Button>
+              <Button variant="outline-secondary" disabled={busy} onClick={cancelReorder}>
+                <i className="bi bi-x-lg me-1" aria-hidden="true" /> ยกเลิก
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant={allFixed ? 'success' : 'warning'} disabled={busy} onClick={handleToggleAllMode}>
+                <i className={`bi ${allFixed ? 'bi-unlock' : 'bi-lock-fill'} me-1`} aria-hidden="true" />
+                {allFixed ? 'ปลดล็อกทั้งหมด' : 'ล็อกทั้งหมด'}
+              </Button>
+              <Button
+                variant="warning"
+                disabled={!previousOrderList || busy}
+                onClick={handleUndo}
+              >
+                <i className="bi bi-arrow-90deg-left me-1" aria-hidden="true" /> ย้อนกลับ
+              </Button>
+              <Button variant="info" disabled={busy} className="text-white" onClick={handleReplan}>
+                {isPlanning ? (
+                  <Spinner animation="border" size="sm" className="me-1" />
+                ) : (
+                  <i className="bi bi-magic me-1" aria-hidden="true" />
+                )}
+                Replan
+              </Button>
+              <Button variant="outline-primary" disabled={busy} onClick={handleSortByDueDate}>
+                <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
+              </Button>
+            </>
+          )}
+        </Toolbar.End>
+      </Toolbar>
+
+      {showFilters && (
+        <OrderFilterPanel
+          filters={dateFilters}
+          onChange={handleFilterChange}
+          onReset={resetDateFilters}
+          activeCount={activeDateCount}
+        />
+      )}
 
       {/* ===== ตาราง orders ===== */}
       {loading ? (
@@ -540,7 +815,13 @@ const OrderControlTower = () => {
           <Spinner animation="border" />
         </div>
       ) : orders.length === 0 ? (
-        <p className="text-center text-muted py-5">ยังไม่มี Order (กด New Order เพื่อเพิ่ม)</p>
+        <div className="empty-state">
+          <i className="bi bi-inbox" aria-hidden="true" />
+          <div>ยังไม่มีออเดอร์ในระบบ</div>
+          <Button className="btn-mse mt-3" onClick={() => setFormOrder(null)}>
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
+          </Button>
+        </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -548,8 +829,8 @@ const OrderControlTower = () => {
               items={filteredOrders.map((o) => o.batch)}
               strategy={verticalListSortingStrategy}
             >
-              <Table hover size="sm" className="align-middle">
-                <thead style={{ backgroundColor: '#e8eaf6' }}>
+              <Table hover size="sm" className="align-middle bg-white">
+                <thead>
                   <tr>
                     <th style={{ width: 40 }}></th>
                     <th style={{ width: 90 }}>Action</th>
@@ -562,6 +843,11 @@ const OrderControlTower = () => {
                     <th>Due Date</th>
                     <th>Mode</th>
                     <th>Release Date</th>
+                    <th>Material</th>
+                    <th>Confirm</th>
+                    <th>Start</th>
+                    <th>FG</th>
+                    <th>Notes</th>
                     <th className="text-center">Priority</th>
                   </tr>
                 </thead>
@@ -570,12 +856,15 @@ const OrderControlTower = () => {
                     <SortableRow
                       key={order.batch}
                       order={order}
-                      searchActive={searchActive}
+                      dragLocked={filterActive}
+                      datesLocked={reorderDirty}
+                      canEditDates={canEditDates}
                       onEdit={(o) => setFormOrder(o)}
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
                       onTracking={(batch) => setTrackingBatch(batch)}
                       onMissingAlert={handleMissingAlert}
+                      onEditDate={(kind, o) => setDateEdit({ kind, order: o })}
                     />
                   ))}
                 </tbody>
@@ -615,37 +904,39 @@ const OrderControlTower = () => {
         }}
       />
 
-      {/* ===== confirm modal ===== */}
-      <Modal show={!!confirm} onHide={() => setConfirm(null)} centered>
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: '1.1rem' }}>{confirm?.title}</Modal.Title>
-        </Modal.Header>
-        <Modal.Body style={{ whiteSpace: 'pre-line' }}>{confirm?.body}</Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setConfirm(null)}>
-            ยกเลิก
-          </Button>
-          <Button
-            variant={confirm?.variant || 'primary'}
-            onClick={() => {
-              const action = confirm?.onConfirm;
-              setConfirm(null);
-              if (action) action();
-            }}
-          >
-            {confirm?.confirmLabel || 'ยืนยัน'}
-          </Button>
-        </Modal.Footer>
-      </Modal>
+      <DateEditDialog
+        show={!!dateEdit}
+        kind={dateEdit ? dateEdit.kind : ''}
+        title={dateEdit ? DATE_EDIT_META[dateEdit.kind].title : ''}
+        label={dateEdit ? DATE_EDIT_META[dateEdit.kind].label : ''}
+        icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}
+        batch={dateEdit ? dateEdit.order.batch : ''}
+        currentValue={dateEdit ? dateEdit.order[DATE_EDIT_META[dateEdit.kind].bodyKey] : ''}
+        canEdit={canEditDates}
+        onHide={closeDateEdit}
+        onSubmit={submitDateEdit}
+      />
 
-      {/* ===== toast ===== */}
-      <ToastContainer position="bottom-end" className="p-3" style={{ position: 'fixed', zIndex: 2000 }}>
-        <Toast show={!!toast} onClose={() => setToast(null)} delay={3500} autohide bg={toast?.variant}>
-          <Toast.Body className={toast?.variant === 'warning' ? '' : 'text-white'}>
-            {toast?.message}
-          </Toast.Body>
-        </Toast>
-      </ToastContainer>
+      <SettingsDialog
+        show={showSettings}
+        onHide={closeSettings}
+        onSaved={onSettingsSaved}
+        onError={showErrorToast}
+      />
+
+      <PlanPreviewDialog
+        show={!!preview}
+        mode={preview ? preview.mode : 'replan'}
+        diff={preview ? preview.diff : null}
+        detail={preview ? preview.detail : null}
+        loading={preview ? preview.loading : false}
+        settings={settings}
+        onConfirm={preview ? preview.onConfirm : undefined}
+        onHide={closePreview}
+      />
+
+      <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />
+      <ToastHost toast={toast} onClose={hideToast} />
     </Container>
   );
 };

@@ -4,8 +4,8 @@
 //      user เลือกย้ายมาหน้าเว็บ + JWT ADMIN/PLANNER, 2026-07-17)
 import React, { useState } from 'react';
 import { Container, Card, Button, Form, Spinner, Modal, Table } from 'react-bootstrap';
-import { Database, Upload, FileUp } from 'lucide-react';
 import { apiCall } from '../../api/client';
+import PageHeader from '../../components/shared/PageHeader';
 
 const SEED_BUTTONS = [
   { endpoint: 'machines', label: 'Machine config', variant: 'primary' },
@@ -66,7 +66,7 @@ const UploadRow = ({ row, busy, onUpload }) => {
       </td>
       <td>
         <Button size="sm" className="btn-mse" disabled={busy || !file} onClick={handleUpload}>
-          <Upload size={14} className="me-1" />
+          <i className="bi bi-upload me-1" aria-hidden="true" />
           อัปโหลด
         </Button>
       </td>
@@ -75,21 +75,22 @@ const UploadRow = ({ row, busy, onUpload }) => {
 };
 
 const ImportPage = () => {
-  const [status, setStatus] = useState('');
+  // {type: 'idle'|'busy'|'ok'|'error', message}
+  const [status, setStatus] = useState({ type: 'idle', message: 'พร้อมทำงาน' });
   const [busy, setBusy] = useState(false);
   const [rejected, setRejected] = useState(null); // rejected_records จาก /upload/actual_result
 
-  const isError = status.startsWith('❌');
+  const isError = status.type === 'error';
 
   // ===== seed (POST /api/seed/*) =====
   const runSeed = async (endpoint, label) => {
     setBusy(true);
-    setStatus(`กำลังนำเข้า ${label}...`);
+    setStatus({ type: 'busy', message: `กำลังนำเข้า ${label}...` });
     try {
       const data = await apiCall(`/seed/${endpoint}`, { method: 'POST' });
-      setStatus(data.message || '✅ สำเร็จ');
+      setStatus({ type: 'ok', message: data.message || `นำเข้า ${label} สำเร็จ` });
     } catch (err) {
-      setStatus(`❌ พังเพราะ: ${err.message}`);
+      setStatus({ type: 'error', message: `นำเข้า ${label} ไม่สำเร็จ: ${err.message}` });
     } finally {
       setBusy(false);
     }
@@ -98,23 +99,23 @@ const ImportPage = () => {
   // ===== upload (multipart) — คืน true เมื่อสำเร็จเพื่อให้แถวล้าง file input =====
   const handleUpload = async (row, file) => {
     setBusy(true);
-    setStatus(`กำลังอัปโหลด ${row.label}...`);
+    setStatus({ type: 'busy', message: `กำลังอัปโหลด ${row.label}...` });
     try {
       const fd = new FormData();
       fd.append('file', file);
       const data = await apiCall(row.endpoint, { method: 'POST', body: fd });
       // /product-master/upload-csv คืน 200 + status:'error' เมื่อคอลัมน์ไม่ครบ (พฤติกรรมเดิม)
       if (data.status === 'error') {
-        setStatus(`❌ ${data.message}`);
+        setStatus({ type: 'error', message: data.message });
         return false;
       }
-      setStatus(data.message || '✅ สำเร็จ');
+      setStatus({ type: 'ok', message: data.message || `อัปโหลด ${row.label} สำเร็จ` });
       if (data.rejected_records && data.rejected_records.length > 0) {
         setRejected(data.rejected_records);
       }
       return true;
     } catch (err) {
-      setStatus(`❌ ${err.message}`);
+      setStatus({ type: 'error', message: err.message });
       return false;
     } finally {
       setBusy(false);
@@ -123,23 +124,35 @@ const ImportPage = () => {
 
   return (
     <Container className="pb-4" style={{ maxWidth: 900 }}>
-      <h4 className="text-mse fw-bold text-center mb-3">จัดการข้อมูลดิบ (CSV → Database)</h4>
+      <PageHeader
+        icon="bi-database-up"
+        title="Import Data"
+        subtitle="นำข้อมูลจากไฟล์ CSV เข้าสู่ฐานข้อมูล"
+      />
 
       {/* status box */}
       <div
         className={`border rounded p-3 mb-4 text-center fw-bold ${
           isError ? 'text-danger border-danger-subtle' : 'text-success'
         }`}
-        style={{ background: '#f5f5f5' }}
+        style={{ background: 'var(--mse-surface)' }}
+        role="status"
       >
-        {busy && <Spinner size="sm" animation="border" className="me-2" />}
-        {status || 'พร้อมทำงาน...'}
+        {busy ? (
+          <Spinner size="sm" animation="border" className="me-2" />
+        ) : (
+          <i
+            className={`bi ${isError ? 'bi-x-circle-fill' : status.type === 'ok' ? 'bi-check-circle-fill' : 'bi-info-circle'} me-2`}
+            aria-hidden="true"
+          />
+        )}
+        {status.message}
       </div>
 
       {/* ===== 1. seed จากไฟล์มาตรฐาน ===== */}
       <Card className="mb-4">
         <Card.Header className="fw-bold">
-          <Database size={16} className="me-2" />
+          <i className="bi bi-database me-2" aria-hidden="true" />
           Seed จากไฟล์มาตรฐานบน Server (CSV_BASE_DIR)
         </Card.Header>
         <Card.Body className="d-grid gap-2">
@@ -159,7 +172,7 @@ const ImportPage = () => {
       {/* ===== 2. อัปโหลดไฟล์จากเครื่อง ===== */}
       <Card>
         <Card.Header className="fw-bold">
-          <FileUp size={16} className="me-2" />
+          <i className="bi bi-file-earmark-arrow-up me-2" aria-hidden="true" />
           อัปโหลดไฟล์ CSV จากเครื่อง
         </Card.Header>
         <Card.Body>
@@ -177,7 +190,8 @@ const ImportPage = () => {
       <Modal show={!!rejected} onHide={() => setRejected(null)} centered size="lg">
         <Modal.Header closeButton>
           <Modal.Title style={{ fontSize: '1.1rem' }} className="text-danger">
-            ⚠️ รายการที่ไม่ตรงกับแผน (ไม่ได้บันทึก)
+            <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
+            รายการที่ไม่ตรงกับแผน (ไม่ได้บันทึก)
           </Modal.Title>
         </Modal.Header>
         <Modal.Body>

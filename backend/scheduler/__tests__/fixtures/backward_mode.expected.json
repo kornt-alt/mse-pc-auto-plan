@@ -59,6 +59,10 @@
  ],
  "total_plan_map": {
   "2600000901": {
+   "effectiveReadyDate": "2026-07-17",
+   "confirm_reply_date": "",
+   "is_vip": false,
+   "has_actuals": false,
    "Batch": "2600000901",
    "qty": 200.0,
    "Model": "MODEL-A",

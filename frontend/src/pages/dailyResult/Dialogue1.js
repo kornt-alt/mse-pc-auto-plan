@@ -74,7 +74,18 @@ const Dialogue1 = ({ show, ctx, onHide }) => {
                       <td>{r.description}</td>
                       <td>{r.model}</td>
                       <td>{r.batch}</td>
-                      <td>{r.step}</td>
+                      <td>
+                        {r.step}
+                        {r.is_force_closed && (
+                          <span
+                            className="chip chip-ng ms-2"
+                            title={`ปิดจบงาน: ${r.force_close_reason || '-'}`}
+                          >
+                            <i className="bi bi-door-closed-fill me-1" aria-hidden="true" />
+                            ปิดจบงาน{r.force_close_reason ? `: ${r.force_close_reason}` : ''}
+                          </span>
+                        )}
+                      </td>
                       <td className="text-end">{r.input}</td>
                       <td className="text-end">{r.output}</td>
                       <td className="text-end">

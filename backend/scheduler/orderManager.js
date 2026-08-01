@@ -7,9 +7,12 @@ const { diffDays } = require('../utils/dates');
 const { pyFloat } = require('./pyUtils');
 
 class OrderManager {
-  constructor(enablePacking = ENABLE_PACKING, packWindowDays = PACK_WINDOW_DAYS) {
+  // ฟีเจอร์ Mat'l/Confirm: รับ settings object (จากตาราง system_settings) — pack_window_days
+  // มาจากตรงนี้แทน constant (fallback เป็น PACK_WINDOW_DAYS ถ้าไม่มี) ตรง scheduler_core.py
+  constructor(enablePacking = ENABLE_PACKING, settings = null) {
     this.enablePacking = enablePacking;
-    this.packWindowDays = packWindowDays;
+    const s = settings || {};
+    this.packWindowDays = s.pack_window_days != null ? s.pack_window_days : PACK_WINDOW_DAYS;
     this.finalOrders = [];
     // Map เพื่อคง insertion order — batch id เป็นเลขล้วน JS object จะ reorder คีย์เอง
     this.statusMap = new Map();
@@ -40,15 +43,26 @@ class OrderManager {
 
     clean.Model = String(o.Model || o.model || 'UNKNOWN').trim();
     clean.setup_group = String(o.setup_group || clean.Model).trim().toUpperCase();
-    clean.dueDate = 'dueDate' in o ? o.dueDate : SENTINEL_DEFAULT_DUE;
+
+    // Confirm/VIP: ถ้ามี confirm_reply_date ให้สวมรอยเป็น dueDate เลย (scheduler_core.py L263-270)
+    const confDate = 'confirm_reply_date' in o ? o.confirm_reply_date : '';
+    clean.dueDate = confDate ? confDate : ('dueDate' in o ? o.dueDate : SENTINEL_DEFAULT_DUE);
+
     clean.priority = pyFloat('priority' in o ? o.priority : 99);
     clean.releaseDate = 'releaseDate' in o ? o.releaseDate : null;
+    // Mat'l: วันพร้อมเริ่มจริง (max ของ release/material — คำนวณใน planBuilder)
+    clean.effectiveReadyDate = 'effectiveReadyDate' in o ? o.effectiveReadyDate : '1970-01-01';
     clean.planningMode = 'planningMode' in o ? o.planningMode : 'forward';
     clean.PlanMode = String(o.planMode || o.PlanMode || 'NEW').toUpperCase();
     clean.WIP_FlowIndex = 'WIP_FlowIndex' in o ? o.WIP_FlowIndex : null;
     clean.WIP_StartStepIndex = pyFloat('WIP_StartStepIndex' in o ? o.WIP_StartStepIndex : 0);
     clean.WIP_Machine = 'WIP_Machine' in o ? o.WIP_Machine : null;
     clean.WIP_FinishDate = 'WIP_FinishDate' in o ? o.WIP_FinishDate : null;
+
+    // ประทับตราส่งไปตอน pack/sort (scheduler_core.py L285-288)
+    clean.confirm_reply_date = confDate;
+    clean.is_vip = Boolean(confDate);
+    clean.has_actuals = 'has_actuals' in o ? o.has_actuals : false;
 
     if ('OriginalOrders' in o) {
       clean.original_batches = o.OriginalOrders.map((sub) => ({
@@ -76,8 +90,17 @@ class OrderManager {
           ? o.WIP_FlowIndex
           : 'NEW';
       const modeKey = String(o.planningMode).toUpperCase();
+      // Mat'l: วันพร้อมต่างกันแยกถุง (scheduler_core.py L316)
+      const effDateKey = String(o.effectiveReadyDate ?? '1970-01-01');
+      // VIP: มี confirm date → มัดเฉพาะ confirm วันเดียวกัน (L318-321)
+      const isVip = o.is_vip ?? false;
+      const confDate = o.confirm_reply_date ?? '';
+      const vipTag = isVip ? `VIP:${confDate}` : 'NORMAL';
+      // Actual: batch ที่ผลิตไปแล้วบังคับฉายเดี่ยว (L323-326)
+      const hasActuals = o.has_actuals ?? false;
+      const actualsTag = hasActuals ? `|ACTUAL:${o.Batch}` : '';
 
-      const groupKey = `SETUP:${setupKey}|FLOW:${flowKey}|STEP:${stepKey}|MODE:${modeKey}`;
+      const groupKey = `SETUP:${setupKey}|FLOW:${flowKey}|STEP:${stepKey}|MODE:${modeKey}|EFF_DATE:${effDateKey}|CLASS:${vipTag}${actualsTag}`;
       if (!groups.has(groupKey)) groups.set(groupKey, []);
       groups.get(groupKey).push(o);
     }
@@ -125,9 +148,12 @@ class OrderManager {
     targetList.push(pack);
   }
 
-  // sort_for_scheduler (L249-255): stable sort ตาม (priority, dueDate)
+  // sort_for_scheduler (L390-402): VIP ขึ้นก่อน แล้วค่อย (priority, dueDate) — stable
   sortForScheduler(orders) {
     orders.sort((a, b) => {
+      const va = a.is_vip ? 0 : 1;
+      const vb = b.is_vip ? 0 : 1;
+      if (va !== vb) return va - vb;
       const pa = a.priority ?? 99;
       const pb = b.priority ?? 99;
       if (pa !== pb) return pa < pb ? -1 : 1;

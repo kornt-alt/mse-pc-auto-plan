@@ -89,10 +89,16 @@ router.get('/dialogue1', verifyToken, readRoles, async (req, res) => {
     const start = `${targetDate} 07:00:00`;
     const end = `${addDays(targetDate, 1)} 07:00:00`;
 
+    // JOIN batch_step_status เพื่อดึงเหตุผลตอนกด "ปิดจบงาน" ต่อ (batch, step) มาโชว์ด้วย
+    //   (1 แถวต่อ batch+step อยู่แล้ว จึงใช้ MAX() ให้เข้ากับ GROUP BY เดิม)
     let sqlText = `SELECT o.description, o.model, pr.batch, pr.process_step AS step,
-                          SUM(pr.qty_ok + pr.qty_ng) AS input, SUM(pr.qty_ok) AS output
+                          SUM(pr.qty_ok + pr.qty_ng) AS input, SUM(pr.qty_ok) AS output,
+                          MAX(CAST(bss.is_force_closed AS INT)) AS is_force_closed,
+                          MAX(bss.force_close_reason) AS force_close_reason
                    FROM production_records pr
                    LEFT OUTER JOIN orders o ON pr.batch = o.batch
+                   LEFT OUTER JOIN batch_step_status bss
+                     ON pr.batch = bss.batch AND pr.process_step = bss.step
                    WHERE pr.timestamp >= CONVERT(DATETIME, @start, 120)
                      AND pr.timestamp < CONVERT(DATETIME, @end, 120)`;
     const params = { start, end };
@@ -110,6 +116,8 @@ router.get('/dialogue1', verifyToken, readRoles, async (req, res) => {
       step: r.step || '-',
       input: Number(r.input) || 0,
       output: Number(r.output) || 0,
+      is_force_closed: Number(r.is_force_closed) === 1,
+      force_close_reason: r.force_close_reason || null,
     }));
     res.json({ status: 'success', data });
   } catch (err) {

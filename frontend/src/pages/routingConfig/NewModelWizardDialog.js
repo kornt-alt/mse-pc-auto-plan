@@ -3,7 +3,6 @@
 //   search-master) → แก้ template → bulk_create
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, Button, Form, Row, Col, Table, Badge, Spinner } from 'react-bootstrap';
-import { Trash2, Plus, Search } from 'lucide-react';
 import { apiCall } from '../../api/client';
 import { MachineSelect } from './RoutingDialogs';
 
@@ -171,7 +170,8 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
     <Modal show={show} onHide={onHide} size="xl" centered backdrop="static">
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.15rem' }} className="text-mse">
-          ➕ สร้าง Model ใหม่
+          <i className="bi bi-plus-lg me-2" aria-hidden="true" />
+          สร้าง Model ใหม่
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -188,9 +188,15 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
             {checking ? (
               <Form.Text className="text-muted">กำลังตรวจสอบ...</Form.Text>
             ) : isDuplicate ? (
-              <Form.Text className="text-danger">⚠️ มี Model นี้ในระบบแล้ว</Form.Text>
+              <Form.Text className="text-danger">
+                <i className="bi bi-exclamation-triangle-fill me-1" aria-hidden="true" />
+                มี Model นี้ในระบบแล้ว
+              </Form.Text>
             ) : newModel.trim() ? (
-              <Form.Text className="text-success">✓ ใช้ชื่อนี้ได้</Form.Text>
+              <Form.Text className="text-success">
+                <i className="bi bi-check-circle-fill me-1" aria-hidden="true" />
+                ใช้ชื่อนี้ได้
+              </Form.Text>
             ) : null}
           </Col>
           {targetDesc ? (
@@ -230,7 +236,7 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                 placeholder="ค้นหา model/description อื่น"
               />
               <Button size="sm" variant="outline-secondary" onClick={doSearch}>
-                <Search size={14} />
+                <i className="bi bi-search" aria-hidden="true" />
               </Button>
             </Col>
             <Col md={6}>
@@ -271,7 +277,7 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                 variant="outline-secondary"
                 onClick={() => setRoutingList((l) => [...l, emptyRouting()])}
               >
-                <Plus size={12} /> เพิ่มแถว
+                <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มแถว
               </Button>
             </div>
             <div style={{ maxHeight: 260, overflowY: 'auto' }}>
@@ -319,12 +325,16 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                         />
                       </td>
                       <td className="text-center">
-                        <Trash2
-                          size={14}
-                          className="text-danger"
-                          role="button"
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0 text-danger icon-btn"
+                          title="ลบแถวนี้"
+                          aria-label="ลบแถวนี้"
                           onClick={() => setRoutingList((l) => l.filter((_, idx) => idx !== i))}
-                        />
+                        >
+                          <i className="bi bi-trash" aria-hidden="true" />
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -340,7 +350,7 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                 variant="outline-secondary"
                 onClick={() => setMachineList((l) => [...l, emptyMachine()])}
               >
-                <Plus size={12} /> เพิ่มแถว
+                <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มแถว
               </Button>
             </div>
             <div style={{ maxHeight: 260, overflowY: 'auto' }}>
@@ -415,12 +425,16 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                         />
                       </td>
                       <td className="text-center">
-                        <Trash2
-                          size={14}
-                          className="text-danger"
-                          role="button"
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0 text-danger icon-btn"
+                          title="ลบแถวนี้"
+                          aria-label="ลบแถวนี้"
                           onClick={() => setMachineList((l) => l.filter((_, idx) => idx !== i))}
-                        />
+                        >
+                          <i className="bi bi-trash" aria-hidden="true" />
+                        </Button>
                       </td>
                     </tr>
                   ))}

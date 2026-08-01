@@ -126,6 +126,48 @@ test('FIXED order: คืน capacity แผนเดิม + lock แถวเ�
   assert.equal(engine.workingCalendar['MC-A']['2026-07-21'], 1240 + 200);
 });
 
+test('flow lock: มี actuals ที่ step ของ flow 2 → บังคับเลือก flow 2 (ไม่ใช่ flow แรก)', () => {
+  // M2 มี 2 flow: flow1 = TURNING/MILLING, flow2 = GRINDING/POLISHING
+  const routing2 = [
+    { Model: 'M2', FlowIndex: 1, StepIndex: 0, StepName: 'TURNING' },
+    { Model: 'M2', FlowIndex: 1, StepIndex: 1, StepName: 'MILLING' },
+    { Model: 'M2', FlowIndex: 2, StepIndex: 0, StepName: 'GRINDING' },
+    { Model: 'M2', FlowIndex: 2, StepIndex: 1, StepName: 'POLISHING' },
+  ];
+  const machine2 = [
+    { Model: 'M2', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1' },
+    { Model: 'M2', FlowIndex: 1, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M2', FlowIndex: 2, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J2' },
+    { Model: 'M2', FlowIndex: 2, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+  ];
+  const routing = processRouting(routing2);
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(machine2);
+  const engine = new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+  const om = new OrderManager(true, {}); // packing เปิด → original_batches มีสมาชิก (เหมือน pipeline จริง)
+  const [orders] = om.processOrders([
+    { Batch: 'BF', Model: 'M2', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  // actuals: ทำ GRINDING (มีเฉพาะใน flow 2) ไปแล้ว 30 → sim ถูกข้าม, บังคับ flow ที่มี step ตรง
+  const actuals = { BF: { GRINDING: 30 } };
+  const { totalPlanMap } = engine.run(orders, null, actuals, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('BF')._chosenFlow, 2);
+});
+
+test('settings injection: min_fragment_time / minor_setup_time จาก settings ทับ default', () => {
+  const routing = processRouting(routingRows);
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(machineRows);
+  const engine = new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig, {
+    min_fragment_time: 99, minor_setup_time: 7, enable_stickiness: false,
+  });
+  assert.equal(engine.MIN_FRAGMENT_TIME, 99);
+  assert.equal(engine.MINOR_SETUP_TIME, 7);
+  assert.equal(engine.ENABLE_STICKINESS, false);
+  // ไม่ส่ง settings → default constants
+  const def = new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+  assert.equal(def.MIN_FRAGMENT_TIME, 120);
+  assert.equal(def.MINOR_SETUP_TIME, 40);
+});
+
 test('parseDdMmYyyy: quirk %d/%m/%Y', () => {
   assert.equal(parseDdMmYyyy('16/07/2026'), '2026-07-16');
   assert.equal(parseDdMmYyyy('1/7/2026'), '2026-07-01');

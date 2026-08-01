@@ -2,15 +2,121 @@
 // ยกเว้น FIX ที่จงใจแก้: POST save wip_* fields, close คืน 404 จริง,
 // bulk/mode คืน updated_count, tracking step detail อ่านคอลัมน์ employee
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const multer = require('multer');
+const env = require('../config/env');
 const { query, execute, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const timestamps = require('../state/timestamps');
-const { formatThaiTimestamp, dateOnly } = require('../utils/dates');
+const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../utils/dates');
+const { computeProgramNote } = require('../scheduler/planBuilder');
+const { validateAttachment, MAX_FILE_SIZE } = require('../utils/attachments');
+const { isDayUnitStep } = require('../scheduler/dayUnit');
+const constants = require('../config/constants');
 
 const router = express.Router();
 
 const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
 const writeRoles = requireRole('ADMIN', 'PLANNER');
+
+// ===== ไฟล์แนบของ Release/Material/Confirm (order_date_log) =====
+// memoryStorage + limit ที่ multer เพื่อกันไฟล์ยักษ์ตั้งแต่ต้น; validateAttachment เช็คซ้ำอีกชั้น
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } });
+// ห่อ upload.single ให้แปลง MulterError (เช่นไฟล์เกิน limit) เป็น 400 JSON — ไม่มี global error handler
+const uploadSingle = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 25 MB' : 'อัปโหลดไฟล์ไม่สำเร็จ';
+      return res.status(400).json({ message: msg });
+    }
+    next();
+  });
+};
+
+const NOTE_MAX = 4000;
+const cleanNote = (raw) => {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim();
+  return s === '' ? null : s.slice(0, NOTE_MAX);
+};
+
+// เขียนไฟล์ลงดิสก์ คืน stored_name (uuid+ext) — โยน error status 500 ถ้ายังไม่ตั้ง ORDER_ATTACHMENTS_DIR
+const writeAttachment = (file) => {
+  const dir = env.ORDER_ATTACHMENTS_DIR;
+  if (!dir) {
+    const e = new Error('ระบบยังไม่ได้ตั้งค่าโฟลเดอร์ไฟล์แนบ (ORDER_ATTACHMENTS_DIR)');
+    e.status = 500;
+    throw e;
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const ext = path.extname(file.originalname).toLowerCase();
+  const storedName = crypto.randomUUID() + ext;
+  fs.writeFileSync(path.join(dir, storedName), file.buffer);
+  return storedName;
+};
+
+// ลบไฟล์กำพร้าเมื่อ transaction rollback — path มาจาก DB/สร้างเอง (uuid) basename กันไว้อีกชั้น
+const safeUnlink = (storedName) => {
+  try {
+    if (env.ORDER_ATTACHMENTS_DIR && storedName) {
+      fs.unlinkSync(path.join(env.ORDER_ATTACHMENTS_DIR, path.basename(storedName)));
+    }
+  } catch (e) {
+    console.warn('cleanup attachment failed:', e.message);
+  }
+};
+
+// INSERT order_date_log — เรียก "หลัง" UPDATE orders สำเร็จ, best-effort (ไม่ทำให้การแก้วันพัง)
+// เหตุผล: DDL รันมือ ตาราง order_date_log อาจยังไม่มีตอน deploy — ยึด house style เดียวกับ activityLog
+// (log ล้มเหลว = เตือนเฉย ๆ). คืน log row หรือ null ถ้า insert ไม่สำเร็จ; unlink ไฟล์กำพร้าเมื่อ fail
+const logDateEdit = async ({ batch, kind, dateValue, note, file, user }) => {
+  const storedName = file ? file._storedName : null;
+  try {
+    const params = {
+      batch: String(batch).slice(0, 100),
+      kind,
+      dateValue,
+      note: note || null,
+      fileName: file ? String(file.originalname).slice(0, 255) : null,
+      storedName,
+      mimeType: file ? (file.mimetype || '').slice(0, 100) || null : null,
+      fileSize: file ? file.size : null,
+      createdBy: user && Number.isInteger(user.id) ? user.id : null,
+      createdByName: user && user.username ? String(user.username).slice(0, 150) : null,
+    };
+    const rows = await query(
+      `INSERT INTO order_date_log
+         (batch, date_kind, date_value, note, file_name, stored_name, mime_type, file_size, created_by, created_by_name)
+       OUTPUT INSERTED.id, INSERTED.date_kind, INSERTED.date_value, INSERTED.note,
+              INSERTED.file_name, INSERTED.mime_type, INSERTED.file_size,
+              INSERTED.created_by_name, INSERTED.created_at
+       VALUES (@batch, @kind, @dateValue, @note, @fileName, @storedName, @mimeType, @fileSize, @createdBy, @createdByName)`,
+      params,
+    );
+    const row = rows[0] || {};
+    return { ...row, display_name: row.created_by_name, has_file: Boolean(row.file_name) };
+  } catch (e) {
+    // ตาราง order_date_log อาจยังไม่ถูกสร้าง — การแก้วันสำเร็จแล้ว, แค่ไม่มีประวัติ/ไฟล์แนบรอบนี้
+    console.warn('order_date_log insert failed:', e.message);
+    if (storedName) safeUnlink(storedName);
+    return null;
+  }
+};
+
+// วันที่ทั้งระบบเป็น string 'YYYY-MM-DD' (zero-padded) เทียบ lexicographic — รับค่าว่าง/null (=ล้างค่า) ได้
+// คืน { ok, value }: value เป็น string ที่ผ่านแล้ว หรือ null ถ้าเว้นว่าง; ok=false ถ้ารูปแบบผิด
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const parseDateInput = (raw) => {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return { ok: true, value: null };
+  const s = String(raw).trim();
+  if (!ISO_DATE_RE.test(s)) return { ok: false, value: null };
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return { ok: false, value: null };
+  return { ok: true, value: s };
+};
+const BAD_DATE_MSG = 'รูปแบบวันที่ไม่ถูกต้อง ต้องเป็น YYYY-MM-DD';
 
 // ========== GET /api/orders — list + enrichment ==========
 router.get('/', verifyToken, readRoles, async (req, res) => {
@@ -76,6 +182,22 @@ router.get('/', verifyToken, readRoles, async (req, res) => {
       }
     }
 
+    // จำนวน log แนบ/แก้วันต่อ batch+kind — ให้ตารางแสดง marker ว่าช่องไหนมีประวัติ (นับรวม ไม่ correlated subquery)
+    // ตาราง order_date_log อาจยังไม่ถูกสร้าง (DDL รันมือ) — กันพังด้วย try/catch คืน map ว่าง
+    const dateLogCounts = {};
+    try {
+      const logCounts = await query(
+        'SELECT batch, date_kind, COUNT(*) AS n FROM order_date_log GROUP BY batch, date_kind'
+      );
+      for (const r of logCounts) {
+        const b = String(r.batch).trim();
+        if (!dateLogCounts[b]) dateLogCounts[b] = {};
+        dateLogCounts[b][String(r.date_kind).trim()] = Number(r.n) || 0;
+      }
+    } catch (e) {
+      console.warn('order_date_log count skipped:', e.message);
+    }
+
     const result = orders.map((o) => {
       const d = { ...o };
       const batchStr = String(o.batch).trim();
@@ -118,6 +240,11 @@ router.get('/', verifyToken, readRoles, async (req, res) => {
 
       d.planningMode = o.planning_mode;
       d.releaseDate = o.release_date;
+      d.date_log_counts = {
+        material: (dateLogCounts[batchStr] || {}).material || 0,
+        confirm: (dateLogCounts[batchStr] || {}).confirm || 0,
+        release: (dateLogCounts[batchStr] || {}).release || 0,
+      };
       return d;
     });
 
@@ -186,7 +313,8 @@ router.put('/bulk/sort-priority', verifyToken, writeRoles, async (req, res) => {
       const rows = await t.query(
         `SELECT id FROM orders
          WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
-         ORDER BY (CASE WHEN due_date IS NULL THEN 1 ELSE 0 END) ASC, due_date ASC`
+         -- id ASC = tiebreak คงที่เมื่อ due_date ซ้ำ ให้ preview (client mirror) ตรงกับผลจริง
+         ORDER BY (CASE WHEN due_date IS NULL THEN 1 ELSE 0 END) ASC, due_date ASC, id ASC`
       );
       for (let i = 0; i < rows.length; i++) {
         await t.query('UPDATE orders SET priority = @priority WHERE id = @id', {
@@ -237,34 +365,107 @@ router.put('/bulk/mode', verifyToken, writeRoles, async (req, res) => {
 router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) => {
   try {
     const { modelName } = req.params;
+    // description จาก product_master — คืนแยกจาก found (มีได้แม้ model ไม่มี routing) เพื่อ auto-fill ช่อง Description
+    const pmRows = await query(
+      'SELECT TOP 1 description FROM product_master WHERE model = @model',
+      { model: modelName }
+    );
+    const description = pmRows[0]?.description ?? null;
+
     const steps = await query(
       `SELECT flow_index, step_index, step_name FROM routing_config
        WHERE model = @model ORDER BY flow_index ASC, step_index ASC`,
       { model: modelName }
     );
     if (steps.length === 0) {
-      return res.json({ found: false, steps: [] });
+      return res.json({ found: false, description, steps: [] });
     }
 
     const machines = await query(
-      'SELECT flow_index, step_index, machine FROM machine_config WHERE model = @model',
+      `SELECT flow_index, step_index, alternative_index, machine, cycle_time, setup_time
+       FROM machine_config WHERE model = @model`,
       { model: modelName }
     );
+
+    // แปลงเป็นตัวเลขจำกัด — คง null ไว้ (UI ใช้แยก "ไม่มีข้อมูลเวลา" ออกจาก 0)
+    const num = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
 
     const resultSteps = steps.map((step) => {
       const targetPrev = step.step_index - 1;
       const prevMacs = machines
         .filter((m) => m.step_index === targetPrev && m.flow_index === step.flow_index)
         .map((m) => m.machine);
+      // config เครื่องของ "step นี้เอง" (ใช้คิดเวลา) เรียงตาม alternative_index — เครื่องหลัก = ตัวแรก
+      const own = machines
+        .filter((m) => m.step_index === step.step_index && m.flow_index === step.flow_index)
+        .sort((a, b) => (a.alternative_index ?? 0) - (b.alternative_index ?? 0));
+      const alternatives = own.map((m) => ({
+        machine: m.machine,
+        cycle_time: num(m.cycle_time),
+        setup_time: num(m.setup_time),
+      }));
+      const primary = alternatives[0] || null;
       return {
         step_name: step.step_name,
         flow_index: step.flow_index,
         step_index: step.step_index,
         previous_machines: [...new Set(prevMacs)],
+        machine: primary ? primary.machine : null,
+        cycle_time: primary ? primary.cycle_time : null,
+        setup_time: primary ? primary.setup_time : null,
+        is_day_unit: isDayUnitStep(
+          step.step_name,
+          primary ? primary.machine : null,
+          constants.DAY_UNIT_KEYWORDS
+        ),
+        alternatives,
       };
     });
 
-    res.json({ found: true, model: modelName, steps: resultSteps });
+    // ---- calendar slice: เฉพาะเครื่องของ model นี้ ตั้งแต่วันนี้ไป (กันข้อมูลบาน) ----
+    const today = toDateString(nowBangkok());
+    const machineSet = [...new Set(machines.map((m) => m.machine).filter(Boolean))];
+    const calendar = {};
+    let calendarHorizon = null;
+    if (machineSet.length > 0) {
+      const placeholders = machineSet.map((_, i) => `@m${i}`).join(',');
+      const calParams = { today };
+      machineSet.forEach((m, i) => { calParams[`m${i}`] = m; });
+      const calRows = await query(
+        `SELECT machine, date, available_time FROM calendar_config
+         WHERE date >= @today AND machine IN (${placeholders})`,
+        calParams
+      );
+      for (const row of calRows) {
+        const d = String(row.date).slice(0, 10);
+        if (!(row.machine in calendar)) calendar[row.machine] = {};
+        calendar[row.machine][d] = Number(row.available_time) || 0;
+        if (calendarHorizon === null || d > calendarHorizon) calendarHorizon = d;
+      }
+    }
+
+    // min_fragment_time จาก system_settings (singleton) — fallback constants
+    let minFragmentTime = constants.MIN_FRAGMENT_TIME;
+    try {
+      const sRows = await query('SELECT min_fragment_time FROM system_settings WHERE id = 1');
+      if (sRows[0] && num(sRows[0].min_fragment_time) != null) {
+        minFragmentTime = num(sRows[0].min_fragment_time);
+      }
+    } catch { /* ตารางไม่มี -> ใช้ default */ }
+
+    res.json({
+      found: true,
+      model: modelName,
+      description,
+      steps: resultSteps,
+      calendar,
+      calendar_horizon: calendarHorizon,
+      min_fragment_time: minFragmentTime,
+      logistic_weekdays: constants.LOGISTIC_ROUND_WEEKDAYS,
+    });
   } catch (err) {
     console.error('Error fetching model info:', err);
     res.status(500).json({ message: 'Failed to fetch model info' });
@@ -470,6 +671,181 @@ router.put('/:batchId/close', verifyToken, writeRoles, async (req, res) => {
     res.json({ message: `ปิดจ๊อบ ${batchId} เรียบร้อยแล้ว (สถานะ: COMPLETED)` });
   } catch (err) {
     console.error('Error closing order:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== GET /api/orders/attachments/:id/download — ดาวน์โหลดไฟล์แนบ ==========
+// literal 'attachments' ประกาศก่อน /:batch* ได้ (คนละ method กับ PUT อยู่แล้ว) — stored_name มาจาก DB (uuid)
+// ไม่ใช่ input ผู้ใช้ → ไม่มี traversal; path.basename กันอีกชั้น
+router.get('/attachments/:id/download', verifyToken, readRoles, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(404).json({ message: 'ไม่พบไฟล์แนบ' });
+    const rows = await query(
+      'SELECT file_name, stored_name, mime_type FROM order_date_log WHERE id = @id',
+      { id },
+    );
+    const row = rows[0];
+    if (!row || !row.stored_name) return res.status(404).json({ message: 'ไม่พบไฟล์แนบ' });
+    const filePath = path.join(env.ORDER_ATTACHMENTS_DIR || '', path.basename(row.stored_name));
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'ไฟล์ถูกลบไปแล้ว' });
+    if (row.mime_type) res.type(row.mime_type);
+    res.download(filePath, row.file_name || row.stored_name, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ message: 'ไม่พบไฟล์แนบ' });
+      else if (err) console.warn('attachment download aborted:', err.message);
+    });
+  } catch (err) {
+    console.error('Error downloading attachment:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== GET /api/orders/:batch/date-log?kind= — ประวัติการแก้วัน (append-only) ==========
+// สองส่วน (literal 'date-log') ไม่ชนกับ GET /:batchId/tracking; newest-first + full_name จาก users ถ้ายังมีบัญชี
+router.get('/:batch/date-log', verifyToken, readRoles, async (req, res) => {
+  try {
+    const { batch } = req.params;
+    const kind = req.query.kind ? String(req.query.kind).trim() : null;
+    const params = { batch };
+    let where = 'l.batch = @batch';
+    if (kind) {
+      where += ' AND l.date_kind = @kind';
+      params.kind = kind;
+    }
+    const rows = await query(
+      `SELECT l.id, l.date_kind, l.date_value, l.note, l.file_name, l.mime_type, l.file_size,
+              l.created_by_name, l.created_at,
+              COALESCE(u.full_name, l.created_by_name) AS display_name
+       FROM order_date_log l
+       LEFT JOIN users u ON u.id = l.created_by
+       WHERE ${where}
+       ORDER BY l.id DESC`,
+      params,
+    );
+    res.json(rows.map((r) => ({ ...r, has_file: Boolean(r.file_name) })));
+  } catch (err) {
+    console.error('Error fetching date log:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/material-date — Mat'l Receive: วันวัตถุดิบเข้า ==========
+// เขียน material_ready_date + คำนวณ program_notes ใหม่เทียบ start_date ปัจจุบัน + log ทุกครั้ง (แนบไฟล์ได้)
+router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+  let storedName = null;
+  try {
+    const { batch } = req.params;
+    const parsed = parseDateInput(req.body && req.body.material_ready_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const materialDate = parsed.value;
+    const note = cleanNote(req.body && req.body.note);
+
+    const rows = await query('SELECT id, start_date FROM orders WHERE batch = @batch', { batch });
+    if (rows.length === 0) {
+      if (storedName) safeUnlink(storedName);
+      return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+    }
+
+    if (req.file) {
+      const v = validateAttachment(req.file);
+      if (!v.ok) return res.status(400).json({ message: v.message });
+      storedName = writeAttachment(req.file);
+      req.file._storedName = storedName;
+    }
+
+    const programNotes = computeProgramNote(rows[0].start_date, materialDate);
+    await execute(
+      'UPDATE orders SET material_ready_date = @m, program_notes = @p WHERE id = @id',
+      { m: materialDate, p: programNotes, id: rows[0].id },
+    );
+    // log หลัง UPDATE สำเร็จ — best-effort (ตารางยังไม่มี = แก้วันได้ แต่ไม่มีประวัติ)
+    const logEntry = await logDateEdit({
+      batch, kind: 'material', dateValue: materialDate, note, file: req.file, user: req.user,
+    });
+
+    timestamps.markEdit();
+    res.json({ batch, material_ready_date: materialDate, program_notes: programNotes, log_entry: logEntry });
+  } catch (err) {
+    if (storedName) safeUnlink(storedName);
+    console.error('Error updating material date:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/confirm-date — Confirm/VIP: วัน confirm ส่งมอบ ==========
+router.put('/:batch/confirm-date', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+  let storedName = null;
+  try {
+    const { batch } = req.params;
+    const parsed = parseDateInput(req.body && req.body.confirm_reply_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const confirmDate = parsed.value;
+    const note = cleanNote(req.body && req.body.note);
+
+    // validate ไฟล์ก่อนแตะ DB — ไฟล์ผิด = 400 โดยไม่ mutate
+    if (req.file) {
+      const v = validateAttachment(req.file);
+      if (!v.ok) return res.status(400).json({ message: v.message });
+    }
+    const result = await execute(
+      'UPDATE orders SET confirm_reply_date = @c WHERE batch = @batch',
+      { c: confirmDate, batch },
+    );
+    if (!result) {
+      return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+    }
+    if (req.file) {
+      storedName = writeAttachment(req.file);
+      req.file._storedName = storedName;
+    }
+    const logEntry = await logDateEdit({
+      batch, kind: 'confirm', dateValue: confirmDate, note, file: req.file, user: req.user,
+    });
+
+    timestamps.markEdit();
+    res.json({ batch, confirm_reply_date: confirmDate, log_entry: logEntry });
+  } catch (err) {
+    if (storedName) safeUnlink(storedName);
+    console.error('Error updating confirm date:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/release-date — วัน release งาน ==========
+router.put('/:batch/release-date', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+  let storedName = null;
+  try {
+    const { batch } = req.params;
+    const parsed = parseDateInput(req.body && req.body.release_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const releaseDate = parsed.value;
+    const note = cleanNote(req.body && req.body.note);
+
+    if (req.file) {
+      const v = validateAttachment(req.file);
+      if (!v.ok) return res.status(400).json({ message: v.message });
+    }
+    const result = await execute(
+      'UPDATE orders SET release_date = @r WHERE batch = @batch',
+      { r: releaseDate, batch },
+    );
+    if (!result) {
+      return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+    }
+    if (req.file) {
+      storedName = writeAttachment(req.file);
+      req.file._storedName = storedName;
+    }
+    const logEntry = await logDateEdit({
+      batch, kind: 'release', dateValue: releaseDate, note, file: req.file, user: req.user,
+    });
+
+    timestamps.markEdit();
+    res.json({ batch, release_date: releaseDate, log_entry: logEntry });
+  } catch (err) {
+    if (storedName) safeUnlink(storedName);
+    console.error('Error updating release date:', err);
     res.status(500).json({ message: String(err.message || err) });
   }
 });
