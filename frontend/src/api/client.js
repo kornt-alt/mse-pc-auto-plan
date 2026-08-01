@@ -31,6 +31,33 @@ export const apiCall = async (endpoint, options = {}) => {
   return data;
 };
 
+// ดาวน์โหลดไฟล์ (binary) พร้อม Bearer token — apiCall ใช้ไม่ได้เพราะมันบังคับ .json()
+// เปิด blob แล้วสั่ง browser ดาวน์โหลดด้วยชื่อไฟล์เดิม
+export const apiDownload = async (endpoint, filename) => {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    headers: { ...(token && { Authorization: `Bearer ${token}` }) },
+  });
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = `${process.env.PUBLIC_URL || ''}/login`;
+    }
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'download';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+};
+
 // ข้อมูล user ปัจจุบันจาก localStorage
 export const getCurrentUser = () => {
   try {

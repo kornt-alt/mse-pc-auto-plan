@@ -50,20 +50,23 @@ const dueDateInfo = (dueDateStr) => {
   return { className: '', icon: null };
 };
 
-const formatReleaseDate = (value) => {
-  if (!value || value === 'none') return '-';
-  const d = new Date(String(value).slice(0, 10));
-  if (Number.isNaN(d.getTime())) return '-';
-  d.setHours(0, 0, 0, 0);
-  return d > todayMidnight() ? String(value).slice(0, 10) : '-';
-};
-
 const formatWip = (wip) => {
   if (!wip || ['-', '0', 'null'].includes(String(wip))) return '-';
   return String(wip);
 };
 
 const shortDate = (v) => (v ? String(v).slice(0, 10) : '-');
+
+// marker เล็ก ๆ บอกว่าช่องวันนี้มีประวัติการแก้/ไฟล์แนบกี่รายการ
+const logMarker = (n) =>
+  Number(n) > 0 ? (
+    <i
+      className="bi bi-clock-history ms-1 text-muted"
+      title={`มีประวัติ/ไฟล์แนบ ${n} รายการ`}
+      aria-label={`มีประวัติ/ไฟล์แนบ ${n} รายการ`}
+      style={{ fontSize: '0.72rem' }}
+    />
+  ) : null;
 
 // program_notes → chip สี (จาก backend: Please pull in material / Material enough / N/A)
 const programNoteChip = (note) => {
@@ -93,7 +96,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, searchActive, datesLocked, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
+const SortableRow = ({ order, searchActive, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -190,18 +193,31 @@ const SortableRow = ({ order, searchActive, datesLocked, onEdit, onClose, onDele
           );
         })()}
       </td>
-      <td className="num">{formatReleaseDate(order.release_date)}</td>
+      <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className={`p-0 text-decoration-none num ${order.release_date ? 'fw-bold text-mse' : 'text-muted'}`}
+          disabled={datesLocked}
+          title={canEditDates ? 'แก้วัน Release งาน' : 'ดูประวัติวัน Release'}
+          onClick={() => onEditDate('release', order)}
+        >
+          {order.release_date ? shortDate(order.release_date) : '-'}
+        </Button>
+        {logMarker(order.date_log_counts?.release)}
+      </td>
       <td className="num">
         <Button
           variant="link"
           size="sm"
           className="p-0 text-decoration-none num"
           disabled={datesLocked}
-          title="แก้วันวัตถุดิบเข้า (Material Ready)"
+          title={canEditDates ? 'แก้วันวัตถุดิบเข้า (Material Ready)' : 'ดูประวัติวันวัตถุดิบเข้า'}
           onClick={() => onEditDate('material', order)}
         >
           {shortDate(order.material_ready_date)}
         </Button>
+        {logMarker(order.date_log_counts?.material)}
       </td>
       <td className="num">
         <Button
@@ -209,11 +225,12 @@ const SortableRow = ({ order, searchActive, datesLocked, onEdit, onClose, onDele
           size="sm"
           className={`p-0 text-decoration-none num ${order.confirm_reply_date ? 'fw-bold text-mse' : 'text-muted'}`}
           disabled={datesLocked}
-          title="แก้วัน Confirm ส่งมอบ (VIP)"
+          title={canEditDates ? 'แก้วัน Confirm ส่งมอบ (VIP)' : 'ดูประวัติวัน Confirm'}
           onClick={() => onEditDate('confirm', order)}
         >
           {order.confirm_reply_date ? shortDate(order.confirm_reply_date) : '-'}
         </Button>
+        {logMarker(order.date_log_counts?.confirm)}
       </td>
       <td className="num">{shortDate(order.start_date)}</td>
       <td className="num">{shortDate(order.fg_date)}</td>
@@ -262,6 +279,8 @@ const OrderControlTower = () => {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
   }, []);
   const canManageSettings = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
+  // PCMC (=PLANNER) หรือ ADMIN เท่านั้นที่แก้/แนบวันได้ — MFG เปิดดูประวัติ+ดาวน์โหลดได้อย่างเดียว
+  const canEditDates = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -363,19 +382,31 @@ const OrderControlTower = () => {
   }, [fetchOrders, showToast]);
 
   // ===== date edit (Material / Confirm / Release) =====
-  const submitDateEdit = useCallback(async (value) => {
+  // onSubmit ส่ง { value, note, file } — ยิงเป็น FormData (multipart) เพื่อแนบไฟล์ได้
+  const submitDateEdit = useCallback(async ({ value, note, file }) => {
     if (!dateEdit) return;
     const { kind, order } = dateEdit;
     const meta = DATE_EDIT_META[kind];
     try {
+      const fd = new FormData();
+      // append '' ตรง ๆ สำหรับล้างค่า — อย่าใช้ value||null (FormData.append(key,null) ส่ง string "null" → 400)
+      fd.append(meta.bodyKey, value == null ? '' : value);
+      if (note) fd.append('note', note);
+      if (file) fd.append('file', file);
       const res = await apiCall(`/orders/${encodeURIComponent(order.batch)}/${meta.endpoint}`, {
         method: 'PUT',
-        body: JSON.stringify({ [meta.bodyKey]: value || null }),
+        body: fd,
       });
       setOrders((prev) => prev.map((o) => {
         if (o.batch !== order.batch) return o;
         const upd = { ...o, [meta.bodyKey]: res[meta.bodyKey] ?? (value || null) };
         if (kind === 'material' && res.program_notes !== undefined) upd.program_notes = res.program_notes;
+        // bump ตัวนับ marker ถ้า backend บันทึก log สำเร็จ
+        if (res.log_entry) {
+          const counts = { ...(o.date_log_counts || {}) };
+          counts[kind] = (Number(counts[kind]) || 0) + 1;
+          upd.date_log_counts = counts;
+        }
         return upd;
       }));
       fetchTimestamps();
@@ -785,6 +816,7 @@ const OrderControlTower = () => {
                       order={order}
                       searchActive={searchActive}
                       datesLocked={reorderDirty}
+                      canEditDates={canEditDates}
                       onEdit={(o) => setFormOrder(o)}
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
@@ -832,11 +864,13 @@ const OrderControlTower = () => {
 
       <DateEditDialog
         show={!!dateEdit}
+        kind={dateEdit ? dateEdit.kind : ''}
         title={dateEdit ? DATE_EDIT_META[dateEdit.kind].title : ''}
         label={dateEdit ? DATE_EDIT_META[dateEdit.kind].label : ''}
         icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}
         batch={dateEdit ? dateEdit.order.batch : ''}
         currentValue={dateEdit ? dateEdit.order[DATE_EDIT_META[dateEdit.kind].bodyKey] : ''}
+        canEdit={canEditDates}
         onHide={closeDateEdit}
         onSubmit={submitDateEdit}
       />

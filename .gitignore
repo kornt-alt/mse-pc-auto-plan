@@ -24,3 +24,5 @@ CHANGELOG.md
 # OS
 .DS_Store
 Thumbs.db
+
+backend/order_attachments/

@@ -25,6 +25,8 @@ const env = {
   // Files / integration
   CSV_BASE_DIR: process.env.CSV_BASE_DIR || '',
   DRAWINGS_DIR: process.env.DRAWINGS_DIR || '',
+  // โฟลเดอร์เก็บไฟล์แนบของ Release/Material/Confirm (order_date_log) — ต้องมีจริง + Node เขียนได้
+  ORDER_ATTACHMENTS_DIR: process.env.ORDER_ATTACHMENTS_DIR || '',
   SAP_PYTHON_EXE: process.env.SAP_PYTHON_EXE || 'python',
   SAP_SCRIPT_PATH: process.env.SAP_SCRIPT_PATH || '',
   SAP_TIMEOUT_MS: parseInt(process.env.SAP_TIMEOUT_MS) || 300000,
