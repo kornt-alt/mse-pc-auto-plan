@@ -378,7 +378,23 @@ const ShopFloorPage = () => {
                       }}
                       onClick={() => openNumpad(idx)}
                     >
-                      <td className="fw-bold">{row.processStep}</td>
+                      <td className="fw-bold">
+                        {row.processStep}
+                        {row.isForceClosed && (
+                          <>
+                            <span
+                              className="chip chip-ng ms-2"
+                              title={`ปิดจบงาน: ${row.forceCloseReason}`}
+                            >
+                              <i className="bi bi-door-closed-fill me-1" aria-hidden="true" />
+                              ปิดจบงาน
+                            </span>
+                            <div className="text-muted" style={{ fontSize: '0.75rem', fontWeight: 'normal' }}>
+                              เหตุผล: {row.forceCloseReason}
+                            </div>
+                          </>
+                        )}
+                      </td>
                       <td>
                         {row.machine}
                         {row.machine && row.machine !== 'Finished' && (
@@ -446,6 +462,15 @@ const ShopFloorPage = () => {
         show={!!historyRow}
         stepName={historyStep ?? ''}
         history={historyRow?.history ?? []}
+        forceClose={
+          historyRow?.isForceClosed
+            ? {
+                reason: historyRow.forceCloseReason,
+                closedBy: historyRow.closedBy,
+                closedAt: historyRow.closedAt,
+              }
+            : null
+        }
         empCode={empCode}
         onEdit={handleEditFromHistory}
         onDelete={handleDeleteRecord}

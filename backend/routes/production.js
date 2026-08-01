@@ -134,9 +134,14 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
     const orderDesc =
       orderInfo && orderInfo.description ? String(orderInfo.description).trim() : '-';
 
+    // FIX: เดิม sub_batches LIKE '%' + @b + '%' เป็น substring match — พิมพ์ batch ไม่ครบ/ผิด
+    //   ก็ไปตรงเศษข้อความใน list ที่คั่นด้วย comma ทำให้ค้นเจอทั้งที่ไม่มีจริง
+    //   แก้เป็น "จับทั้ง token" (ครอบ comma สองข้าง) → ตรงเฉพาะ batch เต็มตัว หรือ sub-batch
+    //   เต็มตัวใน packed group (split-batch tracking ยังทำงาน) REPLACE กันเผื่อมีช่องว่างคั่น
     const plannedSteps = await query(
       `SELECT DISTINCT step, machine, step_index FROM schedule_results
-       WHERE (batch = @b OR sub_batches LIKE '%' + @b + '%') AND is_setup = 0
+       WHERE (batch = @b OR ',' + REPLACE(sub_batches, ' ', '') + ',' LIKE '%,' + @b + ',%')
+         AND is_setup = 0
        ORDER BY step_index`,
       { b: batchId }
     );
@@ -145,6 +150,22 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       'SELECT * FROM production_records WHERE batch = @b ORDER BY timestamp ASC',
       { b: batchId }
     );
+
+    // เหตุผลตอนกด "ชิ้นงานหมดตะกร้า / ปิดจบงาน" ต่อ step (เดิมเขียนลง DB แต่ไม่เคยอ่านมาโชว์)
+    const forceCloseRows = await query(
+      `SELECT step, force_close_reason, closed_by, updated_at
+       FROM batch_step_status WHERE batch = @b AND is_force_closed = 1`,
+      { b: batchId }
+    );
+    const forceCloseMap = new Map();
+    for (const fc of forceCloseRows) {
+      forceCloseMap.set(fc.step, {
+        isForceClosed: true,
+        forceCloseReason: fc.force_close_reason || '-',
+        closedBy: fc.closed_by || '-',
+        closedAt: fc.updated_at ? formatThaiTimestamp(fc.updated_at) : '-',
+      });
+    }
 
     // Map เพื่อคง insertion order เหมือน dict เดิม (past_steps ไล่ตามลำดับที่เจอ)
     const actualDict = new Map();
@@ -196,6 +217,7 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
         lastRecord: formatThaiTimestamp(act.lastRecord),
         history: act.history,
         ngDetails: '',
+        ...(forceCloseMap.get(step) || {}),
       });
     }
 
@@ -209,11 +231,16 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
         lastRecord: act && act.lastRecord ? formatThaiTimestamp(act.lastRecord) : '-',
         history: act ? act.history : [],
         ngDetails: '',
+        ...(forceCloseMap.get(p.step) || {}),
       });
     }
 
+    // FIX: เดิมคืน found: true เสมอ ทำให้ frontend ไม่เคยขึ้น "ไม่พบแผนการผลิต"
+    //   ตอนนี้ found สะท้อนจริง — ไม่มี order/แผน/ยอดจริงเลย = ไม่พบ
+    const found = !!(orderInfo || plannedSteps.length || actualRecords.length);
+
     res.json({
-      found: true,
+      found,
       batch: batchId,
       model: orderModelName,
       description: orderDesc,
