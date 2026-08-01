@@ -24,6 +24,10 @@ import SettingsDialog from './SettingsDialog';
 import PlanPreviewDialog from './PlanPreviewDialog';
 import { buildPlanDiff, computeSortByDueDate } from './planDiff';
 import { buildPlanDetail } from './planDetail';
+import OrderFilterPanel from './OrderFilterPanel';
+import {
+  EMPTY_FILTERS, dateFilterActive, countActiveDateFilters, matchOrderDates,
+} from './orderFilters';
 
 // meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
 const DATE_EDIT_META = {
@@ -96,7 +100,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, searchActive, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
+const SortableRow = ({ order, dragLocked, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -116,10 +120,10 @@ const SortableRow = ({ order, searchActive, datesLocked, canEditDates, onEdit, o
         <span
           {...attributes}
           {...listeners}
-          title={searchActive ? 'ล้างคำค้นหาก่อนจึงจะจัดลำดับได้' : 'ลากเพื่อจัดลำดับ'}
+          title={dragLocked ? 'ล้างคำค้นหา/ตัวกรองก่อนจึงจะจัดลำดับได้' : 'ลากเพื่อจัดลำดับ'}
           style={{
-            cursor: searchActive ? 'not-allowed' : 'grab',
-            color: searchActive ? 'var(--mse-border)' : 'var(--mse-muted)',
+            cursor: dragLocked ? 'not-allowed' : 'grab',
+            color: dragLocked ? 'var(--mse-border)' : 'var(--mse-muted)',
           }}
         >
           <i className="bi bi-grip-vertical" aria-hidden="true" />
@@ -249,6 +253,8 @@ const OrderControlTower = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFilters, setDateFilters] = useState(EMPTY_FILTERS); // ตัวกรองช่วงวันที่ 6 คอลัมน์
+  const [showFilters, setShowFilters] = useState(false); // เปิด/ปิดแผงตัวกรอง
   const [timestamps, setTimestamps] = useState({ last_plan: '-', last_edit: '-' });
   const [settings, setSettings] = useState(null); // system_settings — ใช้ทำ legend ใน preview
 
@@ -338,16 +344,31 @@ const OrderControlTower = () => {
 
   const filteredOrders = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter(
-      (o) =>
-        String(o.batch || '').toLowerCase().includes(q) ||
-        String(o.model || '').toLowerCase().includes(q) ||
-        String(o.description || '').toLowerCase().includes(q)
-    );
-  }, [orders, searchQuery]);
+    let list = orders;
+    if (q) {
+      list = list.filter(
+        (o) =>
+          String(o.batch || '').toLowerCase().includes(q) ||
+          String(o.model || '').toLowerCase().includes(q) ||
+          String(o.description || '').toLowerCase().includes(q)
+      );
+    }
+    if (dateFilterActive(dateFilters)) {
+      list = list.filter((o) => matchOrderDates(o, dateFilters));
+    }
+    return list;
+  }, [orders, searchQuery, dateFilters]);
 
   const searchActive = searchQuery.trim() !== '';
+  // ตัวกรองใด ๆ (ค้นหา หรือ วันที่) กำลังทำงาน → ล็อกการลากจัดลำดับ
+  const filterActive = searchActive || dateFilterActive(dateFilters);
+  const activeDateCount = countActiveDateFilters(dateFilters);
+
+  const handleFilterChange = useCallback(
+    (key, patch) => setDateFilters((f) => ({ ...f, [key]: { ...f[key], ...patch } })),
+    []
+  );
+  const resetDateFilters = useCallback(() => setDateFilters(EMPTY_FILTERS), []);
   const outdated = isPlanOutdated(timestamps.last_plan, timestamps.last_edit);
   const allFixed = orders.length > 0 && orders.every((o) => (o.plan_mode || 'NEW') === 'FIXED');
   const maxPriority = orders.reduce((max, o) => Math.max(max, o.priority ?? 0), 0);
@@ -356,8 +377,8 @@ const OrderControlTower = () => {
   const handleDragEnd = (event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    if (searchActive) {
-      showToast('กรุณาล้างคำค้นหา (กด X) ก่อนทำการจัดลำดับใหม่', 'warning');
+    if (filterActive) {
+      showToast('กรุณาล้างคำค้นหา/ตัวกรองก่อนทำการจัดลำดับใหม่', 'warning');
       return;
     }
 
@@ -716,6 +737,18 @@ const OrderControlTower = () => {
           )}
         </InputGroup>
 
+        <Button
+          variant={showFilters || activeDateCount ? 'primary' : 'outline-primary'}
+          onClick={() => setShowFilters((s) => !s)}
+          aria-expanded={showFilters}
+          title="ตัวกรองวันที่"
+        >
+          <i className="bi bi-funnel me-1" aria-hidden="true" /> ตัวกรอง
+          {activeDateCount > 0 && (
+            <Badge bg="light" text="dark" className="ms-1">{activeDateCount}</Badge>
+          )}
+        </Button>
+
         <Button className="btn-mse" onClick={() => setFormOrder(null)} disabled={reorderDirty}>
           <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
         </Button>
@@ -767,6 +800,15 @@ const OrderControlTower = () => {
         </Toolbar.End>
       </Toolbar>
 
+      {showFilters && (
+        <OrderFilterPanel
+          filters={dateFilters}
+          onChange={handleFilterChange}
+          onReset={resetDateFilters}
+          activeCount={activeDateCount}
+        />
+      )}
+
       {/* ===== ตาราง orders ===== */}
       {loading ? (
         <div className="text-center py-5">
@@ -814,7 +856,7 @@ const OrderControlTower = () => {
                     <SortableRow
                       key={order.batch}
                       order={order}
-                      searchActive={searchActive}
+                      dragLocked={filterActive}
                       datesLocked={reorderDirty}
                       canEditDates={canEditDates}
                       onEdit={(o) => setFormOrder(o)}
