@@ -10,9 +10,11 @@ const env = require('../config/env');
 const { query, execute, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const timestamps = require('../state/timestamps');
-const { formatThaiTimestamp, dateOnly } = require('../utils/dates');
+const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../utils/dates');
 const { computeProgramNote } = require('../scheduler/planBuilder');
 const { validateAttachment, MAX_FILE_SIZE } = require('../utils/attachments');
+const { isDayUnitStep } = require('../scheduler/dayUnit');
+const constants = require('../config/constants');
 
 const router = express.Router();
 
@@ -363,34 +365,107 @@ router.put('/bulk/mode', verifyToken, writeRoles, async (req, res) => {
 router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) => {
   try {
     const { modelName } = req.params;
+    // description จาก product_master — คืนแยกจาก found (มีได้แม้ model ไม่มี routing) เพื่อ auto-fill ช่อง Description
+    const pmRows = await query(
+      'SELECT TOP 1 description FROM product_master WHERE model = @model',
+      { model: modelName }
+    );
+    const description = pmRows[0]?.description ?? null;
+
     const steps = await query(
       `SELECT flow_index, step_index, step_name FROM routing_config
        WHERE model = @model ORDER BY flow_index ASC, step_index ASC`,
       { model: modelName }
     );
     if (steps.length === 0) {
-      return res.json({ found: false, steps: [] });
+      return res.json({ found: false, description, steps: [] });
     }
 
     const machines = await query(
-      'SELECT flow_index, step_index, machine FROM machine_config WHERE model = @model',
+      `SELECT flow_index, step_index, alternative_index, machine, cycle_time, setup_time
+       FROM machine_config WHERE model = @model`,
       { model: modelName }
     );
+
+    // แปลงเป็นตัวเลขจำกัด — คง null ไว้ (UI ใช้แยก "ไม่มีข้อมูลเวลา" ออกจาก 0)
+    const num = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
 
     const resultSteps = steps.map((step) => {
       const targetPrev = step.step_index - 1;
       const prevMacs = machines
         .filter((m) => m.step_index === targetPrev && m.flow_index === step.flow_index)
         .map((m) => m.machine);
+      // config เครื่องของ "step นี้เอง" (ใช้คิดเวลา) เรียงตาม alternative_index — เครื่องหลัก = ตัวแรก
+      const own = machines
+        .filter((m) => m.step_index === step.step_index && m.flow_index === step.flow_index)
+        .sort((a, b) => (a.alternative_index ?? 0) - (b.alternative_index ?? 0));
+      const alternatives = own.map((m) => ({
+        machine: m.machine,
+        cycle_time: num(m.cycle_time),
+        setup_time: num(m.setup_time),
+      }));
+      const primary = alternatives[0] || null;
       return {
         step_name: step.step_name,
         flow_index: step.flow_index,
         step_index: step.step_index,
         previous_machines: [...new Set(prevMacs)],
+        machine: primary ? primary.machine : null,
+        cycle_time: primary ? primary.cycle_time : null,
+        setup_time: primary ? primary.setup_time : null,
+        is_day_unit: isDayUnitStep(
+          step.step_name,
+          primary ? primary.machine : null,
+          constants.DAY_UNIT_KEYWORDS
+        ),
+        alternatives,
       };
     });
 
-    res.json({ found: true, model: modelName, steps: resultSteps });
+    // ---- calendar slice: เฉพาะเครื่องของ model นี้ ตั้งแต่วันนี้ไป (กันข้อมูลบาน) ----
+    const today = toDateString(nowBangkok());
+    const machineSet = [...new Set(machines.map((m) => m.machine).filter(Boolean))];
+    const calendar = {};
+    let calendarHorizon = null;
+    if (machineSet.length > 0) {
+      const placeholders = machineSet.map((_, i) => `@m${i}`).join(',');
+      const calParams = { today };
+      machineSet.forEach((m, i) => { calParams[`m${i}`] = m; });
+      const calRows = await query(
+        `SELECT machine, date, available_time FROM calendar_config
+         WHERE date >= @today AND machine IN (${placeholders})`,
+        calParams
+      );
+      for (const row of calRows) {
+        const d = String(row.date).slice(0, 10);
+        if (!(row.machine in calendar)) calendar[row.machine] = {};
+        calendar[row.machine][d] = Number(row.available_time) || 0;
+        if (calendarHorizon === null || d > calendarHorizon) calendarHorizon = d;
+      }
+    }
+
+    // min_fragment_time จาก system_settings (singleton) — fallback constants
+    let minFragmentTime = constants.MIN_FRAGMENT_TIME;
+    try {
+      const sRows = await query('SELECT min_fragment_time FROM system_settings WHERE id = 1');
+      if (sRows[0] && num(sRows[0].min_fragment_time) != null) {
+        minFragmentTime = num(sRows[0].min_fragment_time);
+      }
+    } catch { /* ตารางไม่มี -> ใช้ default */ }
+
+    res.json({
+      found: true,
+      model: modelName,
+      description,
+      steps: resultSteps,
+      calendar,
+      calendar_horizon: calendarHorizon,
+      min_fragment_time: minFragmentTime,
+      logistic_weekdays: constants.LOGISTIC_ROUND_WEEKDAYS,
+    });
   } catch (err) {
     console.error('Error fetching model info:', err);
     res.status(500).json({ message: 'Failed to fetch model info' });

@@ -45,6 +45,7 @@ const {
   getFactoryDate,
   getElapsedMinutes,
 } = require('../utils/dates');
+const { isDayUnitMachine } = require('./dayUnit');
 const { pyInt, pyFloat, sortedNumericKeys } = require('./pyUtils');
 
 // clean_text (L426/L676): upper + ตัด space - _ –
@@ -118,13 +119,9 @@ class SchedulerEngine {
     this.decisionLog = [];
   }
 
-  // is_day_unit_machine (L286-292)
+  // is_day_unit_machine (L286-292) — delegate ไป pure helper (scheduler/dayUnit.js)
   isDayUnitMachine(machineName) {
-    if (!machineName) return false;
-    const upper = String(machineName).trim().toUpperCase();
-    return this.DAY_UNIT_KEYWORDS.some((kw) =>
-      upper.includes(String(kw).trim().toUpperCase()),
-    );
+    return isDayUnitMachine(machineName, this.DAY_UNIT_KEYWORDS);
   }
 
   // get_smart_setup_time (L294-299)

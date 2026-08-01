@@ -1,6 +1,31 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Modal, Form, Button, Row, Col, Spinner, Alert } from 'react-bootstrap';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Modal, Form, Button, Row, Col, Spinner, Alert, Table, Badge } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
+import { estimateFlow, estimateFlowTotal, formatDays, diffDays } from './wipEstimate';
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const todayStr = () => {
+  const t = new Date();
+  return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
+};
+// เวลารวมนาที (setup + run) → ข้อความ "เพราะอะไร" ต่อ step
+const stepReason = (s) => {
+  if (s.is_day_unit) {
+    return `lead ${s.lead_days} วัน${s.wait_days ? ` (+รอรอบส่ง ${s.wait_days})` : ''}`;
+  }
+  if (s.no_timing) return 'ไม่มีข้อมูลเวลา';
+  const parts = [];
+  if (s.setup_minutes) parts.push(`setup ${Math.round(s.setup_minutes)}`);
+  parts.push(`run ${Math.round(s.run_minutes)}`);
+  return `${parts.join(' + ')} = ${Math.round(s.total_minutes)} นาที`;
+};
+// C/T ต่อตัว + ต่อ lot (per-lot = run_minutes); day-unit/ไม่มีเวลา → "—"
+const num0 = (n) => Math.round(n).toLocaleString('en-US');
+const formatCT = (s) => {
+  if (s.is_day_unit || s.no_timing || s.cycle_time == null) return '—';
+  const perPiece = Math.round(s.cycle_time * 100) / 100;
+  return `${perPiece} นาที/ตัว · ${num0(s.run_minutes)} นาที/lot`;
+};
 
 // Dialog เพิ่ม/แก้ไข Order — โครง 3 โซนตามหน้าจอเดิม (order_management_screen.dart)
 const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError }) => {
@@ -8,11 +33,15 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
 
   const [form, setForm] = useState({});
   const [modelSteps, setModelSteps] = useState([]); // จาก GET /orders/model-info
+  const [modelInfo, setModelInfo] = useState(null); // ทั้งก้อน (steps + calendar + settings) สำหรับประมาณเวลา
   const [loadingInfo, setLoadingInfo] = useState(false);
   const [isWip, setIsWip] = useState(false);
   const [wipFlow, setWipFlow] = useState(null);
   const [wipStepIndex, setWipStepIndex] = useState(null);
   const [wipMachine, setWipMachine] = useState('');
+  const [showDetail, setShowDetail] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [realPlanDate, setRealPlanDate] = useState(null);
   const [saving, setSaving] = useState(false);
   const [validated, setValidated] = useState(false);
 
@@ -23,6 +52,13 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
       const data = await apiCall(`/orders/model-info/${encodeURIComponent(modelName.trim())}`);
       const steps = data.found ? data.steps : [];
       setModelSteps(steps);
+      setModelInfo(data.found ? data : null);
+      setRealPlanDate(null);
+      // auto-fill Description จาก product_master เฉพาะตอนกดค้นหาเอง (presetOrder == null);
+      // ตอนแก้ order เดิมคงค่า description ที่บันทึกไว้ (ไม่ทับ)
+      if (!presetOrder && data.description != null) {
+        setForm((prev) => ({ ...prev, description: data.description }));
+      }
       // ตอน edit: map ค่า WIP เดิมกลับเข้า dropdown (ถ้ายังอยู่ในลิสต์)
       if (presetOrder) {
         const flow = presetOrder.wip_flow_index ?? null;
@@ -36,6 +72,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
     } catch (err) {
       onError && onError(err.message);
       setModelSteps([]);
+      setModelInfo(null);
     } finally {
       setLoadingInfo(false);
     }
@@ -45,9 +82,12 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
     if (!show) return;
     setValidated(false);
     setModelSteps([]);
+    setModelInfo(null);
     setWipFlow(null);
     setWipStepIndex(null);
     setWipMachine('');
+    setShowDetail(false);
+    setRealPlanDate(null);
 
     if (order) {
       setForm({
@@ -95,6 +135,59 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
   const stepOptions = modelSteps.filter((s) => s.flow_index === wipFlow && s.step_index > 0);
   const selectedStep = stepOptions.find((s) => s.step_index === wipStepIndex);
   const machineOptions = selectedStep ? selectedStep.previous_machines : [];
+
+  const qtyNum = parseFloat(form.qty);
+
+  // เวลารวมต่อ flow (สำหรับ label ใน dropdown) — anchor = วันจบ WIP ถ้ามี ไม่งั้นวันนี้
+  const flowTotals = useMemo(() => {
+    const map = {};
+    if (!modelInfo || !(qtyNum > 0)) return map;
+    const now = todayStr();
+    const anchor = form.wip_finish_date || now;
+    for (const f of flowOptions) {
+      const est = estimateFlowTotal(modelInfo, f, qtyNum, anchor, now);
+      if (est) map[f] = est;
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelInfo, qtyNum, form.wip_finish_date]);
+
+  // ประมาณการ "เหลือกี่วัน" จาก process ที่เลือก (คิดงานตัวเดียวโดด ๆ)
+  const estimate = useMemo(() => {
+    if (!modelInfo || !isWip) return null;
+    if (wipFlow === null || wipStepIndex === null || !form.wip_finish_date || !(qtyNum > 0)) return null;
+    return estimateFlow(modelInfo, {
+      flowIndex: wipFlow, startStepIndex: wipStepIndex, qty: qtyNum,
+      anchorDate: form.wip_finish_date, today: todayStr(),
+    });
+  }, [modelInfo, isWip, wipFlow, wipStepIndex, form.wip_finish_date, qtyNum]);
+
+  // เทียบ finish vs due → ข้อความ/สี
+  const dueCompare = (() => {
+    if (!estimate || estimate.insufficient || !form.due_date || !estimate.finish_date) return null;
+    const d = diffDays(form.due_date, estimate.finish_date);
+    if (d > 0) return { late: true, text: `ช้ากว่า Due ${d} วัน` };
+    return { late: false, text: d < 0 ? `เร็วกว่า Due ${-d} วัน` : 'ทันเวลาพอดี' };
+  })();
+
+  // ตรวจกับแผนจริง (simulation) — เฉพาะ order ที่บันทึกแล้ว, อิงค่า WIP ที่บันทึก
+  const handleVerify = async () => {
+    setVerifying(true);
+    setRealPlanDate(null);
+    try {
+      const res = await apiCall('/schedule/replan', {
+        method: 'POST',
+        body: JSON.stringify({ is_simulation: true }),
+      });
+      const row = (res.report || []).find((r) => String(r.Batch) === String(order.batch));
+      setRealPlanDate(row ? (row.FinishDate || '-') : 'ไม่พบในแผน');
+    } catch (err) {
+      onError && onError(err.message);
+      setRealPlanDate('ตรวจไม่สำเร็จ');
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const handleSave = async () => {
     setValidated(true);
@@ -172,6 +265,8 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                       setField('model', e.target.value);
                       // แก้ model → ล้างข้อมูล WIP dropdowns (ตามหน้าจอเดิม)
                       setModelSteps([]);
+                      setModelInfo(null);
+                      setRealPlanDate(null);
                       setWipFlow(null);
                       setWipStepIndex(null);
                       setWipMachine('');
@@ -295,6 +390,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
               กำลังโหลดข้อมูล หรือ กดปุ่มค้นหาเพื่อโหลดข้อมูล Model ก่อน
             </Alert>
           ) : (
+            <>
             <Row className="g-3">
               <Col md={4}>
                 <Form.Group>
@@ -313,6 +409,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                     {flowOptions.map((f) => (
                       <option key={f} value={f}>
                         Flow {f}: {flowPreview(f)}
+                        {flowTotals[f] ? ` (${formatDays(flowTotals[f].days_from_today)})` : ''}
                       </option>
                     ))}
                   </Form.Select>
@@ -374,6 +471,133 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                 </Form.Group>
               </Col>
             </Row>
+
+            {estimate && (
+              <div className="mt-3 p-2 rounded border bg-light position-relative">
+                {/* overlay ระหว่างโหลดแผนจริง (replan ช้าได้หลายวินาที) */}
+                {verifying && (
+                  <div
+                    className="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column align-items-center justify-content-center bg-white bg-opacity-75 rounded"
+                    style={{ zIndex: 5 }}
+                  >
+                    <Spinner animation="border" className="text-mse mb-2" />
+                    <span className="small text-muted">กำลังโหลดแผนจริง อาจใช้เวลาสักครู่...</span>
+                  </div>
+                )}
+                {/* สรุป 1 บรรทัด (โชว์เสมอเมื่อเลือกครบ) */}
+                <div className="d-flex flex-wrap align-items-center gap-2">
+                  <span>
+                    <i className="bi bi-hourglass-split text-mse me-1" aria-hidden="true" />
+                    เหลืออีก{estimate.insufficient ? ' มากกว่า ' : ' '}
+                    <strong>{formatDays(estimate.days_from_today)}</strong>
+                  </span>
+                  {!estimate.insufficient && estimate.finish_date && (
+                    <span>
+                      · เสร็จประมาณ <strong className="num">{estimate.finish_date}</strong>
+                      {dueCompare && (
+                        <Badge bg={dueCompare.late ? 'danger' : 'success'} className="ms-2">
+                          {dueCompare.text}
+                        </Badge>
+                      )}
+                    </span>
+                  )}
+                  {estimate.total_downtime_days > 0 && (
+                    <span className="text-muted">
+                      · ข้ามวันหยุด/เครื่องหยุด {estimate.total_downtime_days} วัน
+                    </span>
+                  )}
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="ms-auto p-0 text-decoration-none"
+                    onClick={() => setShowDetail((v) => !v)}
+                  >
+                    {showDetail ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
+                    <i className={`bi ms-1 bi-chevron-${showDetail ? 'up' : 'down'}`} aria-hidden="true" />
+                  </Button>
+                </div>
+
+                {/* คำเตือน */}
+                {estimate.insufficient && (
+                  <Alert variant="warning" className="py-1 px-2 mt-2 mb-0 small">
+                    ปฏิทินมีถึง {estimate.horizon || '-'} — ประมาณการอาจไม่ครบ กรุณาสร้างปฏิทินเพิ่ม
+                  </Alert>
+                )}
+                {estimate.no_timing && (
+                  <div className="text-danger small mt-1">
+                    * บาง step ไม่มีข้อมูลเวลา (ตั้งค่า cycle_time ใน machine_config)
+                  </div>
+                )}
+                {estimate.nominal && !estimate.insufficient && (
+                  <div className="text-muted small mt-1">
+                    * บาง step ไม่มีปฏิทิน ใช้ค่าประมาณ ~1240 นาที/วัน
+                  </div>
+                )}
+
+                {/* ตารางละเอียดต่อ step */}
+                {showDetail && (
+                  <Table size="sm" bordered className="mt-2 mb-1 align-middle small">
+                    <thead>
+                      <tr className="text-muted">
+                        <th>Process</th>
+                        <th>เครื่อง</th>
+                        <th>C/T</th>
+                        <th>เวลา (เพราะอะไร)</th>
+                        <th className="text-end">≈ วัน</th>
+                        <th>เริ่ม → เสร็จ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {estimate.steps.map((s, i) => (
+                        <tr
+                          key={`${s.step_index}_${i}`}
+                          className={
+                            i === 0 ? 'table-primary' : s.is_day_unit ? 'table-warning' : ''
+                          }
+                        >
+                          <td>
+                            {s.step_name}
+                            {i === 0 && <span className="text-mse"> (เริ่ม WIP)</span>}
+                          </td>
+                          <td>{s.machine || '-'}</td>
+                          <td className="num">{formatCT(s)}</td>
+                          <td>{stepReason(s)}</td>
+                          <td className="text-end num">
+                            {formatDays(s.working_days)}
+                          </td>
+                          <td className="num">
+                            {s.start_date} → {s.finish_date}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                )}
+
+                {/* ปุ่มตรวจกับแผนจริง */}
+                <div className="d-flex align-items-center gap-2 mt-2 pt-2 border-top">
+                  <Button
+                    variant="outline-secondary"
+                    size="sm"
+                    onClick={handleVerify}
+                    disabled={verifying || !isEditing}
+                    title={isEditing ? '' : 'บันทึกก่อนจึงตรวจกับแผนจริงได้'}
+                  >
+                    {verifying ? <Spinner animation="border" size="sm" /> : 'ตรวจกับแผนจริง'}
+                  </Button>
+                  {realPlanDate && (
+                    <span className="small">
+                      แผนจริง: <strong className="num">{realPlanDate}</strong>{' '}
+                      <span className="text-muted">(อิงค่าที่บันทึกแล้ว)</span>
+                    </span>
+                  )}
+                  <span className="text-muted small ms-auto">
+                    ประมาณการ (ถ้าเครื่องว่าง) · คิดจากเครื่องหลัก
+                  </span>
+                </div>
+              </div>
+            )}
+            </>
           )}
         </Form>
       </Modal.Body>
