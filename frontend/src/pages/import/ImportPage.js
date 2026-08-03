@@ -18,9 +18,9 @@ import ActualResultTemplateDialog from './ActualResultTemplateDialog';
 // builder: ตัวช่วยสร้าง template อัจฉริยะ (เติมโครง/ดึงข้อมูลจริงให้) — orders/product_master ใช้หัวตารางเปล่าพอ
 const UPLOAD_ROWS = [
   { endpoint: '/upload/orders', label: 'Orders', note: 'เพิ่มเฉพาะ batch ใหม่ (append-only)', template: 'orders', mode: 'append' },
-  { endpoint: '/upload/calendar', label: 'Calendar', note: 'แทนที่ทั้งตาราง', template: 'calendar', mode: 'replace', builder: 'calendar' },
-  { endpoint: '/upload/machines', label: 'Machine Config', note: 'แทนที่ทั้งตาราง', template: 'machines', mode: 'replace', builder: 'machines' },
-  { endpoint: '/upload/routing', label: 'Routing', note: 'แทนที่ทั้งตาราง', template: 'routing', mode: 'replace', builder: 'routing' },
+  { endpoint: '/upload/calendar', label: 'Calendar', note: 'อัปเดต/เพิ่มเฉพาะ Machine+Date ในไฟล์', template: 'calendar', mode: 'upsert', builder: 'calendar' },
+  { endpoint: '/upload/machines', label: 'Machine Config', note: 'แทนที่เฉพาะ Model ที่อยู่ในไฟล์ (Model อื่นไม่หาย)', template: 'machines', mode: 'replace_models', builder: 'machines' },
+  { endpoint: '/upload/routing', label: 'Routing', note: 'แทนที่เฉพาะ Model ที่อยู่ในไฟล์ (Model อื่นไม่หาย)', template: 'routing', mode: 'replace_models', builder: 'routing' },
   {
     endpoint: '/upload/actual_result',
     label: 'Actual Result',
@@ -39,7 +39,7 @@ const UPLOAD_ROWS = [
   {
     endpoint: '/upload/product_master',
     label: 'Product Master (แทนที่)',
-    note: 'แทนที่ทั้งตาราง',
+    note: 'แทนที่ทั้งตาราง (อันตราย)',
     template: 'product_master',
     mode: 'replace',
   },
@@ -61,6 +61,8 @@ const PREVIEW_FIELDS = [
 const ImportPreviewSummary = ({ preview }) => {
   if (!preview) return null;
   const isReplace = preview.mode === 'replace';
+  const isReplaceModels = preview.mode === 'replace_models';
+
   return (
     <div>
       {isReplace && (
@@ -68,6 +70,12 @@ const ImportPreviewSummary = ({ preview }) => {
           <i className="bi bi-exclamation-octagon-fill me-2" aria-hidden="true" />
           จะ<strong>ลบข้อมูลเดิมทั้งหมด {preview.delete_existing ?? 0} แถว</strong> แล้วแทนที่ด้วย{' '}
           <strong>{preview.to_insert ?? 0} แถว</strong>
+        </div>
+      )}
+      {isReplaceModels && (
+        <div className="alert alert-warning py-2 mb-3" role="alert">
+          <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
+          จะลบข้อมูลเดิม <strong>{preview.delete_existing ?? 0} แถว</strong> (เฉพาะ {preview.models_affected ?? 0} Model ที่พบในไฟล์) แล้วใส่ข้อมูลอัปเดต <strong>{preview.to_insert ?? 0} แถว</strong>
         </div>
       )}
       <Table size="sm" borderless className="mb-0">
@@ -263,11 +271,12 @@ const ImportPage = () => {
 
   const isError = status.type === 'error';
 
-  const postFile = (endpoint, file, dryRun) => {
+  const postFile = (row, file, dryRun) => {
     const fd = new FormData();
     fd.append('file', file);
+    if (row.mode) fd.append('mode', row.mode); // ✨ เพิ่มบรรทัดนี้ เพื่อส่ง mode ให้ Backend
     if (dryRun) fd.append('dry_run', '1');
-    return apiCall(endpoint, { method: 'POST', body: fd });
+    return apiCall(row.endpoint, { method: 'POST', body: fd });
   };
 
   // เขียนจริง (หลังผู้ใช้ยืนยันใน ConfirmModal)
@@ -275,7 +284,7 @@ const ImportPage = () => {
     setBusy(true);
     setStatus({ type: 'busy', message: `กำลังอัปโหลด ${row.label}...` });
     try {
-      const data = await postFile(row.endpoint, file, false);
+      const data = await postFile(row, file, false);
       if (data.status === 'error') {
         setStatus({ type: 'error', message: data.message });
         return;
@@ -297,7 +306,7 @@ const ImportPage = () => {
     setBusy(true);
     setStatus({ type: 'busy', message: `กำลังตรวจสอบ ${row.label}...` });
     try {
-      const data = await postFile(row.endpoint, file, true);
+      const data = await postFile(row, file, true);
       // product-master upsert คืน status:'error' เมื่อคอลัมน์ไม่ครบ (พฤติกรรมเดิม)
       if (data.status === 'error') {
         setStatus({ type: 'error', message: data.message });
@@ -308,8 +317,8 @@ const ImportPage = () => {
       setConfirm({
         title: `ยืนยันการอัปโหลด — ${row.label}`,
         body: <ImportPreviewSummary preview={preview} />,
-        confirmLabel: row.mode === 'replace' ? 'ลบและแทนที่' : 'ยืนยันอัปโหลด',
-        variant: row.mode === 'replace' ? 'danger' : 'primary',
+        confirmLabel: row.mode === 'replace' ? 'ลบและแทนที่' : row.mode === 'replace_models' ? 'ยืนยันอัปเดต Model' : 'ยืนยันอัปโหลด',
+        variant: row.mode === 'replace' ? 'danger' : row.mode === 'replace_models' ? 'warning' : 'primary',
         onConfirm: () => runRealUpload(row, file),
       });
     } catch (err) {
