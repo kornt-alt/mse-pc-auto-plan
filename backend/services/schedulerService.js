@@ -26,10 +26,14 @@ async function loadInputs(isReplan) {
   );
   // WHERE เดียวกับ logic.py L49-52 (ORM filter ฝั่ง SQL)
   // ฟีเจอร์ Mat'l/Confirm: เพิ่ม material_ready_date, confirm_reply_date (input)
+  // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto
+  // (undefined) เหมือน orderStateMap ด้านล่าง — arrived=1 (OK) ปลด material floor ใน buildRawOrders
+  const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
   const orderRows = await query(
     `SELECT batch, model, due_date, priority, qty, plan_mode,
             wip_flow_index, wip_start_step_index, wip_finish_date, wip_machine,
             planning_mode, release_date, material_ready_date, confirm_reply_date
+            ${hasArrivedCol ? ', material_arrived' : ''}
      FROM orders
      WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
      ORDER BY id`,
@@ -183,8 +187,14 @@ async function run(isReplan = false, options = {}) {
     await persist(scheduleResultRows);
 
     // เขียน start_date/fg_date/program_notes กลับ orders (logic.py L459-562)
+    // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto (undefined)
+    // (SQL Server bind ทุก column reference ตอน compile → เช็ค COL_LENGTH ก่อน อย่าอ้างคอลัมน์ที่อาจไม่มีตรง ๆ)
+    const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
+    const stateCols = hasArrivedCol
+      ? 'batch, start_date, fg_date, material_ready_date, material_arrived'
+      : 'batch, start_date, fg_date, material_ready_date';
     const orderStateRows = await query(
-      'SELECT batch, start_date, fg_date, material_ready_date FROM orders WHERE is_deleted = 0',
+      `SELECT ${stateCols} FROM orders WHERE is_deleted = 0`,
     );
     const orderStateMap = {};
     for (const r of orderStateRows) orderStateMap[r.batch] = r;

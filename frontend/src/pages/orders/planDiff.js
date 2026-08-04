@@ -126,6 +126,10 @@ export function buildPlanDiff({
         isFixedAfter: afterModes ? fixedAfter : undefined,
         materialDate: normalizeDate(o.material_ready_date),
         programNotes: o.program_notes ?? null,
+        // explicit OK เท่านั้น (1/true) ที่ปลด material floor ใน engine; null(auto)/0 = คงพฤติกรรมเดิม
+        materialArrived: o.material_arrived === true || o.material_arrived === 1,
+        // soft floor มีผลเฉพาะ forward (engine backward loop ไม่สน effectiveReadyDate) → ใช้ gate note
+        planningMode: o.planning_mode ?? 'forward',
       },
     };
   });

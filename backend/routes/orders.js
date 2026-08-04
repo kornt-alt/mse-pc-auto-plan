@@ -730,6 +730,16 @@ router.get('/:batch/date-log', verifyToken, readRoles, async (req, res) => {
   }
 });
 
+// อ่าน material_arrived (override สถานะของเข้า) แบบ defensive — column เพิ่มด้วย DDL รันมือ
+// คืน null ถ้า column ยังไม่มี / ไม่พบแถว / ค่าเป็น NULL (auto) — SQL Server bind ทุก column ตอน compile
+// จึงต้องเช็ค COL_LENGTH ก่อน ไม่อ้าง material_arrived ตรง ๆ เมื่ออาจไม่มี
+async function readMaterialArrived(batch) {
+  const has = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
+  if (!has) return null;
+  const r = await query('SELECT material_arrived FROM orders WHERE batch = @batch', { batch });
+  return r.length ? r[0].material_arrived : null;
+}
+
 // ========== PUT /api/orders/:batch/material-date — Mat'l Receive: วันวัตถุดิบเข้า ==========
 // เขียน material_ready_date + คำนวณ program_notes ใหม่เทียบ start_date ปัจจุบัน + log ทุกครั้ง (แนบไฟล์ได้)
 router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async (req, res) => {
@@ -754,7 +764,9 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
       req.file._storedName = storedName;
     }
 
-    const programNotes = computeProgramNote(rows[0].start_date, materialDate);
+    // arrived override มีผลเหนือการเทียบ start vs material — อ่านค่าปัจจุบันมาคำนวณ program_notes
+    const arrivedOverride = await readMaterialArrived(batch);
+    const programNotes = computeProgramNote(rows[0].start_date, materialDate, arrivedOverride);
     await execute(
       'UPDATE orders SET material_ready_date = @m, program_notes = @p WHERE id = @id',
       { m: materialDate, p: programNotes, id: rows[0].id },
@@ -769,6 +781,44 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
   } catch (err) {
     if (storedName) safeUnlink(storedName);
     console.error('Error updating material date:', err);
+    res.status(500).json({ message: String(err.message || err) });
+  }
+});
+
+// ========== PUT /api/orders/:batch/material-arrived — override สถานะ "ของเข้า/ไม่เข้า" ==========
+// material_arrived เป็น tri-state (column BIT NULL): true/1 = ยืนยันเข้า(OK), false/0 = ยืนยันไม่เข้า,
+// null = reset เป็น auto (ระบบถือว่าเข้าเมื่อถึง material_ready_date). override นี้เป็นแหล่งความจริงของ
+// program_notes จึง recompute ใหม่ทุกครั้ง. **มีผลกับ engine แล้ว**: arrived=1 (OK) ปลด material floor
+// ใน buildRawOrders → effectiveReadyDate ไม่รอวันวัตถุดิบอนาคต → แผนขยับ จึง markEdit() ให้ "แผนค้าง"
+// เตือนให้ Replan (เหมือน material-date). สองส่วน (literal 'material-arrived') ไม่ชนกับ /:batch;
+// column material_arrived เพิ่มด้วย DDL รันมือ
+router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const { batch } = req.params;
+    const raw = req.body ? req.body.material_arrived : undefined;
+    // tri-state: null/'' → reset auto; true/1 → เข้า; อื่น ๆ → ไม่เข้า
+    let arrived; // 1 | 0 | null
+    if (raw === null || raw === 'null' || raw === undefined || raw === '') arrived = null;
+    else arrived = (raw === true || raw === 'true' || raw === 1 || raw === '1') ? 1 : 0;
+
+    const rows = await query('SELECT id, start_date, material_ready_date FROM orders WHERE batch = @batch', { batch });
+    if (rows.length === 0) return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+
+    const overrideVal = arrived === null ? null : arrived === 1;
+    const programNotes = computeProgramNote(rows[0].start_date, rows[0].material_ready_date, overrideVal);
+    // ใช้ literal NULL เมื่อ reset auto — เลี่ยงปัญหา type inference ของ null param (โดยเฉพาะ msnodesqlv8)
+    const arrivedSql = arrived === null ? 'NULL' : '@a';
+    const params = arrived === null ? { p: programNotes, id: rows[0].id } : { a: arrived, p: programNotes, id: rows[0].id };
+    await execute(
+      `UPDATE orders SET material_arrived = ${arrivedSql}, program_notes = @p WHERE id = @id`,
+      params,
+    );
+    // toggle นี้เปลี่ยน effectiveReadyDate (arrived=1 ปลด material floor) → แผนขยับ ต้อง Replan
+    // จึง markEdit() ให้ตัวชี้ "แผนค้าง" ขึ้น (เหมือน material-date) — planner กด Replan เพื่อดู preview ผล
+    timestamps.markEdit();
+    res.json({ batch, material_arrived: arrived === null ? null : Boolean(arrived), program_notes: programNotes });
+  } catch (err) {
+    console.error('Error updating material arrived:', err);
     res.status(500).json({ message: String(err.message || err) });
   }
 });

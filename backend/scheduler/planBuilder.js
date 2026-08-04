@@ -50,8 +50,12 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
     // Mat'l: effective_ready_date = max(release, material) เทียบ string (logic.py L86-94)
     let matDate = row.material_ready_date || '';
     if (['none', 'null'].includes(matDate.toLowerCase())) matDate = '';
+    // material_arrived === 1 (planner ยืนยันของเข้า/OK) → ปลด material floor: ไม่ต้องรอ material_ready_date
+    // ที่เป็นวันอนาคต เริ่มได้เร็วสุดตาม release/today. null(auto)/0(ยืนยันไม่เข้า) → คง floor เดิม (parity-safe:
+    // fixture/DB ที่ไม่มี column → undefined → arrived=false → พฤติกรรมเดิมเป๊ะ)
+    const arrived = row.material_arrived === true || row.material_arrived === 1;
     const effRelDate = rDate ? rDate : todayStr;
-    const effMatDate = matDate ? matDate : todayStr;
+    const effMatDate = (matDate && !arrived) ? matDate : todayStr;
     const effectiveDate = effRelDate > effMatDate ? effRelDate : effMatDate;
 
     // Confirm/VIP: normalize ค่าที่ไม่ใช่วันจริงให้เป็น '' (logic.py L96-102)
@@ -435,19 +439,22 @@ function safeDateFormat(dateStr) {
   return s;
 }
 
-// logic.py L508-536: program_notes จาก start_date เทียบ material_ready_date
+// logic.py L508-536 + Mat'l arrived override: program_notes จาก start_date เทียบ material_ready_date
+// override (material_arrived): true/1 = planner ยืนยันของเข้า → "Material enough" เสมอ;
+//   false/0 = planner ยืนยันของ *ไม่* เข้า (เช่น ถึงวันคาดแล้วแต่ของยังไม่มา) → "Please pull in material" เสมอ;
+//   null/undefined = auto (ไม่ได้ตั้งค่า) → พฤติกรรมเดิม เทียบ start vs material (คง parity)
 // material ว่าง → ใช้ start แทน (→ "Material enough"); ไม่มี start → "N/A (Missing Date)"
-function computeProgramNote(startDate, materialDate) {
+function computeProgramNote(startDate, materialDate, override) {
   let mat = materialDate;
   if (!mat || ['NULL', 'NONE', ''].includes(String(mat).trim().toUpperCase())) mat = startDate;
-  if (startDate && mat) {
-    return safeDateFormat(startDate) < safeDateFormat(mat) ? 'Please pull in material' : 'Material enough';
-  }
-  return 'N/A (Missing Date)';
+  if (!(startDate && mat)) return 'N/A (Missing Date)';
+  if (override === true || override === 1) return 'Material enough';
+  if (override === false || override === 0) return 'Please pull in material';
+  return safeDateFormat(startDate) < safeDateFormat(mat) ? 'Please pull in material' : 'Material enough';
 }
 
 // logic.py L457-541: คำนวณ start(min)/fg(max)/program_notes ต่อ target batch (แตก sub-batch)
-// เขียนกลับ orders หลังวางแผน — orderStateMap = ค่าปัจจุบัน { batch: {start_date, fg_date, material_ready_date} }
+// เขียนกลับ orders หลังวางแผน — orderStateMap = ค่าปัจจุบัน { batch: {start_date, fg_date, material_ready_date, material_arrived} }
 // (actual '-' = ไม่มีแถวในแผน → คงค่าเดิมไว้ ตรง logic.py ที่ตั้งเฉพาะเมื่อ != '-')
 function buildOrderDateUpdates(mainPlan, statusMap, safeOrders, orderStateMap) {
   const batchStartMap = {};
@@ -474,7 +481,7 @@ function buildOrderDateUpdates(mainPlan, statusMap, safeOrders, orderStateMap) {
       const state = orderStateMap[targetId] ?? {};
       const startDate = actualStart !== '-' ? actualStart : (state.start_date ?? null);
       const fgDate = actualFinish !== '-' ? actualFinish : (state.fg_date ?? null);
-      const programNotes = computeProgramNote(startDate, state.material_ready_date);
+      const programNotes = computeProgramNote(startDate, state.material_ready_date, state.material_arrived);
       updates.push({ batch: targetId, startDate, fgDate, programNotes });
     }
   }

@@ -375,6 +375,13 @@ const PlanPreviewDialog = ({ show, mode = 'replan', diff, detail, capacityWarnin
                             {r.inputs.programNotes === 'Please pull in material' && (
                               <i className="bi bi-exclamation-triangle-fill text-danger" title="วัตถุดิบเข้าช้ากว่าวันเริ่มผลิต" />
                             )}
+                            {r.inputs.materialArrived && r.inputs.planningMode !== 'backward' && !r.inputs.isFixed && (
+                              <span className="text-success ms-1" style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                                <i className="bi bi-lightning-charge-fill" aria-hidden="true" />{' '}
+                                วัตถุดิบพร้อม — เริ่มได้ทันที
+                                {r.inputs.materialDate ? ` (ไม่รอถึง ${r.inputs.materialDate})` : ''}
+                              </span>
+                            )}
                           </td>
                         </tr>
                         {batches && isOpen && (
