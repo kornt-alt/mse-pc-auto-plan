@@ -72,6 +72,32 @@ test('buildShipmentReport: ไม่มีแผน → FinishDate "-" → Delay
   ]);
 });
 
+test('buildCapacityWarning: นับเฉพาะ FinishDate ที่เป็น sentinel', () => {
+  const report = [
+    { Batch: 'B1', FinishDate: '2026-08-10' }, // วางลง
+    { Batch: 'B2', FinishDate: '-' }, // หลุด
+    { Batch: 'B3', FinishDate: 'NO_CAPACITY' }, // หลุด
+    { Batch: 'B4', FinishDate: '9999-12-31' }, // หลุด
+    { Batch: 'B5', FinishDate: '2026-08-20' }, // วางลง
+  ];
+  const out = pb.buildCapacityWarning(report, '2026-08-20');
+  assert.deepEqual(out, { unplanned_count: 3, last_calendar_date: '2026-08-20' });
+});
+
+test('buildCapacityWarning: ไม่มีงานหลุด → null', () => {
+  const report = [
+    { Batch: 'B1', FinishDate: '2026-08-10' },
+    { Batch: 'B2', FinishDate: '2026-08-11' },
+  ];
+  assert.equal(pb.buildCapacityWarning(report, '2026-08-20'), null);
+});
+
+test('buildCapacityWarning: report ว่าง → null / lastDate ว่าง → null field', () => {
+  assert.equal(pb.buildCapacityWarning([], '2026-08-20'), null);
+  const out = pb.buildCapacityWarning([{ Batch: 'B1', FinishDate: '-' }], '');
+  assert.deepEqual(out, { unplanned_count: 1, last_calendar_date: null });
+});
+
 test('toScheduleResultRows: parse qty จาก "NN pcs" / setup → qty_plan 0', () => {
   const statusMap = new Map([['P1', { Model: 'M1' }]]);
   const display = [

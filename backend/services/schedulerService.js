@@ -195,6 +195,14 @@ async function run(isReplan = false, options = {}) {
   const cleanedData = pb.cleanDisplayData(displayRows, calendar);
   const shipmentReport = pb.buildShipmentReport(mainPlan, totalPlanMap, safeOrders);
 
+  // เตือน "ปฏิทินไม่พอ": ถ้ามี safe order ที่วางไม่ลง (FinishDate เป็น sentinel)
+  // → บอกวันสุดท้ายของปฏิทิน + จำนวนงาน ให้ผู้ใช้ไปสร้างปฏิทินเพิ่ม (คืนทั้ง run/replan/sim)
+  let lastCalendarDate = '';
+  for (const row of inputs.calendarRows) {
+    if (row.date > lastCalendarDate) lastCalendarDate = row.date;
+  }
+  const capacityWarning = pb.buildCapacityWarning(shipmentReport, lastCalendarDate);
+
   let message = '✅ จัดแผนสำเร็จ (Hybrid Pro Backend)';
   if (rejectedOrders.length > 0) {
     message += ` (⚠️ ข้าม ${rejectedOrders.length} รายการที่ Model ไม่ถูกต้อง)`;
@@ -207,6 +215,7 @@ async function run(isReplan = false, options = {}) {
     data: cleanedData,
     report: shipmentReport,
     total_plan_map: missingRoutingMap,
+    capacity_warning: capacityWarning,
   };
 }
 

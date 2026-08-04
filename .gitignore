@@ -12,6 +12,8 @@ frontend/.env
 frontend/build/
 backend/build/
 
+data
+
 # Logs
 *.log
 npm-debug.log*

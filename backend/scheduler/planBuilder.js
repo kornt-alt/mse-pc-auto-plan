@@ -481,6 +481,20 @@ function buildOrderDateUpdates(mainPlan, statusMap, safeOrders, orderStateMap) {
   return updates;
 }
 
+// นับงานใน shipment report ที่วางไม่ลง (FinishDate เป็น sentinel) → warning "ปฏิทินไม่พอ"
+// report มีเฉพาะ safe orders อยู่แล้ว (missing-routing ถูกตัดไป rejectedOrders/message)
+// → sentinel ที่เหลือ = วางไม่ลงเพราะ capacity/ปฏิทินสั้น. null = ไม่มีงานหลุด
+function buildCapacityWarning(shipmentReport, lastCalendarDate) {
+  const SENT = new Set(['-', 'NO_CAPACITY', 'OVERDUE', '9999-12-31', 'CONFIG_ERROR', '']);
+  let unplanned = 0;
+  for (const r of shipmentReport) {
+    if (SENT.has(String(r.FinishDate))) unplanned += 1;
+  }
+  return unplanned > 0
+    ? { unplanned_count: unplanned, last_calendar_date: lastCalendarDate || null }
+    : null;
+}
+
 module.exports = {
   buildRawOrders,
   rejectMissingRouting,
@@ -493,6 +507,7 @@ module.exports = {
   toScheduleResultRows,
   cleanDisplayData,
   buildShipmentReport,
+  buildCapacityWarning,
   safeDateFormat,
   computeProgramNote,
   buildOrderDateUpdates,

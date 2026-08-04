@@ -5,7 +5,8 @@ import {
 
 // PlanPreviewDialog — โชว์ diff "ก่อน → หลัง" ก่อนยืนยัน (Replan / เรียง Due Date / Drag / Lock / Unlock)
 // props: show, mode('replan'|'sort'|'drag'|'lock'|'unlock'), diff({rows,summary}),
-//        detail(buildPlanDetail: {batches,machineLoad}), settings, loading, onConfirm(() => Promise), onHide
+//        detail(buildPlanDetail: {batches,machineLoad}), capacityWarning({unplanned_count,last_calendar_date}|null),
+//        settings, loading, onConfirm(() => Promise), onHide
 // diff/detail มาจาก pure module — parent เป็นคนรัน sim + ยิง API จริงตอน onConfirm
 
 // meta ของ changeType → ป้ายสี + ข้อความ (จัดกลุ่มให้เข้าใจง่าย)
@@ -182,7 +183,7 @@ const BatchDetail = ({ info }) => {
   );
 };
 
-const PlanPreviewDialog = ({ show, mode = 'replan', diff, detail, settings, loading, onConfirm, onHide }) => {
+const PlanPreviewDialog = ({ show, mode = 'replan', diff, detail, capacityWarning, settings, loading, onConfirm, onHide }) => {
   const [onlyChanged, setOnlyChanged] = useState(true);
   const [showLegend, setShowLegend] = useState(false);
   const [showLoad, setShowLoad] = useState(false);
@@ -244,6 +245,17 @@ const PlanPreviewDialog = ({ show, mode = 'replan', diff, detail, settings, load
           </div>
         ) : (
           <>
+            {capacityWarning && (
+              <div className="alert alert-warning py-2 d-flex align-items-start gap-2 mb-2" role="alert">
+                <i className="bi bi-calendar-x-fill mt-1" aria-hidden="true" />
+                <span>
+                  ปฏิทินถึงแค่ <strong className="num">{capacityWarning.last_calendar_date || '-'}</strong>
+                  {' — มี '}
+                  <strong>{capacityWarning.unplanned_count}</strong>
+                  {' งานที่วางไม่ลง ควรสร้างปฏิทินเพิ่มก่อนยืนยัน'}
+                </span>
+              </div>
+            )}
             {meta.note && (
               <div className="border rounded p-2 mb-2 small d-flex align-items-start gap-2" style={{ background: 'var(--mse-info-bg, #e7f1ff)' }}>
                 <i className="bi bi-info-circle-fill text-info mt-1" aria-hidden="true" />

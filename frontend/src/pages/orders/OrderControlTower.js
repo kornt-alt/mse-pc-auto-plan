@@ -462,7 +462,9 @@ const OrderControlTower = () => {
       });
       // deep detail: เครื่อง/process กินเวลาเท่าไหร่ + คอขวด (จาก decoded.data)
       const detail = buildPlanDetail(decoded.data ?? []);
-      setPreview((p) => (p && p.mode === mode ? { ...p, loading: false, diff, detail } : p));
+      setPreview((p) => (p && p.mode === mode
+        ? { ...p, loading: false, diff, detail, capacityWarning: decoded.capacity_warning }
+        : p));
     } catch (err) {
       setPreview(null);
       planErrorToast(err);
@@ -480,7 +482,17 @@ const OrderControlTower = () => {
       await fetchOrders();
       await fetchTimestamps();
       setPreview(null);
-      showToast('Replan สำเร็จ — กด "ดูแผน" เพื่อไปหน้าวางแผน', 'success');
+      const cw = decoded.capacity_warning;
+      if (cw) {
+        showToast(
+          `⚠️ ปฏิทินอาจไม่พอ: วางแผนไม่ได้ ${cw.unplanned_count} งาน`
+          + (cw.last_calendar_date ? ` (ปฏิทินถึง ${cw.last_calendar_date})` : '')
+          + ' — กรุณาสร้างปฏิทินเพิ่มแล้ว Replan อีกครั้ง',
+          'warning',
+        );
+      } else {
+        showToast('Replan สำเร็จ — กด "ดูแผน" เพื่อไปหน้าวางแผน', 'success');
+      }
     } catch (err) {
       planErrorToast(err);
     } finally {
@@ -929,6 +941,7 @@ const OrderControlTower = () => {
         mode={preview ? preview.mode : 'replan'}
         diff={preview ? preview.diff : null}
         detail={preview ? preview.detail : null}
+        capacityWarning={preview ? preview.capacityWarning : null}
         loading={preview ? preview.loading : false}
         settings={settings}
         onConfirm={preview ? preview.onConfirm : undefined}
