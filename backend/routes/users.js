@@ -34,6 +34,18 @@ router.get('/', verifyToken, requireRole('ADMIN'), async (req, res) => {
   }
 });
 
+// จำนวนคำขอที่รออนุมัติ (ADMIN) — navbar เอาไปโชว์ badge ให้เห็นทั่วแอป (backup ตอนอีเมลส่งไม่ออก)
+// ประกาศก่อน /:id เสมอ ไม่งั้นชนกับ route param
+router.get('/pending-count', verifyToken, requireRole('ADMIN'), async (req, res) => {
+  try {
+    const rows = await query(`SELECT COUNT(*) AS c FROM users WHERE status = 'PENDING'`);
+    res.json({ count: rows[0]?.c ?? 0 });
+  } catch (err) {
+    console.error('Error counting pending users:', err);
+    res.status(500).json({ message: 'Failed to count pending users' });
+  }
+});
+
 // สร้างผู้ใช้ใหม่ (ADMIN เท่านั้น) — ต่างจาก /auth/register ตรงที่ใช้งานได้ทันที ไม่ต้องอนุมัติ
 router.post('/', verifyToken, requireRole('ADMIN'), async (req, res) => {
   try {
