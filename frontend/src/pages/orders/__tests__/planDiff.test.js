@@ -110,6 +110,82 @@ describe('buildPlanDiff — inputs (VIP / FIXED / material)', () => {
     expect(r.inputs.materialDate).toBe('2026-08-01');
     expect(r.inputs.programNotes).toBe('Material enough');
   });
+
+  // buildOrderRules (planRules.js) อ่าน releaseDate/startDate — ถ้า inputs ไม่ส่งมา
+  // กฎ "เริ่มได้เร็วสุด" กับ "วัตถุดิบ" จะเพี้ยนเงียบ ๆ จึงล็อกไว้ด้วยเทส
+  test('ส่ง releaseDate/startDate ต่อให้ planRules (normalize ผ่าน normalizeDate)', () => {
+    const rows = [{
+      batch: '100', model: 'A', priority: 1, due_date: '2026-08-10',
+      release_date: '2026-08-02T00:00:00', start_date: '2026-08-06', material_ready_date: '2026-08-04',
+    }];
+    const r = buildPlanDiff({ beforeRows: rows }).rows[0];
+    expect(r.inputs.releaseDate).toBe('2026-08-02'); // slice 10 ตัว
+    expect(r.inputs.startDate).toBe('2026-08-06');
+  });
+
+  test('release/start ที่เป็น sentinel หรือไม่มี → null (ไม่ใช่ string ดิบ)', () => {
+    const rows = [{
+      batch: '100', model: 'A', priority: 1, due_date: '2026-08-10',
+      release_date: 'NO_CAPACITY', start_date: null,
+    }];
+    const r = buildPlanDiff({ beforeRows: rows }).rows[0];
+    expect(r.inputs.releaseDate).toBeNull();
+    expect(r.inputs.startDate).toBeNull();
+  });
+});
+
+describe('buildPlanDiff — gap: FG ห่าง Due กี่วัน', () => {
+  const rowsOf = (before, report) => buildPlanDiff({ beforeRows: before, afterReport: report }).rows;
+
+  test('ช้ากว่า Due = บวก, เร็วกว่า = ลบ, ตรงวัน = 0', () => {
+    const before = [
+      { batch: '100', model: 'A', priority: 1, due_date: '2026-08-20', fg_date: '2026-08-18' },
+      { batch: '200', model: 'B', priority: 2, due_date: '2026-08-20', fg_date: '2026-08-20' },
+    ];
+    const report = [
+      { Batch: '100', FinishDate: '2026-08-22', DueDate: '2026-08-20', Delay: 'Yes' },
+      { Batch: '200', FinishDate: '2026-08-15', DueDate: '2026-08-20', Delay: 'No' },
+    ];
+    const rows = rowsOf(before, report);
+    const r100 = findRow({ rows }, '100');
+    expect(r100.gapBefore).toBe(-2); // 18 เร็วกว่า due 20 อยู่ 2 วัน
+    expect(r100.gapAfter).toBe(2); // 22 ช้ากว่า due 20 อยู่ 2 วัน
+
+    const r200 = findRow({ rows }, '200');
+    expect(r200.gapBefore).toBe(0); // ตรงวันพอดี
+    expect(r200.gapAfter).toBe(-5);
+  });
+
+  test('ข้ามเดือน/ปี นับวันถูก (ไม่ใช่ลบเลขวันที่ตรง ๆ)', () => {
+    const rows = rowsOf(
+      [{ batch: '100', model: 'A', priority: 1, due_date: '2026-12-30', fg_date: '2027-01-05' }],
+      null,
+    );
+    expect(findRow({ rows }, '100').gapBefore).toBe(6);
+  });
+
+  test('ไม่มี due → null (ไม่ใช่ NaN ที่จะไหลไปโผล่บนจอ)', () => {
+    const rows = rowsOf([{ batch: '100', model: 'A', priority: 1, due_date: null, fg_date: '2026-08-18' }], null);
+    const r = findRow({ rows }, '100');
+    expect(r.gapBefore).toBeNull();
+    expect(Number.isNaN(r.gapBefore)).toBe(false);
+  });
+
+  test('หลุดออกจากแผน (ไม่มีใน report) → gapAfter null', () => {
+    const rows = rowsOf(
+      [{ batch: '100', model: 'A', priority: 1, due_date: '2026-08-20', fg_date: '2026-08-18' }],
+      [], // report ว่าง → fgAfter null
+    );
+    const r = findRow({ rows }, '100');
+    expect(r.changeType).toBe('fell-out');
+    expect(r.gapBefore).toBe(-2);
+    expect(r.gapAfter).toBeNull();
+  });
+
+  test('ไม่มี afterReport → gapAfter undefined (เหมือน fgAfter)', () => {
+    const rows = rowsOf([{ batch: '100', model: 'A', priority: 1, due_date: '2026-08-20', fg_date: '2026-08-18' }], null);
+    expect(findRow({ rows }, '100').gapAfter).toBeUndefined();
+  });
 });
 
 describe('buildPlanDiff — mode diff (lock/unlock)', () => {

@@ -23,7 +23,7 @@ import DateEditDialog from './DateEditDialog';
 import SettingsDialog from './SettingsDialog';
 import PlanPreviewDialog from './PlanPreviewDialog';
 import { buildPlanDiff, computeSortByDueDate } from './planDiff';
-import { buildPlanDetail } from './planDetail';
+import { buildPlanDetail, buildMachineSchedule } from './planDetail';
 import OrderFilterPanel from './OrderFilterPanel';
 import {
   EMPTY_FILTERS, dateFilterActive, countActiveDateFilters, matchOrderDates,
@@ -515,8 +515,10 @@ const OrderControlTower = () => {
       });
       // deep detail: เครื่อง/process กินเวลาเท่าไหร่ + คอขวด (จาก decoded.data)
       const detail = buildPlanDetail(decoded.data ?? []);
+      // มุมกลับ: เครื่องไหนรัน batch ไหนบ้าง (แท็บ "เครื่องจักร")
+      const machineSchedule = buildMachineSchedule(decoded.data ?? []);
       setPreview((p) => (p && p.mode === mode
-        ? { ...p, loading: false, diff, detail, capacityWarning: decoded.capacity_warning }
+        ? { ...p, loading: false, diff, detail, machineSchedule, capacityWarning: decoded.capacity_warning }
         : p));
     } catch (err) {
       setPreview(null);
@@ -958,9 +960,11 @@ const OrderControlTower = () => {
         mode={preview ? preview.mode : 'replan'}
         diff={preview ? preview.diff : null}
         detail={preview ? preview.detail : null}
+        machineSchedule={preview ? preview.machineSchedule : null}
         capacityWarning={preview ? preview.capacityWarning : null}
         loading={preview ? preview.loading : false}
         settings={settings}
+        todayStr={today}
         onConfirm={preview ? preview.onConfirm : undefined}
         onHide={closePreview}
       />

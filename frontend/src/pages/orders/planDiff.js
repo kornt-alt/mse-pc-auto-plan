@@ -10,6 +10,8 @@
 //
 // pure ล้วน (ไม่แตะ DB/clock/React) — ทดสอบใน __tests__/planDiff.test.js
 
+import { diffDays } from './wipEstimate';
+
 // sentinel ที่ไม่ใช่วันจริง (ตรงกับ DROP_DATES ฝั่ง backend + runSimulation เดิม)
 const SENTINELS = new Set(['-', 'NO_CAPACITY', 'OVERDUE', '9999-12-31', 'CONFIG_ERROR', '']);
 
@@ -20,6 +22,14 @@ export function normalizeDate(value) {
   if (SENTINELS.has(s)) return null;
   const d = s.slice(0, 10);
   return SENTINELS.has(d) ? null : d;
+}
+
+// ห่างจาก Due กี่วัน: + = ช้ากว่า Due, − = เร็วกว่า, 0 = ตรงวัน
+// ขาดวันใดวันหนึ่ง (ไม่มี due / หลุดแผนจน fg เป็น null) → null ไม่ใช่ NaN
+// (diffDays parse แบบ T00:00:00Z ทั้งคู่ ผลจึงเป็นจำนวนวันเต็มเสมอ ไม่มีปัญหา timezone)
+function gapFromDue(finish, due) {
+  if (!finish || !due) return null;
+  return diffDays(due, finish);
 }
 
 // สถานะส่งมอบจาก finish เทียบ due (เทียบ string 'YYYY-MM-DD' แบบ lexicographic)
@@ -116,6 +126,9 @@ export function buildPlanDiff({
       priorityAfter,
       fgBefore,
       fgAfter: hasAfterFg ? fgAfter : undefined,
+      // ห่าง Due กี่วัน — ข้อมูลเสริมล้วน ไม่ได้ใช้จัดหมวด changeType (นั่นยังใช้ delayBefore/After)
+      gapBefore: gapFromDue(fgBefore, dueDate),
+      gapAfter: hasAfterFg ? gapFromDue(fgAfter, dueDate) : undefined,
       delayBefore,
       delayAfter: hasAfterFg ? delayAfter : undefined,
       changeType,
@@ -125,6 +138,10 @@ export function buildPlanDiff({
         isFixed: fixedBefore,
         isFixedAfter: afterModes ? fixedAfter : undefined,
         materialDate: normalizeDate(o.material_ready_date),
+        // releaseDate/startDate ป้อน buildOrderRules (planRules.js) — effectiveReadyDate ใช้ release,
+        // และกฎ "วัตถุดิบ" อธิบายด้วย start_date ที่ engine เขียนกลับมา; GET /orders เป็น SELECT * จึงมีให้แล้ว
+        releaseDate: normalizeDate(o.release_date),
+        startDate: normalizeDate(o.start_date),
         programNotes: o.program_notes ?? null,
         // explicit OK เท่านั้น (1/true) ที่ปลด material floor ใน engine; null(auto)/0 = คงพฤติกรรมเดิม
         materialArrived: o.material_arrived === true || o.material_arrived === 1,
