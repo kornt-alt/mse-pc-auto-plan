@@ -31,7 +31,8 @@ import {
 
 // meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
 const DATE_EDIT_META = {
-  material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam' },
+  // logKinds: กล่อง Material โชว์ประวัติรวมกับการติ๊ก "Mat'l เข้า" (kind material_arrived) — เรื่องวัตถุดิบเดียวกัน
+  material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam', logKinds: 'material,material_arrived' },
   confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
   release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
 };
@@ -205,7 +206,9 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
         >
           {shortDate(order.material_ready_date)}
         </Button>
-        {logMarker(order.date_log_counts?.material)}
+        {/* รวมจำนวนการติ๊ก "Mat'l เข้า" ด้วย เพราะกดเข้าไปแล้วเห็น timeline เดียวกัน */}
+        {logMarker((Number(order.date_log_counts?.material) || 0)
+          + (Number(order.date_log_counts?.material_arrived) || 0))}
       </td>
       <td className="num">
         <Button
@@ -468,9 +471,17 @@ const OrderControlTower = () => {
         body: JSON.stringify({ material_arrived: checked }),
       });
       // ซิงก์ program_notes ที่ backend คำนวณใหม่ (ป้ายเตือน "ดึงวัตถุดิบเข้า" ในเซลล์เดียวกัน)
-      setOrders((prev) => prev.map((o) => (o.batch === order.batch
-        ? { ...o, material_arrived: res.material_arrived, program_notes: res.program_notes }
-        : o)));
+      setOrders((prev) => prev.map((o) => {
+        if (o.batch !== order.batch) return o;
+        const upd = { ...o, material_arrived: res.material_arrived, program_notes: res.program_notes };
+        // bump ตัวนับ marker ถ้า backend บันทึก log สำเร็จ (log_entry ว่าง = ค่าไม่เปลี่ยน หรือยังไม่มีตาราง)
+        if (res.log_entry) {
+          const counts = { ...(o.date_log_counts || {}) };
+          counts.material_arrived = (Number(counts.material_arrived) || 0) + 1;
+          upd.date_log_counts = counts;
+        }
+        return upd;
+      }));
       fetchTimestamps();
     } catch (err) {
       setOrders((prev) => prev.map((o) => (o.batch === order.batch
@@ -924,6 +935,7 @@ const OrderControlTower = () => {
       <DateEditDialog
         show={!!dateEdit}
         kind={dateEdit ? dateEdit.kind : ''}
+        logKinds={dateEdit ? DATE_EDIT_META[dateEdit.kind].logKinds : ''}
         title={dateEdit ? DATE_EDIT_META[dateEdit.kind].title : ''}
         label={dateEdit ? DATE_EDIT_META[dateEdit.kind].label : ''}
         icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}

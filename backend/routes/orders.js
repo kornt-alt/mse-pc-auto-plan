@@ -12,7 +12,7 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const timestamps = require('../state/timestamps');
 const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../utils/dates');
 const { computeProgramNote } = require('../scheduler/planBuilder');
-const { validateAttachment, MAX_FILE_SIZE } = require('../utils/attachments');
+const { validateAttachment, parseLogKinds, MAX_FILE_SIZE } = require('../utils/attachments');
 const { isDayUnitStep } = require('../scheduler/dayUnit');
 const constants = require('../config/constants');
 
@@ -706,12 +706,16 @@ router.get('/attachments/:id/download', verifyToken, readRoles, async (req, res)
 router.get('/:batch/date-log', verifyToken, readRoles, async (req, res) => {
   try {
     const { batch } = req.params;
-    const kind = req.query.kind ? String(req.query.kind).trim() : null;
+    // kind รับได้ทั้งค่าเดี่ยว ('material') และหลายค่าคั่นคอมมา ('material,material_arrived')
+    // parseLogKinds คืน null = ไม่ส่งมา (ไม่กรอง) / [] = ส่งมาแต่ไม่มีค่าที่ถูกต้องเลย (→ ตอบลิสต์ว่าง)
+    const kinds = parseLogKinds(req.query.kind);
+    if (kinds && kinds.length === 0) return res.json([]);
     const params = { batch };
     let where = 'l.batch = @batch';
-    if (kind) {
-      where += ' AND l.date_kind = @kind';
-      params.kind = kind;
+    if (kinds) {
+      // bind ทีละตัวเป็น @k0,@k1,... (แพตเทิร์นเดียวกับ modelInClause ใน routes/uploads.js)
+      const holes = kinds.map((k, i) => { params[`k${i}`] = k; return `@k${i}`; }).join(',');
+      where += ` AND l.date_kind IN (${holes})`;
     }
     const rows = await query(
       `SELECT l.id, l.date_kind, l.date_value, l.note, l.file_name, l.mime_type, l.file_size,
@@ -792,6 +796,8 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
 // ใน buildRawOrders → effectiveReadyDate ไม่รอวันวัตถุดิบอนาคต → แผนขยับ จึง markEdit() ให้ "แผนค้าง"
 // เตือนให้ Replan (เหมือน material-date). สองส่วน (literal 'material-arrived') ไม่ชนกับ /:batch;
 // column material_arrived เพิ่มด้วย DDL รันมือ
+// บันทึกประวัติ "ใครติ๊ก" ลง order_date_log ด้วย (date_kind='material_arrived') — เฉพาะตอนค่าเปลี่ยนจริง
+// ยังเป็น JSON body (ไม่ใช่ multipart) — **อย่าเติม uploadSingle** ไม่งั้นฝั่ง frontend ที่ส่ง JSON.stringify พัง
 router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res) => {
   try {
     const { batch } = req.params;
@@ -804,6 +810,11 @@ router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res)
     const rows = await query('SELECT id, start_date, material_ready_date FROM orders WHERE batch = @batch', { batch });
     if (rows.length === 0) return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
 
+    // ค่าเดิม (tri-state) — ใช้เทียบว่าคลิกนี้เปลี่ยนอะไรจริงไหม; อ่านผ่าน helper ที่ guard COL_LENGTH ให้แล้ว
+    const prev = await readMaterialArrived(batch);
+    const prevNorm = prev === null || prev === undefined ? null : (prev ? 1 : 0);
+    const changed = prevNorm !== arrived;
+
     const overrideVal = arrived === null ? null : arrived === 1;
     const programNotes = computeProgramNote(rows[0].start_date, rows[0].material_ready_date, overrideVal);
     // ใช้ literal NULL เมื่อ reset auto — เลี่ยงปัญหา type inference ของ null param (โดยเฉพาะ msnodesqlv8)
@@ -813,10 +824,30 @@ router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res)
       `UPDATE orders SET material_arrived = ${arrivedSql}, program_notes = @p WHERE id = @id`,
       params,
     );
-    // toggle นี้เปลี่ยน effectiveReadyDate (arrived=1 ปลด material floor) → แผนขยับ ต้อง Replan
-    // จึง markEdit() ให้ตัวชี้ "แผนค้าง" ขึ้น (เหมือน material-date) — planner กด Replan เพื่อดู preview ผล
-    timestamps.markEdit();
-    res.json({ batch, material_arrived: arrived === null ? null : Boolean(arrived), program_notes: programNotes });
+    // log "ใครติ๊ก/ปลดติ๊ก เมื่อไหร่" ลง order_date_log — kind ที่ 4 ไม่มีไฟล์แนบ และ date_value เก็บ
+    // *สถานะ* ไม่ใช่วันที่ (อย่าเอาไปผ่าน parseDateInput/safeDateFormat). best-effort เหมือน 3 endpoint วัน
+    // เขียนเฉพาะตอนค่าเปลี่ยนจริง — กดย้ำ/ดับเบิลคลิกไม่ควรได้แถวซ้ำติดกัน
+    let logEntry = null;
+    if (changed) {
+      logEntry = await logDateEdit({
+        batch,
+        kind: 'material_arrived',
+        dateValue: arrived === null ? 'AUTO' : (arrived === 1 ? 'ARRIVED' : 'NOT_ARRIVED'),
+        note: null,
+        file: null,
+        user: req.user,
+      });
+      // toggle นี้เปลี่ยน effectiveReadyDate (arrived=1 ปลด material floor) → แผนขยับ ต้อง Replan
+      // จึง markEdit() ให้ตัวชี้ "แผนค้าง" ขึ้น (เหมือน material-date) — planner กด Replan เพื่อดู preview ผล
+      // ค่าไม่เปลี่ยน = แผนไม่ขยับ จึงไม่ markEdit (ไม่งั้นกดย้ำแล้วขึ้น "แผนค้าง" ฟรี ๆ)
+      timestamps.markEdit();
+    }
+    res.json({
+      batch,
+      material_arrived: arrived === null ? null : Boolean(arrived),
+      program_notes: programNotes,
+      log_entry: logEntry,
+    });
   } catch (err) {
     console.error('Error updating material arrived:', err);
     res.status(500).json({ message: String(err.message || err) });

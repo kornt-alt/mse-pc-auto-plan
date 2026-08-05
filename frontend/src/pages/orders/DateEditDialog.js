@@ -3,9 +3,11 @@ import { Modal, Button, Form, Spinner } from 'react-bootstrap';
 import { apiCall, apiDownload } from '../../api/client';
 
 // กล่องเลือกวันที่ใช้ร่วมกัน — Material Ready / Confirm / Release
-// props: show, title, label, icon, batch, kind, currentValue, canEdit, onHide,
+// props: show, title, label, icon, batch, kind, logKinds, currentValue, canEdit, onHide,
 //        onSubmit({ value, note, file }) => Promise    (parent เป็นคนยิง API เป็น FormData)
 // canEdit=false (เช่น MFG) → ดูประวัติ + ดาวน์โหลดได้ แต่แก้/แนบไม่ได้
+// logKinds = date_kind ที่จะดึงมาแสดงในประวัติ (คั่นคอมมา) — default = kind ของช่องนั้นเอง
+//   กล่อง Material ส่ง 'material,material_arrived' เพื่อรวม timeline การติ๊ก "Mat'l เข้า" ไว้ที่เดียวกัน
 
 // whitelist ต้องตรงกับ backend/utils/attachments.js (backend คือด่านจริง อันนี้แค่เตือนก่อนกด)
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -32,8 +34,18 @@ const fmtBytes = (n) => {
 
 const fmtWhen = (v) => (v ? String(v).replace('T', ' ').slice(0, 19) : '');
 
+// แถว date_kind='material_arrived' เก็บ "สถานะการติ๊ก Mat'l เข้า" ใน date_value ไม่ใช่วันที่
+// (โค้ด ASCII ฝั่ง DB → ข้อความไทยตรงนี้ที่เดียว) — ค่าที่ไม่รู้จักโชว์ดิบไว้ ดีกว่าหายไปเงียบ ๆ
+// ข้อความ/สีต้องตรงกับ dropdown ในคอลัมน์ "Mat'l เข้า" (เขียว = Mat'l OK, แดง = ยังไม่เข้า/ผิดปกติ)
+// ไม่งั้นสถานะเดียวกันจะคนละสีระหว่างตารางกับกล่องประวัติ
+const ARRIVED_LABEL = {
+  ARRIVED: { text: "Mat'l OK", chip: 'chip-ok' },
+  NOT_ARRIVED: { text: 'ยังไม่เข้า/ผิดปกติ', chip: 'chip-ng' },
+  AUTO: { text: 'กลับเป็นอัตโนมัติ', chip: 'chip-muted' },
+};
+
 const DateEditDialog = ({
-  show, title, label, icon, batch, kind, currentValue, canEdit = true, onHide, onSubmit,
+  show, title, label, icon, batch, kind, logKinds, currentValue, canEdit = true, onHide, onSubmit,
 }) => {
   const original = currentValue ? String(currentValue).slice(0, 10) : '';
   const [value, setValue] = useState('');
@@ -45,12 +57,14 @@ const DateEditDialog = ({
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [dlError, setDlError] = useState('');
 
+  const wantKinds = logKinds || kind;
+
   const loadHistory = useCallback(async () => {
-    if (!batch || !kind) return;
+    if (!batch || !wantKinds) return;
     setLoadingHistory(true);
     try {
       const rows = await apiCall(
-        `/orders/${encodeURIComponent(batch)}/date-log?kind=${encodeURIComponent(kind)}`,
+        `/orders/${encodeURIComponent(batch)}/date-log?kind=${encodeURIComponent(wantKinds)}`,
       );
       setHistory(Array.isArray(rows) ? rows : []);
     } catch {
@@ -58,7 +72,7 @@ const DateEditDialog = ({
     } finally {
       setLoadingHistory(false);
     }
-  }, [batch, kind]);
+  }, [batch, wantKinds]);
 
   useEffect(() => {
     if (show) {
@@ -184,7 +198,15 @@ const DateEditDialog = ({
             {history.map((h) => (
               <div key={h.id} className="border rounded p-2 mb-2 bg-light">
                 <div className="d-flex justify-content-between align-items-start">
-                  <span className="num fw-bold">{h.date_value || 'ล้างค่า'}</span>
+                  {h.date_kind === 'material_arrived' ? (
+                    // แถวติ๊ก "Mat'l เข้า" — date_value เป็นสถานะ ไม่ใช่วันที่ จึงไม่ใช้คลาส .num
+                    <span className={`chip ${(ARRIVED_LABEL[h.date_value] || {}).chip || 'chip-muted'}`}>
+                      <i className="bi bi-box-seam me-1" aria-hidden="true" />
+                      {(ARRIVED_LABEL[h.date_value] || {}).text || h.date_value}
+                    </span>
+                  ) : (
+                    <span className="num fw-bold">{h.date_value || 'ล้างค่า'}</span>
+                  )}
                   <span className="text-muted" style={{ fontSize: 'var(--fs-tiny, 0.75rem)' }}>
                     {fmtWhen(h.created_at)}
                   </span>
