@@ -11,6 +11,7 @@ import PageHeader from '../../components/shared/PageHeader';
 import ConfirmModal from '../../components/shared/ConfirmModal';
 import { TEMPLATE_SPECS, downloadTemplate, exampleRow } from '../../utils/importTemplates';
 import CalendarTemplateDialog from './CalendarTemplateDialog';
+import HanaOrderCard from './HanaOrderCard';
 import ConfigTemplateDialog from './ConfigTemplateDialog';
 import ActualResultTemplateDialog from './ActualResultTemplateDialog';
 
@@ -44,6 +45,10 @@ const UPLOAD_ROWS = [
     mode: 'replace',
   },
 ];
+
+// ดึงจาก Hana API — ปลายทาง/โหมดเดียวกับแถว Orders ต่างแค่ไฟล์มาจาก API ไม่ได้มาจากเครื่องผู้ใช้
+// key แยกจาก endpoint เพื่อไม่ให้ resetToken ชนกับแถวอัปโหลดไฟล์ (ล้างผลของกันและกันทิ้ง)
+const HANA_ROW = { endpoint: '/upload/orders', mode: 'append', key: 'hana_orders', label: 'Orders (SAP Hana)' };
 
 // แถวสรุปตัวเลข preview — โชว์เฉพาะ field ที่มีค่า (undefined = ไม่เกี่ยวกับ endpoint นี้)
 const PREVIEW_FIELDS = [
@@ -293,7 +298,9 @@ const ImportPage = () => {
       if (data.rejected_records && data.rejected_records.length > 0) {
         setRejected(data.rejected_records);
       }
-      setResetTokens((t) => ({ ...t, [row.endpoint]: (t[row.endpoint] || 0) + 1 }));
+      // key ตาม row.key ถ้ามี — แถวอัปโหลดไฟล์กับการ์ด Hana ใช้ endpoint เดียวกัน แต่ต้องล้างแยกกัน
+      const resetKey = row.key || row.endpoint;
+      setResetTokens((t) => ({ ...t, [resetKey]: (t[resetKey] || 0) + 1 }));
     } catch (err) {
       setStatus({ type: 'error', message: err.message });
     } finally {
@@ -394,6 +401,13 @@ const ImportPage = () => {
           </Table>
         </Card.Body>
       </Card>
+
+      {/* ดึง Order จาก SAP ผ่าน Hana API — ได้ไฟล์ CSV ในหน่วยความจำ แล้วเข้าท่อ preview/confirm เดิม */}
+      <HanaOrderCard
+        busy={busy || !!confirm}
+        resetToken={resetTokens[HANA_ROW.key] || 0}
+        onImport={(file) => handleUpload(HANA_ROW, file)}
+      />
 
       {/* Modal คำแนะนำวิธีกรอก */}
       <TemplateInfoModal spec={infoSpec} onHide={() => setInfoSpec(null)} />

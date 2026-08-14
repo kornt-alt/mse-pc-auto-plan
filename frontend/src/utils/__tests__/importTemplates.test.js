@@ -1,4 +1,14 @@
-import { buildCalendarRows, buildConfigRows, buildActualRows } from '../importTemplates';
+import { TEMPLATE_SPECS, buildCalendarRows, buildConfigRows, buildActualRows } from '../importTemplates';
+import { ORDER_CSV_COLUMNS } from '../hanaOrders';
+
+// hanaOrders.js เก็บชื่อคอลัมน์ orders ไว้เอง (import จากที่นี่ไม่ได้ ไฟล์นี้ลาก xlsx มาด้วย)
+// — ผูกสองลิสต์ไว้ตรงนี้แทน ทั้งคู่ต้องตรงกับที่ backend/routes/uploads.js อ่าน (case เป๊ะ)
+describe('ORDER_CSV_COLUMNS (hanaOrders) ↔ TEMPLATE_SPECS.orders', () => {
+  test('ชื่อคอลัมน์เป็นเซ็ตเดียวกัน', () => {
+    const fromSpec = TEMPLATE_SPECS.orders.columns.map((c) => c.name);
+    expect(new Set(ORDER_CSV_COLUMNS)).toEqual(new Set(fromSpec));
+  });
+});
 
 describe('buildCalendarRows', () => {
   test('machine × date, available_time ว่างให้กรอก', () => {

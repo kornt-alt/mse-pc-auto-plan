@@ -31,6 +31,10 @@ const env = {
   SAP_SCRIPT_PATH: process.env.SAP_SCRIPT_PATH || '',
   SAP_TIMEOUT_MS: parseInt(process.env.SAP_TIMEOUT_MS) || 300000,
 
+  // หมายเหตุ: ไม่มี HANA_* ที่นี่โดยตั้งใจ — การ์ด "ดึง Order จาก SAP" ยิงจาก browser เอง
+  // (เครื่อง server อยู่ใน DMZ ไม่มีเส้นทางไป plb044) ค่าตั้งอยู่ที่ frontend/.env เป็น REACT_APP_HANA_*
+  // ไม่มี route ฝั่งนี้เลย — passthrough ที่เคยเขียนถูกลบทิ้งแล้ว ดู index.js และ CLAUDE.md
+
   // Mail relay ภายใน LAN — ใช้เมื่อ server ตัดเน็ต ยิง Gmail (SMTP) ตรงไม่ได้
   // ตั้งค่านี้แล้ว mailer.js จะยิง HTTP ไป relay แทน nodemailer (relay ถือ credential + ออกเน็ตเอง)
   MAIL_RELAY_URL: process.env.MAIL_RELAY_URL || '',
