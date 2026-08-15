@@ -3,6 +3,7 @@
 const express = require('express');
 const { query } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { buildPlanVsActual } = require('../services/planVsActual');
 
 const router = express.Router();
@@ -53,7 +54,7 @@ router.get('/plan-vs-actual', verifyToken, readRoles, async (req, res) => {
       data: buildPlanVsActual({ plans, orderRows, actualRows }),
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

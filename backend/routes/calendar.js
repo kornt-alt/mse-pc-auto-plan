@@ -4,6 +4,7 @@ const express = require('express');
 const { query, execute, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 
 const router = express.Router();
 const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
@@ -24,7 +25,7 @@ router.put('/calendar/bulk_update', verifyToken, writeRoles, async (req, res) =>
     const updatedCount = await execute(sqlText, params);
     res.json({ message: 'Bulk update successful', updated_count: updatedCount });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -49,7 +50,7 @@ router.get('/calendar', verifyToken, readRoles, async (req, res) => {
     );
     res.json(results);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -100,7 +101,7 @@ router.post('/calendar/generate', verifyToken, writeRoles, async (req, res) => {
     });
     res.json({ message: 'Calendar generated successfully', created_records: rows.length });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -114,7 +115,7 @@ router.put('/calendar/:cal_id', verifyToken, writeRoles, async (req, res) => {
     if (count === 0) return res.status(404).json({ message: 'Not found' });
     res.json({ message: 'Updated successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -130,7 +131,7 @@ router.post('/holiday', verifyToken, writeRoles, async (req, res) => {
     });
     res.json({ message: 'Holiday added successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -140,7 +141,7 @@ router.get('/holiday', verifyToken, readRoles, async (req, res) => {
     const holidays = await query('SELECT id, date, description FROM master_holidays ORDER BY date');
     res.json(holidays);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -152,7 +153,7 @@ router.delete('/holiday/:id', verifyToken, writeRoles, async (req, res) => {
     });
     res.json({ message: 'Holiday deleted' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

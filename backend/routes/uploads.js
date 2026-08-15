@@ -13,15 +13,32 @@ const multer = require('multer');
 const { query, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { parseUpload, uploadHeaders } = require('../utils/csv');
 const { dedupeExact, rowKey } = require('../utils/dedupe');
 const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
+const { MAX_FILE_SIZE } = require('../utils/attachments');
 
 const router = express.Router();
 const writeRoles = requireRole('ADMIN', 'PLANNER');
-const upload = multer({ storage: multer.memoryStorage() });
+// memoryStorage: ไฟล์ทั้งก้อนเข้า RAM ของ process → **ต้องมี limits เสมอ**
+// ไม่มี limit = ไฟล์ยักษ์ (หรือ .xlsx ที่บานตอน parse) ทำ Node OOM แล้วทั้งระบบดับ ไม่ใช่แค่ request นี้พัง
+// ใช้เพดานเดียวกับไฟล์แนบ order (25 MB) — import มา ไม่ตั้งเลขซ้ำ
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } });
+
+// ห่อ upload.single ให้แปลง MulterError เป็น 400 JSON ไทย — ไม่มี global error handler
+// (รูปเดียวกับ uploadSingle ใน routes/orders.js:28 — แก้ที่ไหนแก้ให้เหมือนกันทั้งสองที่)
+const uploadSingle = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 25 MB' : 'อัปโหลดไฟล์ไม่สำเร็จ';
+      return res.status(400).json({ message: msg });
+    }
+    next();
+  });
+};
 
 const requireFile = (req, res) => {
   if (!req.file) {
@@ -113,7 +130,7 @@ const writeConfigTable = async (req, res, { table, columns, parsed, label }) => 
 };
 
 // ========== POST /api/upload/orders (L1285) — append-only ==========
-router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'append'); // 'append' | 'replace'
@@ -242,12 +259,12 @@ router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), as
     const verb = isReplace ? 'แทนที่ทั้งตาราง' : 'เพิ่มออเดอร์ใหม่';
     res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/calendar (L1367) — delete-insert ==========
-router.post('/upload/calendar', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/calendar', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'replace'); // 'replace' | 'upsert'
@@ -319,12 +336,12 @@ router.post('/upload/calendar', verifyToken, writeRoles, upload.single('file'), 
     timestamps.markEdit();
     res.json({ message: `✅ Calendar Updated: ${rows.length} records` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/machines (L1408) — delete-insert ==========
-router.post('/upload/machines', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const parsed = parseUpload(req.file)
@@ -346,12 +363,12 @@ router.post('/upload/machines', verifyToken, writeRoles, upload.single('file'), 
       label: 'Machine Config',
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/routing (L1442) — delete-insert ==========
-router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/routing', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const parsed = parseUpload(req.file)
@@ -370,12 +387,12 @@ router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), a
       label: 'Routing',
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/actual_result (L1515) — validate กับแผนก่อนบันทึก ==========
-router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'append'); // 'append' (กันซ้ำกับ DB) | 'append_all' (ไม่เช็คซ้ำ)
@@ -516,7 +533,7 @@ router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('fil
 });
 
 // ========== POST /api/product-master/upload-csv (L3177) — upsert รายแถว ==========
-router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/product-master/upload-csv', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
 
@@ -582,12 +599,12 @@ router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single
     });
     res.json({ status: 'success', message: `อัปโหลดสำเร็จ จำนวน ${successCount} รายการ` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/product_master (L3445) — delete-insert ทั้งตาราง ==========
-router.post('/upload/product_master', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/product_master', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const parsed = parseUpload(req.file)

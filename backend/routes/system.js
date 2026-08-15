@@ -1,7 +1,9 @@
 const express = require('express');
 const timestamps = require('../state/timestamps');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { getPool, query, execute } = require('../db/pool');
+const { checkSchema } = require('../db/schemaCheck');
 const constants = require('../config/constants');
 
 const router = express.Router();
@@ -35,8 +37,7 @@ router.get('/settings', verifyToken, readRoles, async (req, res) => {
     );
     res.json(rows[0] || { ...DEFAULT_SETTINGS });
   } catch (err) {
-    console.error('GET /system/settings error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -83,18 +84,38 @@ router.put('/settings', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit(); // เปลี่ยน setting = แผนเดิม outdated
     res.json({ ...p, enable_heat_deep_plan: !!p.enable_heat_deep_plan, enable_stickiness: !!p.enable_stickiness });
   } catch (err) {
-    console.error('PUT /system/settings error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
+  }
+});
+
+// ========== GET /api/system/schema — object ที่ต้องรัน DDL มือ ตัวไหนมี/ไม่มี ==========
+// ADMIN เท่านั้น: เป็นข้อมูลโครงสร้าง DB จึงไม่เอาไปแปะไว้ที่ /health ซึ่งเปิดให้คนยังไม่ล็อกอิน
+// เนื้อหาเดียวกับที่ log ตอน server start (ดู db/schemaCheck.js)
+router.get('/schema', verifyToken, requireRole('ADMIN'), async (req, res) => {
+  try {
+    const results = await checkSchema();
+    res.json({
+      objects: results.map(({ name, kind, exists, impact, unknown }) => ({
+        name, kind, exists, impact, unknown: unknown ?? false,
+      })),
+      missing_count: results.filter((r) => !r.exists).length,
+    });
+  } catch (err) {
+    sendError(req, res, err);
   }
 });
 
 // Health check (ไม่ต้อง auth — ใช้ตรวจ server + DB)
+// ⚠️ endpoint นี้เปิดให้คนที่ยังไม่ล็อกอิน จึงตอบแค่ "ต่อ DB ได้/ไม่ได้"
+// เดิมแนบ err.message มาด้วย = แจกชื่อ server/instance/driver ของ DB ให้คนนอก
+// รายละเอียดของจริงอยู่ใน log ฝั่ง server (และ GET /system/schema สำหรับ ADMIN)
 router.get('/health', async (req, res) => {
   try {
     await getPool();
     res.json({ status: 'ok', db: 'connected' });
   } catch (err) {
-    res.status(503).json({ status: 'error', db: 'disconnected', detail: err.message });
+    console.error('[GET /api/system/health] DB unreachable:', err);
+    res.status(503).json({ status: 'error', db: 'disconnected' });
   }
 });
 

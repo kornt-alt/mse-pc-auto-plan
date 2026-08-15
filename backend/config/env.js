@@ -55,6 +55,20 @@ const env = {
   // กรอกรหัสพนักงานแล้วเข้าหน้าไลน์ผลิตได้แม้ไม่มีบัญชีใน users (ได้สิทธิ์ OPERATOR เท่านั้น)
   // ตั้ง ALLOW_GUEST_SCAN=false เพื่อกลับไปบังคับว่าต้องมีบัญชีในระบบก่อน
   ALLOW_GUEST_SCAN: process.env.ALLOW_GUEST_SCAN !== 'false',
+
+  // แก้/ลบ production_records ได้เฉพาะแถวที่รหัสพนักงานตรงกับ session (ADMIN/PLANNER/MFG ข้ามได้)
+  // ตั้ง STRICT_RECORD_OWNERSHIP=false ถ้าหน้างานใช้แท็บเล็ตร่วมกัน (คนล็อกอินค้างไว้ แล้วให้คนอื่น
+  // สแกนรหัสตัวเองลงยอด — เจ้าของแถวจะไม่ตรงกับ session) แล้วจะกลับไปพฤติกรรมเดิมคือไม่เช็คเลย
+  // ดูเหตุผลเต็มใน utils/recordAccess.js
+  STRICT_RECORD_OWNERSHIP: process.env.STRICT_RECORD_OWNERSHIP !== 'false',
+
+  // origin ที่อนุญาตให้เรียก API ข้ามโดเมน คั่นด้วยคอมมา (เช่น http://localhost:3000)
+  // **เว้นว่าง = ไม่ส่ง CORS header เลย** ซึ่งถูกต้องสำหรับ production เพราะหน้าเว็บกับ API
+  // อยู่ origin เดียวกันผ่าน IIS อยู่แล้ว — ต้องตั้งเฉพาะตอน dev ที่ npm start อยู่คนละพอร์ต
+  CORS_ORIGINS: (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean),
 };
 
 // SMTP ไม่อยู่ใน required (dev ที่ไม่ใช้เมลต้องรัน server ได้) — ใช้ helper นี้เช็คแทน

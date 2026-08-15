@@ -7,6 +7,7 @@
 const express = require('express');
 const { query, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const schedulerService = require('../services/schedulerService');
 const planLock = require('../state/planLock');
 const timestamps = require('../state/timestamps');
@@ -69,8 +70,7 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('POST /schedule/run error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   } finally {
     planLock.release();
   }
@@ -123,8 +123,7 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('POST /schedule/replan error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   } finally {
     planLock.release();
   }
@@ -212,8 +211,7 @@ router.get('/latest', verifyToken, readRoles, async (req, res) => {
 
     res.json({ data: cleanedData, report: shipmentReport });
   } catch (err) {
-    console.error('GET /schedule/latest error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 

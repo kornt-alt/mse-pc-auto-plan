@@ -14,6 +14,7 @@ const express = require('express');
 const { query, execute, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { familyPrefix } = require('../services/routingSuggest');
 
 const router = express.Router();
@@ -37,7 +38,7 @@ router.get('/routing_machine_config', verifyToken, readRoles, async (req, res) =
     );
     res.json({ routing, machine });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -52,7 +53,7 @@ router.get('/routing_machine_config/check_duplicate/:model', verifyToken, readRo
     });
     res.json({ is_duplicate: rows.length > 0 });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -117,7 +118,7 @@ router.post('/routing_machine_config/bulk_create', verifyToken, writeRoles, asyn
     });
     res.json({ message: 'New model created successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -153,7 +154,7 @@ router.post('/routing_config/insert_step', verifyToken, writeRoles, async (req, 
     });
     res.json({ message: 'Step inserted successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -250,7 +251,7 @@ router.put('/routing_config/:item_id', verifyToken, writeRoles, async (req, res)
     if (count === 0) return res.status(404).json({ message: 'Not found' });
     res.json({ message: 'Routing updated successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -284,7 +285,7 @@ router.delete('/routing_config/:item_id', verifyToken, writeRoles, async (req, r
     });
     res.json({ message: 'Deleted and sequences updated successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -313,7 +314,7 @@ router.put('/machine_config/:item_id', verifyToken, writeRoles, async (req, res)
     if (count === 0) return res.status(404).json({ message: 'Not found' });
     res.json({ message: 'Machine Config updated successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -337,7 +338,7 @@ router.post('/machine_config/insert_alt', verifyToken, writeRoles, async (req, r
     );
     res.json({ message: 'Alternative machine inserted successfully', new_alt_index: nextAlt });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -372,7 +373,7 @@ router.delete('/machine_config/:item_id', verifyToken, writeRoles, async (req, r
     });
     res.json({ message: 'Deleted machine config and updated alt indices successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -390,7 +391,7 @@ router.put('/product_master/update_setup/:model', verifyToken, writeRoles, async
     }
     res.json({ message: `Updated setup_group for model ${req.params.model} successfully` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -407,7 +408,7 @@ router.get('/routing/missing-models', verifyToken, readRoles, async (req, res) =
     );
     res.json(rows.map((m) => ({ model: m.model, description: m.description })));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -442,7 +443,7 @@ router.get('/routing/recommend-copy/:model', verifyToken, readRoles, async (req,
       recommendations: similar.map((m) => ({ model: m.model, description: m.description })),
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -463,7 +464,7 @@ router.get('/routing/search-master', verifyToken, readRoles, async (req, res) =>
     );
     res.json(rows.map((m) => ({ model: m.model, description: m.description })));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

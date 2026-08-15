@@ -4,6 +4,7 @@
 'use strict';
 
 const { query, transaction } = require('../db/pool');
+const { bulkInsert } = require('../db/bulk');
 const { processRouting, processUnifiedMachineConfig } = require('../scheduler/configProcessor');
 const { OrderManager } = require('../scheduler/orderManager');
 const { SchedulerEngine } = require('../scheduler/engine');
@@ -68,22 +69,25 @@ async function loadInputs(isReplan) {
 
 // logic.py L254-436 (delete + insert schedule_results):
 // ของเก่า delete 2 รอบ (L254 + L408) เพราะไม่มี transaction — รอบเดียวใน transaction พอ
+//
+// นี่คือการเขียนที่ใหญ่ที่สุดในระบบ (แผนหนึ่งรอบระดับพันแถว) เดิม INSERT ทีละแถวใน loop
+// = round-trip เท่าจำนวนแถว ขณะถือ lock ตาราง schedule_results ไว้ทั้งชุด
+// เปลี่ยนมาใช้ bulkInsert (db/bulk.js) ที่ทุก route ใช้กันอยู่แล้ว — มันหั่น chunk ให้เองไม่ให้
+// เกินเพดาน ~2100 พารามิเตอร์ของ SQL Server · ลำดับแถวยังเป็นลำดับเดิม ผลลัพธ์ต้องเท่าเดิมเป๊ะ
+const SCHEDULE_RESULT_COLUMNS = [
+  'batch', 'sub_batches', 'model', 'step', 'step_index', 'machine',
+  'date_plan', 'time_used_min', 'qty_plan', 'is_setup', 'is_force_closed',
+];
+
 async function persist(scheduleResultRows) {
+  // is_force_closed เดิมเป็น literal 0 ใน SQL — ตอนนี้ต้องใส่เป็นค่าของทุกแถวแทน
+  const rows = scheduleResultRows.map((r) => [
+    r.batch, r.sub_batches, r.model, r.step, r.step_index, r.machine,
+    r.date_plan, r.time_used_min, r.qty_plan, r.is_setup ? 1 : 0, 0,
+  ]);
   await transaction(async (t) => {
     await t.query('DELETE FROM schedule_results');
-    for (const r of scheduleResultRows) {
-      await t.query(
-        `INSERT INTO schedule_results
-           (batch, sub_batches, model, step, step_index, machine, date_plan, time_used_min, qty_plan, is_setup, is_force_closed)
-         VALUES (@batch, @sub_batches, @model, @step, @step_index, @machine, @date_plan, @time_used_min, @qty_plan, @is_setup, 0)`,
-        {
-          batch: r.batch, sub_batches: r.sub_batches, model: r.model,
-          step: r.step, step_index: r.step_index, machine: r.machine,
-          date_plan: r.date_plan, time_used_min: r.time_used_min,
-          qty_plan: r.qty_plan, is_setup: r.is_setup ? 1 : 0,
-        },
-      );
-    }
+    await bulkInsert(t, 'schedule_results', SCHEDULE_RESULT_COLUMNS, rows);
   });
 }
 

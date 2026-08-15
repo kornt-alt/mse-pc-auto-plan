@@ -9,7 +9,9 @@ const verifyToken = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET);
+    // ⚠️ ต้องระบุ algorithms เสมอ — ไม่ระบุ = ยอมให้ผู้ส่ง token เลือก alg เองผ่าน header
+    // (jwt.sign ทั้งระบบใช้ default HS256 อยู่แล้ว ค่านี้จึงตรงกันสองฝั่ง token เดิมไม่พัง)
+    const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] });
     req.user = decoded;
     next();
   } catch (err) {

@@ -9,6 +9,7 @@ const multer = require('multer');
 const env = require('../config/env');
 const { query, execute, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError, AppError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../utils/dates');
 const { computeProgramNote } = require('../scheduler/planBuilder');
@@ -43,12 +44,12 @@ const cleanNote = (raw) => {
 };
 
 // เขียนไฟล์ลงดิสก์ คืน stored_name (uuid+ext) — โยน error status 500 ถ้ายังไม่ตั้ง ORDER_ATTACHMENTS_DIR
+// ใช้ AppError เพราะข้อความนี้ **ตั้งใจให้ผู้ใช้เห็น** (บอกว่าต้องไปตั้ง .env) — error ทั่วไปที่ไม่ใช่
+// AppError จะถูก sendError กลืนเป็นข้อความกลาง ๆ ดู middleware/errorHandler.js
 const writeAttachment = (file) => {
   const dir = env.ORDER_ATTACHMENTS_DIR;
   if (!dir) {
-    const e = new Error('ระบบยังไม่ได้ตั้งค่าโฟลเดอร์ไฟล์แนบ (ORDER_ATTACHMENTS_DIR)');
-    e.status = 500;
-    throw e;
+    throw new AppError('ระบบยังไม่ได้ตั้งค่าโฟลเดอร์ไฟล์แนบ (ORDER_ATTACHMENTS_DIR)', 500);
   }
   fs.mkdirSync(dir, { recursive: true });
   const ext = path.extname(file.originalname).toLowerCase();
@@ -270,8 +271,7 @@ router.put('/reorder', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: 'Reordered' });
   } catch (err) {
-    console.error('Error reordering orders:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -300,8 +300,7 @@ router.post('/bulk/restore', verifyToken, writeRoles, async (req, res) => {
     });
     res.json({ message: 'Restored' });
   } catch (err) {
-    console.error('Error restoring orders:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -356,8 +355,7 @@ router.put('/bulk/mode', verifyToken, writeRoles, async (req, res) => {
     // FIX: ของเดิมคืน null — คืนจำนวนที่อัปเดตแทน
     res.json({ message: `เปลี่ยนสถานะเป็น ${targetMode} สำเร็จ`, updated_count: updatedCount });
   } catch (err) {
-    console.error('Error bulk updating mode:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -670,8 +668,7 @@ router.put('/:batchId/close', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: `ปิดจ๊อบ ${batchId} เรียบร้อยแล้ว (สถานะ: COMPLETED)` });
   } catch (err) {
-    console.error('Error closing order:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -696,8 +693,7 @@ router.get('/attachments/:id/download', verifyToken, readRoles, async (req, res)
       else if (err) console.warn('attachment download aborted:', err.message);
     });
   } catch (err) {
-    console.error('Error downloading attachment:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -729,8 +725,7 @@ router.get('/:batch/date-log', verifyToken, readRoles, async (req, res) => {
     );
     res.json(rows.map((r) => ({ ...r, has_file: Boolean(r.file_name) })));
   } catch (err) {
-    console.error('Error fetching date log:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -784,8 +779,7 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
     res.json({ batch, material_ready_date: materialDate, program_notes: programNotes, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
-    console.error('Error updating material date:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -849,8 +843,7 @@ router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res)
       log_entry: logEntry,
     });
   } catch (err) {
-    console.error('Error updating material arrived:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -888,8 +881,7 @@ router.put('/:batch/confirm-date', verifyToken, writeRoles, uploadSingle, async 
     res.json({ batch, confirm_reply_date: confirmDate, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
-    console.error('Error updating confirm date:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -926,8 +918,7 @@ router.put('/:batch/release-date', verifyToken, writeRoles, uploadSingle, async 
     res.json({ batch, release_date: releaseDate, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
-    console.error('Error updating release date:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 

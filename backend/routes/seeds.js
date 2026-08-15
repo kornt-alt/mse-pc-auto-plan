@@ -10,6 +10,7 @@ const path = require('path');
 const { query, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { parseCsv } = require('../utils/csv');
 const { pyFloat } = require('../scheduler/pyUtils');
@@ -62,7 +63,7 @@ router.post('/machines', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: '✅ Machine Config Updated' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -90,7 +91,7 @@ router.post('/routing', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: '✅ Routing Updated' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -107,7 +108,7 @@ router.post('/calendar', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: '✅ Calendar Updated' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -116,7 +117,7 @@ router.post('/orders', verifyToken, writeRoles, async (req, res) => {
   try {
     await runSapScript();
   } catch (err) {
-    return res.status(500).json({ message: err.message });
+    return sendError(req, res, err);
   }
   try {
     const csvRows = readFixedCsv('orderNewWIP.csv');
@@ -184,7 +185,7 @@ router.post('/orders', verifyToken, writeRoles, async (req, res) => {
       message: `✅ Import Success: Added ${rows.length} new orders (Skipped existing batches)`,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

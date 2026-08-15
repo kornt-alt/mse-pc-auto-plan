@@ -11,6 +11,7 @@ const express = require('express');
 const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { sendMail } = require('../services/mailer');
 
 const router = express.Router();
@@ -37,7 +38,7 @@ router.get('/alert/recipients', verifyToken, adminRoles, async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -61,7 +62,7 @@ router.post('/alert/recipients', verifyToken, adminRoles, async (req, res) => {
     );
     res.json({ message: 'เพิ่มผู้รับสำเร็จ' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -101,7 +102,7 @@ router.put('/alert/recipients/:id', verifyToken, adminRoles, async (req, res) =>
     if (count === 0) return res.status(404).json({ message: 'ไม่พบผู้รับนี้' });
     res.json({ message: 'อัปเดตผู้รับสำเร็จ' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -116,7 +117,7 @@ router.delete('/alert/recipients/:id', verifyToken, adminRoles, async (req, res)
     if (count === 0) return res.status(404).json({ message: 'ไม่พบผู้รับนี้' });
     res.json({ message: 'ลบผู้รับสำเร็จ' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

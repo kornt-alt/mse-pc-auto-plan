@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } f
 import { Navbar, Nav, NavDropdown, Container } from 'react-bootstrap';
 
 import ProtectedRoute from './auth/ProtectedRoute';
+import ErrorBoundary from './components/shared/ErrorBoundary';
 import { isAuthenticated, getCurrentUser, apiCall } from './api/client';
 import { PlanDataProvider } from './context/PlanDataContext';
 
@@ -218,6 +219,9 @@ const App = () => (
   <Router basename="/MSE-PC-AUTO-PLAN">
     <PlanDataProvider>
     <ConditionalNavbar />
+    {/* ครอบเฉพาะ <Routes> ไม่ครอบ navbar — หน้าพังแล้วเมนูยังอยู่ ผู้ใช้กดไปหน้าอื่นต่อได้
+        ไม่งั้นจอขาวทั้งแอป (กระทบหนักสุดที่ Shop Floor) ดู components/shared/ErrorBoundary.js */}
+    <ErrorBoundary>
     <Routes>
       <Route path="/" element={<HomeRedirect />} />
       <Route path="/login" element={<Login />} />
@@ -315,6 +319,7 @@ const App = () => (
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </ErrorBoundary>
     </PlanDataProvider>
   </Router>
 );
