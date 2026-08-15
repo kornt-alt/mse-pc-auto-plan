@@ -26,10 +26,14 @@ async function loadInputs(isReplan) {
   );
   // WHERE เดียวกับ logic.py L49-52 (ORM filter ฝั่ง SQL)
   // ฟีเจอร์ Mat'l/Confirm: เพิ่ม material_ready_date, confirm_reply_date (input)
+  // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto
+  // (undefined) เหมือน orderStateMap ด้านล่าง — arrived=1 (OK) ปลด material floor ใน buildRawOrders
+  const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
   const orderRows = await query(
     `SELECT batch, model, due_date, priority, qty, plan_mode,
             wip_flow_index, wip_start_step_index, wip_finish_date, wip_machine,
             planning_mode, release_date, material_ready_date, confirm_reply_date
+            ${hasArrivedCol ? ', material_arrived' : ''}
      FROM orders
      WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
      ORDER BY id`,
@@ -183,8 +187,14 @@ async function run(isReplan = false, options = {}) {
     await persist(scheduleResultRows);
 
     // เขียน start_date/fg_date/program_notes กลับ orders (logic.py L459-562)
+    // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto (undefined)
+    // (SQL Server bind ทุก column reference ตอน compile → เช็ค COL_LENGTH ก่อน อย่าอ้างคอลัมน์ที่อาจไม่มีตรง ๆ)
+    const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
+    const stateCols = hasArrivedCol
+      ? 'batch, start_date, fg_date, material_ready_date, material_arrived'
+      : 'batch, start_date, fg_date, material_ready_date';
     const orderStateRows = await query(
-      'SELECT batch, start_date, fg_date, material_ready_date FROM orders WHERE is_deleted = 0',
+      `SELECT ${stateCols} FROM orders WHERE is_deleted = 0`,
     );
     const orderStateMap = {};
     for (const r of orderStateRows) orderStateMap[r.batch] = r;
@@ -194,6 +204,14 @@ async function run(isReplan = false, options = {}) {
 
   const cleanedData = pb.cleanDisplayData(displayRows, calendar);
   const shipmentReport = pb.buildShipmentReport(mainPlan, totalPlanMap, safeOrders);
+
+  // เตือน "ปฏิทินไม่พอ": ถ้ามี safe order ที่วางไม่ลง (FinishDate เป็น sentinel)
+  // → บอกวันสุดท้ายของปฏิทิน + จำนวนงาน ให้ผู้ใช้ไปสร้างปฏิทินเพิ่ม (คืนทั้ง run/replan/sim)
+  let lastCalendarDate = '';
+  for (const row of inputs.calendarRows) {
+    if (row.date > lastCalendarDate) lastCalendarDate = row.date;
+  }
+  const capacityWarning = pb.buildCapacityWarning(shipmentReport, lastCalendarDate);
 
   let message = '✅ จัดแผนสำเร็จ (Hybrid Pro Backend)';
   if (rejectedOrders.length > 0) {
@@ -207,6 +225,7 @@ async function run(isReplan = false, options = {}) {
     data: cleanedData,
     report: shipmentReport,
     total_plan_map: missingRoutingMap,
+    capacity_warning: capacityWarning,
   };
 }
 

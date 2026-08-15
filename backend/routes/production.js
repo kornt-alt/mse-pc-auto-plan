@@ -15,6 +15,8 @@ const { formatThaiTimestamp, nowBangkokString } = require('../utils/dates');
 
 const router = express.Router();
 const allRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'OPERATOR');
+// เฉพาะตัวช่วยสร้าง template หน้า Import (ADMIN/PLANNER only) — ไม่ขยาย reach ของ OPERATOR/guest
+const planRoles = requireRole('ADMIN', 'PLANNER');
 
 // สร้าง IN (@p0,@p1,...) พร้อมเติมค่าเข้า params
 const inClause = (items, prefix, params) =>
@@ -34,6 +36,62 @@ router.get('/machines', verifyToken, allRoles, async (req, res) => {
       .map((r) => String(r.machine ?? '').trim())
       .filter((m) => m)
       .sort();
+    res.json({ status: 'success', data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ========== GET /api/production/planned-batches ==========
+// batch ที่มีในแผน (schedule_results) — ใช้ให้หน้า Import เลือก batch ตอน gen template Actual Result
+router.get('/planned-batches', verifyToken, planRoles, async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT DISTINCT batch FROM schedule_results
+       WHERE batch <> '_META_CAPACITY_' AND is_setup = 0
+       ORDER BY batch`
+    );
+    const data = rows.map((r) => String(r.batch ?? '').trim()).filter((b) => b);
+    res.json({ status: 'success', data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ========== GET /api/production/plan-steps?batches=a,b,c ==========
+// (process_step, machine) ตามแผนของแต่ละ batch — ให้ Import gen ไฟล์ Actual Result ที่ตรงแผนแน่นอน
+router.get('/plan-steps', verifyToken, planRoles, async (req, res) => {
+  try {
+    const batches = [
+      ...new Set(
+        String(req.query.batches ?? '')
+          .split(',')
+          .map((b) => b.trim())
+          .filter(Boolean)
+      ),
+    ];
+    const data = {};
+    for (const b of batches) data[b] = [];
+    // chunk IN กัน param เกิน ~2100 (แบบเดียวกับ /upload/actual_result)
+    for (let i = 0; i < batches.length; i += 1000) {
+      const chunk = batches.slice(i, i + 1000);
+      const params = {};
+      const names = inClause(chunk, 'b', params);
+      const rows = await query(
+        `SELECT DISTINCT batch, step, machine, step_index FROM schedule_results
+         WHERE batch IN (${names}) AND is_setup = 0
+         ORDER BY batch, step_index`,
+        params
+      );
+      for (const r of rows) {
+        const batch = String(r.batch ?? '').trim();
+        if (!data[batch]) data[batch] = [];
+        data[batch].push({
+          process_step: String(r.step ?? '').trim(),
+          machine: String(r.machine ?? '').trim(),
+        });
+      }
+    }
     res.json({ status: 'success', data });
   } catch (err) {
     res.status(500).json({ message: err.message });

@@ -31,6 +31,15 @@ const env = {
   SAP_SCRIPT_PATH: process.env.SAP_SCRIPT_PATH || '',
   SAP_TIMEOUT_MS: parseInt(process.env.SAP_TIMEOUT_MS) || 300000,
 
+  // หมายเหตุ: ไม่มี HANA_* ที่นี่โดยตั้งใจ — การ์ด "ดึง Order จาก SAP" ยิงจาก browser เอง
+  // (เครื่อง server อยู่ใน DMZ ไม่มีเส้นทางไป plb044) ค่าตั้งอยู่ที่ frontend/.env เป็น REACT_APP_HANA_*
+  // ไม่มี route ฝั่งนี้เลย — passthrough ที่เคยเขียนถูกลบทิ้งแล้ว ดู index.js และ CLAUDE.md
+
+  // Mail relay ภายใน LAN — ใช้เมื่อ server ตัดเน็ต ยิง Gmail (SMTP) ตรงไม่ได้
+  // ตั้งค่านี้แล้ว mailer.js จะยิง HTTP ไป relay แทน nodemailer (relay ถือ credential + ออกเน็ตเอง)
+  MAIL_RELAY_URL: process.env.MAIL_RELAY_URL || '',
+  MAIL_RELAY_TIMEOUT_MS: parseInt(process.env.MAIL_RELAY_TIMEOUT_MS) || 8000,
+
   // Mail — ผู้รับ (To/CC) เก็บในตาราง alert_recipients ไม่ใช่ .env (Phase 6)
   SMTP_HOST: process.env.SMTP_HOST || '',
   SMTP_PORT: parseInt(process.env.SMTP_PORT) || 587,
@@ -50,6 +59,8 @@ const env = {
 
 // SMTP ไม่อยู่ใน required (dev ที่ไม่ใช้เมลต้องรัน server ได้) — ใช้ helper นี้เช็คแทน
 // index.js เตือนตอน start, routes/alerts.js คืน 503 พร้อมข้อความไทยแทน error ดิบของ nodemailer
-env.isMailConfigured = () => Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+// relay ก็นับว่า configured (ยิง HTTP อย่างเดียว ไม่ต้องมี SMTP_*)
+env.isMailConfigured = () =>
+  Boolean(env.MAIL_RELAY_URL || (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS));
 
 module.exports = env;

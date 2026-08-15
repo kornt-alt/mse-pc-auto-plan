@@ -1,76 +1,266 @@
-// Import Data — รวม 2 ทางนำเข้าข้อมูล:
-//   1. Seed จากไฟล์มาตรฐานใน CSV_BASE_DIR (port settings_screen.dart — ปุ่ม 4 ตัว + status box)
-//   2. อัปโหลดไฟล์ CSV จากเครื่องผู้ใช้ (แทน Tkinter upload_menu.py เดิมที่ยิง API ไม่มี auth —
-//      user เลือกย้ายมาหน้าเว็บ + JWT ADMIN/PLANNER, 2026-07-17)
-import React, { useState } from 'react';
+// Import Data — อัปโหลดไฟล์ CSV/Excel จากเครื่องผู้ใช้เข้าฐานข้อมูล
+//   (แทน Tkinter upload_menu.py เดิมที่ยิง API ไม่มี auth — user เลือกย้ายมาหน้าเว็บ + JWT ADMIN/PLANNER, 2026-07-17)
+//   2026-08-03: ดาวน์โหลด master template (.xlsx) + คำแนะนำ, รองรับ .xlsx,
+//   และ preview ก่อนบันทึก + confirm modal (เตือนสีแดงเมื่อแทนที่ทั้งตาราง) + dedup กันข้อมูลเบิ่ล
+//   + ตัวช่วยสร้าง template อัตโนมัติ (ปุ่ม bi-magic): Calendar (machine×date),
+//     Machine/Routing (wizard โครง flow/step), Actual Result (ดึง step/machine ตามแผนจริง)
+import React, { useState, useEffect } from 'react';
 import { Container, Card, Button, Form, Spinner, Modal, Table } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import PageHeader from '../../components/shared/PageHeader';
+import ConfirmModal from '../../components/shared/ConfirmModal';
+import { TEMPLATE_SPECS, downloadTemplate, exampleRow } from '../../utils/importTemplates';
+import CalendarTemplateDialog from './CalendarTemplateDialog';
+import HanaOrderCard from './HanaOrderCard';
+import ConfigTemplateDialog from './ConfigTemplateDialog';
+import ActualResultTemplateDialog from './ActualResultTemplateDialog';
 
-const SEED_BUTTONS = [
-  { endpoint: 'machines', label: 'Machine config', variant: 'primary' },
-  { endpoint: 'routing', label: 'Routing', variant: 'secondary' },
-  { endpoint: 'calendar', label: 'Calendar', variant: 'warning' },
-  { endpoint: 'orders', label: 'Orders (WIP)', variant: 'success' }, // รัน SAP ก่อนอ่านไฟล์
-];
-
+// mode: 'append' (เพิ่มต่อท้าย) | 'replace' (ลบทั้งตารางแล้วใส่ใหม่ — destructive) | 'upsert'
+// builder: ตัวช่วยสร้าง template อัจฉริยะ (เติมโครง/ดึงข้อมูลจริงให้) — orders/product_master ใช้หัวตารางเปล่าพอ
 const UPLOAD_ROWS = [
-  { endpoint: '/upload/orders', label: 'Orders', note: 'เพิ่มเฉพาะ batch ใหม่ (append-only)' },
-  { endpoint: '/upload/calendar', label: 'Calendar', note: 'แทนที่ทั้งตาราง' },
-  { endpoint: '/upload/machines', label: 'Machine Config', note: 'แทนที่ทั้งตาราง' },
-  { endpoint: '/upload/routing', label: 'Routing', note: 'แทนที่ทั้งตาราง' },
+  { endpoint: '/upload/orders', label: 'Orders', note: 'เพิ่มเฉพาะ batch ใหม่ (append-only)', template: 'orders', mode: 'append' },
+  { endpoint: '/upload/calendar', label: 'Calendar', note: 'อัปเดต/เพิ่มเฉพาะ Machine+Date ในไฟล์', template: 'calendar', mode: 'upsert', builder: 'calendar' },
+  { endpoint: '/upload/machines', label: 'Machine Config', note: 'แทนที่เฉพาะ Model ที่อยู่ในไฟล์ (Model อื่นไม่หาย)', template: 'machines', mode: 'replace_models', builder: 'machines' },
+  { endpoint: '/upload/routing', label: 'Routing', note: 'แทนที่เฉพาะ Model ที่อยู่ในไฟล์ (Model อื่นไม่หาย)', template: 'routing', mode: 'replace_models', builder: 'routing' },
   {
     endpoint: '/upload/actual_result',
     label: 'Actual Result',
     note: 'ตรวจ (batch, step, machine) กับแผนก่อนบันทึก',
+    template: 'actual_result',
+    mode: 'append',
+    builder: 'actual_result',
   },
   {
     endpoint: '/product-master/upload-csv',
     label: 'Product Master (upsert)',
     note: 'เพิ่ม/อัปเดตรายตัวตาม model',
+    template: 'product_master',
+    mode: 'upsert',
   },
   {
     endpoint: '/upload/product_master',
     label: 'Product Master (แทนที่)',
-    note: 'แทนที่ทั้งตาราง',
+    note: 'แทนที่ทั้งตาราง (อันตราย)',
+    template: 'product_master',
+    mode: 'replace',
   },
 ];
 
-// แถวอัปโหลด 1 ไฟล์ — เลือกไฟล์แล้วกดอัปโหลด (form field "file")
-const UploadRow = ({ row, busy, onUpload }) => {
-  const [file, setFile] = useState(null);
-  const [inputKey, setInputKey] = useState(0); // เปลี่ยน key เพื่อล้าง file input หลังอัปโหลด
+// ดึงจาก Hana API — ปลายทาง/โหมดเดียวกับแถว Orders ต่างแค่ไฟล์มาจาก API ไม่ได้มาจากเครื่องผู้ใช้
+// key แยกจาก endpoint เพื่อไม่ให้ resetToken ชนกับแถวอัปโหลดไฟล์ (ล้างผลของกันและกันทิ้ง)
+const HANA_ROW = { endpoint: '/upload/orders', mode: 'append', key: 'hana_orders', label: 'Orders (SAP Hana)' };
 
-  const handleUpload = async () => {
-    if (!file) return;
-    const ok = await onUpload(row, file);
-    if (ok) {
+// แถวสรุปตัวเลข preview — โชว์เฉพาะ field ที่มีค่า (undefined = ไม่เกี่ยวกับ endpoint นี้)
+const PREVIEW_FIELDS = [
+  { key: 'total', label: 'แถวในไฟล์', color: '' },
+  { key: 'to_insert', label: 'จะเพิ่ม', color: 'text-success' },
+  { key: 'to_update', label: 'จะอัปเดต', color: 'text-primary' },
+  { key: 'skipped_existing', label: 'ข้าม (มีในระบบแล้ว)', color: 'text-muted' },
+  { key: 'already_in_db', label: 'ข้าม (อัปซ้ำกับฐานข้อมูล)', color: 'text-muted' },
+  { key: 'duplicates_in_file', label: 'ตัดแถวซ้ำในไฟล์', color: 'text-muted' },
+  { key: 'rejected', label: 'ปัดตก (ไม่ตรงแผน)', color: 'text-danger' },
+  // batch ซ้ำในไฟล์แต่ค่าต่าง — ยังถูกเพิ่มทั้งคู่ (policy exact-row) โชว์เฉพาะเมื่อพบ เพื่อเตือน
+  { key: 'same_batch_conflict', label: '⚠ batch ซ้ำในไฟล์ (ค่าต่างกัน)', color: 'text-danger', onlyIfPositive: true },
+];
+
+const ImportPreviewSummary = ({ preview }) => {
+  if (!preview) return null;
+  const isReplace = preview.mode === 'replace';
+  const isReplaceModels = preview.mode === 'replace_models';
+
+  return (
+    <div>
+      {isReplace && (
+        <div className="alert alert-danger py-2 mb-3" role="alert">
+          <i className="bi bi-exclamation-octagon-fill me-2" aria-hidden="true" />
+          จะ<strong>ลบข้อมูลเดิมทั้งหมด {preview.delete_existing ?? 0} แถว</strong> แล้วแทนที่ด้วย{' '}
+          <strong>{preview.to_insert ?? 0} แถว</strong>
+        </div>
+      )}
+      {isReplaceModels && (
+        <div className="alert alert-warning py-2 mb-3" role="alert">
+          <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
+          จะลบข้อมูลเดิม <strong>{preview.delete_existing ?? 0} แถว</strong> (เฉพาะ {preview.models_affected ?? 0} Model ที่พบในไฟล์) แล้วใส่ข้อมูลอัปเดต <strong>{preview.to_insert ?? 0} แถว</strong>
+        </div>
+      )}
+      <Table size="sm" borderless className="mb-0">
+        <tbody>
+          {PREVIEW_FIELDS.filter(
+            (f) => preview[f.key] !== undefined && (!f.onlyIfPositive || preview[f.key] > 0)
+          ).map((f) => (
+            <tr key={f.key}>
+              <td className="text-muted">{f.label}</td>
+              <td className={`num text-end fw-semibold ${f.color}`}>
+                {Number(preview[f.key]).toLocaleString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </div>
+  );
+};
+
+// แถวอัปโหลด 1 ไฟล์ — เลือกไฟล์แล้วกดอัปโหลด (form field "file") + ปุ่ม template/คำแนะนำ
+// resetToken: parent เพิ่มค่าเมื่ออัปโหลดจริงสำเร็จ → ล้าง file input (ConfirmModal ปิดก่อนเรียก onConfirm
+// จึงคืน bool ตรง ๆ ไม่ได้)
+const UploadRow = ({ row, busy, onUpload, onInfo, onBuild, resetToken }) => {
+  const [file, setFile] = useState(null);
+  const [inputKey, setInputKey] = useState(0); // เปลี่ยน key เพื่อล้าง file input
+  const spec = TEMPLATE_SPECS[row.template];
+
+  useEffect(() => {
+    if (resetToken > 0) {
       setFile(null);
       setInputKey((k) => k + 1);
     }
-  };
+  }, [resetToken]);
 
   return (
     <tr>
       <td className="fw-semibold">{row.label}</td>
       <td className="text-muted small">{row.note}</td>
       <td>
+        <div className="d-flex gap-1">
+          {row.builder && (
+            <Button
+              size="sm"
+              variant="outline-primary"
+              disabled={busy}
+              onClick={() => onBuild(row)}
+              title="สร้าง Template อัตโนมัติ (เติมโครง/ดึงข้อมูลจริง)"
+              aria-label={`สร้าง Template อัตโนมัติ ${row.label}`}
+            >
+              <i className="bi bi-magic" aria-hidden="true" />
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline-success"
+            disabled={busy || !spec}
+            onClick={() => spec && downloadTemplate(spec)}
+            title="ดาวน์โหลด Template เปล่า (หัวตารางอย่างเดียว)"
+            aria-label={`ดาวน์โหลด Template ${row.label}`}
+          >
+            <i className="bi bi-file-earmark-excel" aria-hidden="true" />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            disabled={!spec}
+            onClick={() => spec && onInfo(spec)}
+            title="คำแนะนำ / ตัวอย่างการกรอก"
+            aria-label={`คำแนะนำ ${row.label}`}
+          >
+            <i className="bi bi-info-circle" aria-hidden="true" />
+          </Button>
+        </div>
+      </td>
+      <td>
         <Form.Control
           key={inputKey}
           type="file"
-          accept=".csv"
+          accept=".csv,.xlsx"
           size="sm"
           disabled={busy}
           onChange={(e) => setFile(e.target.files[0] ?? null)}
         />
       </td>
       <td>
-        <Button size="sm" className="btn-mse" disabled={busy || !file} onClick={handleUpload}>
+        <Button size="sm" className="btn-mse" disabled={busy || !file} onClick={() => onUpload(row, file)}>
           <i className="bi bi-upload me-1" aria-hidden="true" />
-          อัปโหลด
+          ตรวจสอบ
         </Button>
       </td>
     </tr>
+  );
+};
+
+// Modal คำแนะนำวิธีกรอก + ตัวอย่างข้อมูล (แสดงบนเว็บ ไม่ฝังในไฟล์ template)
+const TemplateInfoModal = ({ spec, onHide }) => {
+  if (!spec) return null;
+  const example = exampleRow(spec);
+  return (
+    <Modal show={!!spec} onHide={onHide} centered size="lg" scrollable>
+      <Modal.Header closeButton>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>
+          <i className="bi bi-info-circle me-2" aria-hidden="true" />
+          วิธีกรอกข้อมูล — {spec.title}
+        </Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {spec.note && (
+          <div className="alert alert-warning py-2 small" role="note">
+            <i className="bi bi-exclamation-triangle me-2" aria-hidden="true" />
+            {spec.note}
+          </div>
+        )}
+        <p className="text-muted small mb-2">
+          หัวคอลัมน์ต้องสะกดตรงตามนี้ (ตัวพิมพ์เล็ก/ใหญ่ต้องตรง) — ช่องที่ไม่จำเป็นเว้นว่างได้
+        </p>
+        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+          <Table bordered size="sm" className="align-middle mb-3">
+            <thead className="table-light">
+              <tr>
+                <th>คอลัมน์</th>
+                <th>จำเป็น</th>
+                <th>รูปแบบ</th>
+                <th>ค่า default</th>
+                <th>ตัวอย่าง</th>
+                <th>หมายเหตุ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {spec.columns.map((c) => (
+                <tr key={c.name}>
+                  <td className="num fw-semibold">{c.name}</td>
+                  <td>
+                    {c.required ? (
+                      <span className="badge bg-danger">จำเป็น</span>
+                    ) : (
+                      <span className="text-muted small">ไม่บังคับ</span>
+                    )}
+                  </td>
+                  <td className="small">{c.format || '-'}</td>
+                  <td className="small">{c.default ?? '-'}</td>
+                  <td className="small">{c.example || '-'}</td>
+                  <td className="text-muted small">{c.note || ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </div>
+
+        <p className="fw-semibold small mb-1">ตัวอย่างแถวข้อมูล</p>
+        <div style={{ overflowX: 'auto' }}>
+          <Table bordered size="sm" className="align-middle mb-0">
+            <thead className="table-light">
+              <tr>
+                {example.map((c) => (
+                  <th key={c.name} className="num small">{c.name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                {example.map((c) => (
+                  <td key={c.name} className="small">{c.value || <span className="text-muted">(ว่าง)</span>}</td>
+                ))}
+              </tr>
+            </tbody>
+          </Table>
+        </div>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="outline-success" onClick={() => downloadTemplate(spec)}>
+          <i className="bi bi-file-earmark-excel me-1" aria-hidden="true" />
+          ดาวน์โหลด Template
+        </Button>
+        <Button variant="secondary" onClick={onHide}>
+          ปิด
+        </Button>
+      </Modal.Footer>
+    </Modal>
   );
 };
 
@@ -79,44 +269,67 @@ const ImportPage = () => {
   const [status, setStatus] = useState({ type: 'idle', message: 'พร้อมทำงาน' });
   const [busy, setBusy] = useState(false);
   const [rejected, setRejected] = useState(null); // rejected_records จาก /upload/actual_result
+  const [infoSpec, setInfoSpec] = useState(null); // spec ที่กำลังเปิด Modal คำแนะนำ
+  const [confirm, setConfirm] = useState(null); // object ให้ ConfirmModal (preview + ยืนยัน)
+  const [builder, setBuilder] = useState(null); // 'calendar'|'machines'|'routing'|'actual_result' ที่กำลังเปิด
+  const [resetTokens, setResetTokens] = useState({}); // endpoint → token (เพิ่มเมื่ออัปสำเร็จ เพื่อล้าง input)
 
   const isError = status.type === 'error';
 
-  // ===== seed (POST /api/seed/*) =====
-  const runSeed = async (endpoint, label) => {
-    setBusy(true);
-    setStatus({ type: 'busy', message: `กำลังนำเข้า ${label}...` });
-    try {
-      const data = await apiCall(`/seed/${endpoint}`, { method: 'POST' });
-      setStatus({ type: 'ok', message: data.message || `นำเข้า ${label} สำเร็จ` });
-    } catch (err) {
-      setStatus({ type: 'error', message: `นำเข้า ${label} ไม่สำเร็จ: ${err.message}` });
-    } finally {
-      setBusy(false);
-    }
+  const postFile = (row, file, dryRun) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (row.mode) fd.append('mode', row.mode); // ✨ เพิ่มบรรทัดนี้ เพื่อส่ง mode ให้ Backend
+    if (dryRun) fd.append('dry_run', '1');
+    return apiCall(row.endpoint, { method: 'POST', body: fd });
   };
 
-  // ===== upload (multipart) — คืน true เมื่อสำเร็จเพื่อให้แถวล้าง file input =====
-  const handleUpload = async (row, file) => {
+  // เขียนจริง (หลังผู้ใช้ยืนยันใน ConfirmModal)
+  const runRealUpload = async (row, file) => {
     setBusy(true);
     setStatus({ type: 'busy', message: `กำลังอัปโหลด ${row.label}...` });
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const data = await apiCall(row.endpoint, { method: 'POST', body: fd });
-      // /product-master/upload-csv คืน 200 + status:'error' เมื่อคอลัมน์ไม่ครบ (พฤติกรรมเดิม)
+      const data = await postFile(row, file, false);
       if (data.status === 'error') {
         setStatus({ type: 'error', message: data.message });
-        return false;
+        return;
       }
       setStatus({ type: 'ok', message: data.message || `อัปโหลด ${row.label} สำเร็จ` });
       if (data.rejected_records && data.rejected_records.length > 0) {
         setRejected(data.rejected_records);
       }
-      return true;
+      // key ตาม row.key ถ้ามี — แถวอัปโหลดไฟล์กับการ์ด Hana ใช้ endpoint เดียวกัน แต่ต้องล้างแยกกัน
+      const resetKey = row.key || row.endpoint;
+      setResetTokens((t) => ({ ...t, [resetKey]: (t[resetKey] || 0) + 1 }));
     } catch (err) {
       setStatus({ type: 'error', message: err.message });
-      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // step 1: dry-run ขอ preview แล้วเปิด ConfirmModal
+  const handleUpload = async (row, file) => {
+    setBusy(true);
+    setStatus({ type: 'busy', message: `กำลังตรวจสอบ ${row.label}...` });
+    try {
+      const data = await postFile(row, file, true);
+      // product-master upsert คืน status:'error' เมื่อคอลัมน์ไม่ครบ (พฤติกรรมเดิม)
+      if (data.status === 'error') {
+        setStatus({ type: 'error', message: data.message });
+        return;
+      }
+      const preview = data.preview || {};
+      setStatus({ type: 'idle', message: 'ตรวจสอบไฟล์เสร็จ — โปรดยืนยัน' });
+      setConfirm({
+        title: `ยืนยันการอัปโหลด — ${row.label}`,
+        body: <ImportPreviewSummary preview={preview} />,
+        confirmLabel: row.mode === 'replace' ? 'ลบและแทนที่' : row.mode === 'replace_models' ? 'ยืนยันอัปเดต Model' : 'ยืนยันอัปโหลด',
+        variant: row.mode === 'replace' ? 'danger' : row.mode === 'replace_models' ? 'warning' : 'primary',
+        onConfirm: () => runRealUpload(row, file),
+      });
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message });
     } finally {
       setBusy(false);
     }
@@ -127,7 +340,7 @@ const ImportPage = () => {
       <PageHeader
         icon="bi-database-up"
         title="Import Data"
-        subtitle="นำข้อมูลจากไฟล์ CSV เข้าสู่ฐานข้อมูล"
+        subtitle="นำข้อมูลจากไฟล์ CSV / Excel เข้าสู่ฐานข้อมูล"
       />
 
       {/* status box */}
@@ -149,42 +362,74 @@ const ImportPage = () => {
         {status.message}
       </div>
 
-      {/* ===== 1. seed จากไฟล์มาตรฐาน ===== */}
-      <Card className="mb-4">
-        <Card.Header className="fw-bold">
-          <i className="bi bi-database me-2" aria-hidden="true" />
-          Seed จากไฟล์มาตรฐานบน Server (CSV_BASE_DIR)
-        </Card.Header>
-        <Card.Body className="d-grid gap-2">
-          {SEED_BUTTONS.map((b) => (
-            <Button
-              key={b.endpoint}
-              variant={b.variant}
-              disabled={busy}
-              onClick={() => runSeed(b.endpoint, b.label)}
-            >
-              Import {b.label}
-            </Button>
-          ))}
-        </Card.Body>
-      </Card>
-
-      {/* ===== 2. อัปโหลดไฟล์จากเครื่อง ===== */}
+      {/* อัปโหลดไฟล์จากเครื่อง */}
       <Card>
-        <Card.Header className="fw-bold">
-          <i className="bi bi-file-earmark-arrow-up me-2" aria-hidden="true" />
-          อัปโหลดไฟล์ CSV จากเครื่อง
+        <Card.Header className="fw-bold d-flex align-items-center justify-content-between">
+          <span>
+            <i className="bi bi-file-earmark-arrow-up me-2" aria-hidden="true" />
+            อัปโหลดไฟล์จากเครื่อง (CSV / Excel)
+          </span>
+          <span className="text-muted small fw-normal">
+            <i className="bi bi-download me-1" aria-hidden="true" />
+            ดาวน์โหลด Template แล้วกรอกข้อมูลก่อนอัปโหลด
+          </span>
         </Card.Header>
         <Card.Body>
           <Table size="sm" borderless className="align-middle mb-0">
+            <thead>
+              <tr className="text-muted small">
+                <th>ข้อมูล</th>
+                <th>รายละเอียด</th>
+                <th>Template / คำแนะนำ</th>
+                <th>ไฟล์</th>
+                <th></th>
+              </tr>
+            </thead>
             <tbody>
               {UPLOAD_ROWS.map((row) => (
-                <UploadRow key={row.endpoint} row={row} busy={busy} onUpload={handleUpload} />
+                <UploadRow
+                  key={row.endpoint}
+                  row={row}
+                  busy={busy || !!confirm}
+                  onUpload={handleUpload}
+                  onInfo={setInfoSpec}
+                  onBuild={(r) => setBuilder(r.builder)}
+                  resetToken={resetTokens[row.endpoint] || 0}
+                />
               ))}
             </tbody>
           </Table>
         </Card.Body>
       </Card>
+
+      {/* ดึง Order จาก SAP ผ่าน Hana API — ได้ไฟล์ CSV ในหน่วยความจำ แล้วเข้าท่อ preview/confirm เดิม */}
+      <HanaOrderCard
+        busy={busy || !!confirm}
+        resetToken={resetTokens[HANA_ROW.key] || 0}
+        onImport={(file) => handleUpload(HANA_ROW, file)}
+      />
+
+      {/* Modal คำแนะนำวิธีกรอก */}
+      <TemplateInfoModal spec={infoSpec} onHide={() => setInfoSpec(null)} />
+
+      {/* ===== ตัวช่วยสร้าง Template อัตโนมัติ ===== */}
+      <CalendarTemplateDialog show={builder === 'calendar'} onHide={() => setBuilder(null)} />
+      <ConfigTemplateDialog
+        show={builder === 'machines'}
+        specKey="machines"
+        withAlternatives
+        onHide={() => setBuilder(null)}
+      />
+      <ConfigTemplateDialog
+        show={builder === 'routing'}
+        specKey="routing"
+        withAlternatives={false}
+        onHide={() => setBuilder(null)}
+      />
+      <ActualResultTemplateDialog show={builder === 'actual_result'} onHide={() => setBuilder(null)} />
+
+      {/* Modal preview + ยืนยัน (แทนที่ทั้งตาราง = variant danger) */}
+      <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />
 
       {/* ===== dialog รายการที่ถูกปัดตกจาก actual_result ===== */}
       <Modal show={!!rejected} onHide={() => setRejected(null)} centered size="lg">

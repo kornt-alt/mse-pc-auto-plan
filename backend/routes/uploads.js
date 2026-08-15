@@ -14,7 +14,8 @@ const { query, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const timestamps = require('../state/timestamps');
-const { parseCsv, csvHeaders } = require('../utils/csv');
+const { parseUpload, uploadHeaders } = require('../utils/csv');
+const { dedupeExact, rowKey } = require('../utils/dedupe');
 const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
 
@@ -30,26 +31,106 @@ const requireFile = (req, res) => {
   return true;
 };
 
+// preview mode — ส่ง dry_run='1' ใน multipart form (multer เก็บ text field ลง req.body)
+// dry_run: คำนวณ+คืนสรุป ไม่เขียน DB | จริง: เขียนพร้อม dedup แบบเดียวกัน
+const isDryRun = (req) => ['1', 'true'].includes(String(req.body?.dry_run ?? '').toLowerCase());
+
+// วิธีอัพเข้า (form field "mode") — แต่ละตารางรับค่าต่างกัน; ไม่ส่ง = ใช้ default ต่อ handler
+const getMode = (req, dflt) => {
+  const m = String(req.body?.mode ?? '').trim();
+  return m || dflt;
+};
+
 // float(x or 0.0) ของ Python — ค่าว่าง = 0, ตัวเลขเพี้ยน = throw (→ 500 เหมือนเดิม)
 const floatOr0 = (v) => {
   const s = String(v ?? '').trim();
   return s ? pyFloat(s) : 0;
 };
 
+// สร้าง "IN (@m0,@m1,...)" จาก list model พร้อมเติมค่าเข้า params (parameterize กัน injection)
+const modelInClause = (models, params) =>
+  models.map((m, i) => { params[`m${i}`] = m; return `@m${i}`; }).join(',');
+
+// เขียน config table (machine_config / routing_config) — ใช้ร่วม machines/routing
+// mode: 'replace_all' (ล้างทั้งตาราง) | 'replace_models' (ลบเฉพาะ model ที่อยู่ในไฟล์แล้วใส่ใหม่)
+// table/columns เป็น literal ในโค้ด (ไม่ใช่ input ผู้ใช้) — ปลอดภัยที่จะ interpolate; model ผ่าน params
+const writeConfigTable = async (req, res, { table, columns, parsed, label }) => {
+  const mode = getMode(req, 'replace_all');
+  const { rows, removed } = dedupeExact(parsed);
+
+  if (mode === 'replace_models') {
+    const models = [...new Set(rows.map((r) => r[0]).filter(Boolean))];
+    if (isDryRun(req)) {
+      let deleteExisting = 0;
+      for (let i = 0; i < models.length; i += 1000) {
+        const p = {};
+        const inc = modelInClause(models.slice(i, i + 1000), p);
+        const c = await query(`SELECT COUNT(*) AS n FROM ${table} WHERE model IN (${inc})`, p);
+        deleteExisting += c[0]?.n ?? 0;
+      }
+      return res.json({
+        preview: {
+          mode: 'replace_models',
+          total: parsed.length,
+          to_insert: rows.length,
+          duplicates_in_file: removed,
+          models_affected: models.length,
+          delete_existing: deleteExisting,
+        },
+      });
+    }
+    await transaction(async (t) => {
+      for (let i = 0; i < models.length; i += 1000) {
+        const p = {};
+        const inc = modelInClause(models.slice(i, i + 1000), p);
+        await t.query(`DELETE FROM ${table} WHERE model IN (${inc})`, p);
+      }
+      await bulkInsert(t, table, columns, rows);
+    });
+    timestamps.markEdit();
+    return res.json({ message: `✅ ${label} (เฉพาะ ${models.length} model): ${rows.length} records` });
+  }
+
+  // replace_all (default) — ล้างทั้งตารางแล้วใส่ใหม่
+  if (isDryRun(req)) {
+    const existing = await query(`SELECT COUNT(*) AS n FROM ${table}`);
+    return res.json({
+      preview: {
+        mode: 'replace',
+        total: parsed.length,
+        to_insert: rows.length,
+        duplicates_in_file: removed,
+        delete_existing: existing[0]?.n ?? 0,
+      },
+    });
+  }
+  await transaction(async (t) => {
+    await t.query(`DELETE FROM ${table}`);
+    await bulkInsert(t, table, columns, rows);
+  });
+  timestamps.markEdit();
+  return res.json({ message: `✅ ${label} Updated: ${rows.length} records` });
+};
+
 // ========== POST /api/upload/orders (L1285) — append-only ==========
 router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
-    const csvRows = parseCsv(req.file.buffer);
+    const mode = getMode(req, 'append'); // 'append' | 'replace'
+    const isReplace = mode === 'replace';
+    const csvRows = parseUpload(req.file);
 
-    // เกณฑ์ upload: priority < 999999 โดยไม่กรอง is_deleted (quirk เดิม — คนละเกณฑ์กับ seed)
-    const maxRows = await query(
-      'SELECT MAX(priority) AS maxPrio FROM orders WHERE priority < 999999'
-    );
-    let currentMax = maxRows[0]?.maxPrio ?? 0;
-
-    const existing = await query('SELECT batch FROM orders');
-    const existingBatches = new Set(existing.map((r) => String(r.batch ?? '').trim()));
+    // replace: ล้างทั้งตารางแล้วใส่ใหม่ → priority เริ่มใหม่จาก 0, ไม่ข้าม batch ที่มีอยู่
+    // append: ต่อท้าย → priority ต่อจาก max เดิม, ข้าม batch ที่มีใน DB
+    let currentMax = 0;
+    let existingBatches = new Set();
+    if (!isReplace) {
+      // เกณฑ์ upload: priority < 999999 โดยไม่กรอง is_deleted (quirk เดิม — คนละเกณฑ์กับ seed)
+      const maxRows = await query('SELECT MAX(priority) AS maxPrio FROM orders WHERE priority < 999999');
+      currentMax = maxRows[0]?.maxPrio ?? 0;
+      const existing = await query('SELECT batch FROM orders');
+      existingBatches = new Set(existing.map((r) => String(r.batch ?? '').trim()));
+    }
 
     // get_safe เดิม: ว่าง/NaN → default | get_safe_null เดิม: ว่าง/NULL/NONE/NAN → NULL
     const getSafe = (r, key, dflt) => {
@@ -66,11 +147,15 @@ router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), as
     };
     const intSafe = (r, key, dflt) => Math.trunc(pyFloat(String(getSafe(r, key, dflt))));
 
+    let skippedExisting = 0;
     const rows = [];
     for (const r of csvRows) {
       const batch = String(r.batch ?? '').trim();
       if (!batch || batch === 'None') continue;
-      if (existingBatches.has(batch)) continue;
+      if (existingBatches.has(batch)) {
+        skippedExisting += 1;
+        continue;
+      }
       currentMax += 1;
 
       const rawDue = String(r.due_date ?? '').trim();
@@ -102,7 +187,46 @@ router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), as
       ]);
     }
 
+    // dedup แถวที่ซ้ำเป๊ะ — บนคอลัมน์ที่ "ไม่รวม priority" (index 5) เพราะ priority เป็นค่า server-assigned
+    // เพิ่มทีละ 1 ทุกแถว จึงต่างกันเสมอ. ⚠️ ห้ามแทนด้วย dedupeExact() ทั้งแถว — จะไม่มีวันตัดอะไรเลย
+    // เพราะ priority ทำให้ทุกแถวไม่ซ้ำ. sameBatchConflict = batch ซ้ำในไฟล์แต่ค่าอื่นต่าง (exact-dedup
+    // ไม่ตัด ตาม policy ผู้ใช้) — ยัง insert ทั้งคู่ แต่ preview เตือนให้เห็นก่อน (batch ควร unique ในตาราง orders)
+    const seenNoPrio = new Set();
+    const seenBatch = new Set();
+    const uniqueRows = [];
+    let duplicatesInFile = 0;
+    let sameBatchConflict = 0;
+    for (const row of rows) {
+      const key = JSON.stringify(row.slice(0, 5)) + JSON.stringify(row.slice(6));
+      if (seenNoPrio.has(key)) {
+        duplicatesInFile += 1;
+        continue;
+      }
+      seenNoPrio.add(key);
+      if (seenBatch.has(row[0])) sameBatchConflict += 1;
+      seenBatch.add(row[0]);
+      uniqueRows.push(row);
+    }
+
+    if (isDryRun(req)) {
+      const preview = {
+        mode: isReplace ? 'replace' : 'append',
+        total: uniqueRows.length + duplicatesInFile + skippedExisting,
+        to_insert: uniqueRows.length,
+        duplicates_in_file: duplicatesInFile,
+        same_batch_conflict: sameBatchConflict,
+      };
+      if (isReplace) {
+        const cnt = await query('SELECT COUNT(*) AS n FROM orders');
+        preview.delete_existing = cnt[0]?.n ?? 0;
+      } else {
+        preview.skipped_existing = skippedExisting;
+      }
+      return res.json({ preview });
+    }
+
     await transaction(async (t) => {
+      if (isReplace) await t.query('DELETE FROM orders');
       await bulkInsert(
         t,
         'orders',
@@ -111,11 +235,12 @@ router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), as
           'wip_flow_index', 'wip_start_step_index', 'wip_finish_date', 'wip_machine',
           'planning_mode', 'release_date', 'is_deleted', 'is_new', 'is_missing_routing',
         ],
-        rows
+        uniqueRows
       );
     });
     // quirk เดิม: /upload/orders ไม่ markEdit
-    res.json({ message: `✅ Server ได้รับไฟล์แล้ว! เพิ่มออเดอร์ใหม่ ${rows.length} รายการ` });
+    const verb = isReplace ? 'แทนที่ทั้งตาราง' : 'เพิ่มออเดอร์ใหม่';
+    res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ` });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -125,9 +250,68 @@ router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), as
 router.post('/upload/calendar', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
-    const rows = parseCsv(req.file.buffer)
+    const mode = getMode(req, 'replace'); // 'replace' | 'upsert'
+    const parsed = parseUpload(req.file)
       .filter((r) => (r.Machine || '').trim() !== '' && (r.Date || '').trim() !== '')
       .map((r) => [(r.Machine || '').trim(), (r.Date || '').trim(), floatOr0(r.AvailableTime)]);
+
+    if (mode === 'upsert') {
+      // อัปเดตเฉพาะ machine+date ที่กรอก (ตัวอื่นในตารางไม่แตะ) — ยุบ key ซ้ำในไฟล์ (ค่าล่าสุดชนะ)
+      const byKey = new Map();
+      for (const [m, d, t] of parsed) byKey.set(`${m}|${d}`, [m, d, t]);
+      const duplicatesInFile = parsed.length - byKey.size;
+      const existing = await query('SELECT machine, date FROM calendar_config');
+      const existingSet = new Set(existing.map((r) => `${String(r.machine ?? '').trim()}|${String(r.date ?? '').trim()}`));
+      let toUpdate = 0;
+      for (const k of byKey.keys()) if (existingSet.has(k)) toUpdate += 1;
+
+      if (isDryRun(req)) {
+        return res.json({
+          preview: {
+            mode: 'upsert',
+            total: parsed.length,
+            to_insert: byKey.size - toUpdate,
+            to_update: toUpdate,
+            duplicates_in_file: duplicatesInFile,
+          },
+        });
+      }
+      await transaction(async (t) => {
+        for (const [key, [m, d, time]] of byKey.entries()) {
+          // ตัดสิน update/insert จาก existingSet (t.query คืนแค่ recordset ไม่มี rowsAffected)
+          if (existingSet.has(key)) {
+            await t.query(
+              'UPDATE calendar_config SET available_time = @time WHERE machine = @m AND date = @d',
+              { time, m, d }
+            );
+          } else {
+            await t.query(
+              'INSERT INTO calendar_config (machine, date, available_time) VALUES (@m, @d, @time)',
+              { m, d, time }
+            );
+          }
+        }
+      });
+      timestamps.markEdit();
+      res.json({ message: `✅ Calendar Upsert: ${byKey.size} records` });
+      return;
+    }
+
+    // replace (default) — ล้างทั้งตารางแล้วใส่ใหม่
+    const { rows, removed } = dedupeExact(parsed);
+    if (isDryRun(req)) {
+      const existing = await query('SELECT COUNT(*) AS n FROM calendar_config');
+      return res.json({
+        preview: {
+          mode: 'replace',
+          total: parsed.length,
+          to_insert: rows.length,
+          duplicates_in_file: removed,
+          delete_existing: existing[0]?.n ?? 0,
+        },
+      });
+    }
+
     await transaction(async (t) => {
       await t.query('DELETE FROM calendar_config');
       await bulkInsert(t, 'calendar_config', ['machine', 'date', 'available_time'], rows);
@@ -143,7 +327,7 @@ router.post('/upload/calendar', verifyToken, writeRoles, upload.single('file'), 
 router.post('/upload/machines', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
-    const rows = parseCsv(req.file.buffer)
+    const parsed = parseUpload(req.file)
       .filter((r) => (r.Model || '').trim() !== '')
       .map((r) => [
         (r.Model || '').trim(),
@@ -155,17 +339,12 @@ router.post('/upload/machines', verifyToken, writeRoles, upload.single('file'), 
         floatOr0(r.SetupTime),
         String(r.JigID ?? '-').trim() || '-',
       ]);
-    await transaction(async (t) => {
-      await t.query('DELETE FROM machine_config');
-      await bulkInsert(
-        t,
-        'machine_config',
-        ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id'],
-        rows
-      );
+    await writeConfigTable(req, res, {
+      table: 'machine_config',
+      columns: ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id'],
+      parsed,
+      label: 'Machine Config',
     });
-    timestamps.markEdit();
-    res.json({ message: `✅ Machine Config Updated: ${rows.length} records` });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -175,7 +354,7 @@ router.post('/upload/machines', verifyToken, writeRoles, upload.single('file'), 
 router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
-    const rows = parseCsv(req.file.buffer)
+    const parsed = parseUpload(req.file)
       .filter((r) => (r.Model || '').trim() !== '')
       .map((r) => [
         (r.Model || '').trim(),
@@ -184,17 +363,12 @@ router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), a
         (r.StepName || '').trim(),
         (r.SetupGroup || '').trim(),
       ]);
-    await transaction(async (t) => {
-      await t.query('DELETE FROM routing_config');
-      await bulkInsert(
-        t,
-        'routing_config',
-        ['model', 'flow_index', 'step_index', 'step_name', 'setup_group'],
-        rows
-      );
+    await writeConfigTable(req, res, {
+      table: 'routing_config',
+      columns: ['model', 'flow_index', 'step_index', 'step_name', 'setup_group'],
+      parsed,
+      label: 'Routing',
     });
-    timestamps.markEdit();
-    res.json({ message: `✅ Routing Updated: ${rows.length} records` });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -204,7 +378,8 @@ router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), a
 router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
-    const csvRows = parseCsv(req.file.buffer); // ทุกค่าเป็น string อยู่แล้ว (เทียบ dtype=str เดิม)
+    const mode = getMode(req, 'append'); // 'append' (กันซ้ำกับ DB) | 'append_all' (ไม่เช็คซ้ำ)
+    const csvRows = parseUpload(req.file); // ทุกค่าเป็น string อยู่แล้ว (เทียบ dtype=str เดิม)
 
     const csvBatches = [
       ...new Set(csvRows.map((r) => String(r.batch ?? '').trim()).filter(Boolean)),
@@ -230,8 +405,50 @@ router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('fil
       }
     }
 
+    // identity ของ record ที่มีใน production_records อยู่แล้ว (ทุกคอลัมน์ยกเว้น timestamp)
+    // ผู้ใช้เลือก "กันอัปซ้ำกับ DB" — อัปไฟล์เดิมซ้ำจะไม่บวก qty ซ้ำ (2026-08-03)
+    const IDENTITY_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 8]; // ตัด index 9 (timestamp)
+    // qty_ok/qty_ng normalize ผ่าน Number() ทั้ง 2 ฝั่ง — DB (numeric column) อาจคืนเป็น string เช่น "95.00"
+    // ต้องได้ canonical เดียวกับ floatOr0 ฝั่งไฟล์ ไม่งั้นกัน dup ไม่ติด
+    const dbIdentity = (o) =>
+      rowKey(
+        [
+          String(o.employee ?? '').trim(),
+          String(o.batch ?? '').trim(),
+          String(o.process_step ?? '').trim(),
+          String(o.machine ?? '').trim(),
+          Number(o.qty_ok) || 0,
+          Number(o.qty_ng) || 0,
+          o.mode_ng ?? '',
+          String(o.working_date ?? '').trim(),
+          String(o.working_shift ?? '').trim(),
+        ],
+        IDENTITY_IDX
+      );
+    // append_all: ข้ามการเช็คซ้ำกับ DB (existingSet ว่าง → ไม่มีอะไรถูกนับเป็น alreadyInDb)
+    const existingSet = new Set();
+    if (mode !== 'append_all') {
+      for (let i = 0; i < csvBatches.length; i += 1000) {
+        const chunk = csvBatches.slice(i, i + 1000);
+        const params = {};
+        const names = chunk.map((b, j) => {
+          params[`b${j}`] = b;
+          return `@b${j}`;
+        });
+        const recs = await query(
+          `SELECT employee, batch, process_step, machine, qty_ok, qty_ng, mode_ng, working_date, working_shift
+           FROM production_records WHERE batch IN (${names.join(',')})`,
+          params
+        );
+        for (const rec of recs) existingSet.add(dbIdentity(rec));
+      }
+    }
+
     const rejectedRecords = [];
     const rows = [];
+    let alreadyInDb = 0;
+    let duplicatesInFile = 0;
+    const seenInFile = new Set();
     // ORM เดิมใส่ timestamp default get_thai_time ฝั่ง client — DB ไม่มี default ต้องใส่เอง
     const ts = nowBangkokString();
     for (const r of csvRows) {
@@ -244,7 +461,7 @@ router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('fil
         continue;
       }
       const modeNg = String(r.mode_ng ?? '').trim();
-      rows.push([
+      const record = [
         String(r.employee ?? '').trim(),
         batch,
         processStep,
@@ -254,8 +471,31 @@ router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('fil
         modeNg || null,
         String(r.working_date ?? '').trim(),
         String(r.working_shift ?? '').trim(),
-        ts,
-      ]);
+      ];
+      const identity = rowKey(record, IDENTITY_IDX);
+      if (existingSet.has(identity)) {
+        alreadyInDb += 1;
+        continue;
+      }
+      if (seenInFile.has(identity)) {
+        duplicatesInFile += 1;
+        continue;
+      }
+      seenInFile.add(identity);
+      rows.push([...record, ts]);
+    }
+
+    if (isDryRun(req)) {
+      return res.json({
+        preview: {
+          mode: 'append',
+          total: csvRows.filter((r) => String(r.batch ?? '').trim()).length,
+          to_insert: rows.length,
+          already_in_db: alreadyInDb,
+          duplicates_in_file: duplicatesInFile,
+          rejected: rejectedRecords.length,
+        },
+      });
     }
 
     await transaction(async (t) => {
@@ -281,7 +521,7 @@ router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single
     if (!requireFile(req, res)) return;
 
     // quirk เดิม: คอลัมน์ไม่ครบคืน 200 พร้อม status:error (NewModelWizard ฝั่งหน้าเว็บเช็ค field นี้)
-    const headers = csvHeaders(req.file.buffer);
+    const headers = uploadHeaders(req.file);
     const requiredColumns = ['model', 'description', 'setup_group', 'dept_code', 'product_code'];
     for (const col of requiredColumns) {
       if (!headers.includes(col)) {
@@ -289,9 +529,25 @@ router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single
       }
     }
 
-    const csvRows = parseCsv(req.file.buffer);
+    const csvRows = parseUpload(req.file);
     const existing = await query('SELECT model FROM product_master');
     const existingModels = new Set(existing.map((r) => String(r.model ?? '').trim()));
+
+    if (isDryRun(req)) {
+      const fileModels = csvRows.map((r) => String(r.model ?? '').trim()).filter(Boolean);
+      const distinct = new Set(fileModels);
+      let toInsert = 0;
+      for (const m of distinct) if (!existingModels.has(m)) toInsert += 1;
+      return res.json({
+        preview: {
+          mode: 'upsert',
+          total: fileModels.length,
+          to_insert: toInsert,
+          to_update: distinct.size - toInsert,
+          duplicates_in_file: fileModels.length - distinct.size,
+        },
+      });
+    }
 
     let successCount = 0;
     await transaction(async (t) => {
@@ -334,7 +590,7 @@ router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single
 router.post('/upload/product_master', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
-    const rows = parseCsv(req.file.buffer)
+    const parsed = parseUpload(req.file)
       .filter((r) => String(r.model ?? '').trim() !== '')
       .map((r) => [
         String(r.model).trim(),
@@ -343,6 +599,21 @@ router.post('/upload/product_master', verifyToken, writeRoles, upload.single('fi
         r.dept_code ? String(r.dept_code) : null,
         r.product_code ? String(r.product_code) : null,
       ]);
+    const { rows, removed } = dedupeExact(parsed);
+
+    if (isDryRun(req)) {
+      const existing = await query('SELECT COUNT(*) AS n FROM product_master');
+      return res.json({
+        preview: {
+          mode: 'replace',
+          total: parsed.length,
+          to_insert: rows.length,
+          duplicates_in_file: removed,
+          delete_existing: existing[0]?.n ?? 0,
+        },
+      });
+    }
+
     await transaction(async (t) => {
       await t.query('DELETE FROM product_master');
       await bulkInsert(

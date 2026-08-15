@@ -23,7 +23,7 @@ import DateEditDialog from './DateEditDialog';
 import SettingsDialog from './SettingsDialog';
 import PlanPreviewDialog from './PlanPreviewDialog';
 import { buildPlanDiff, computeSortByDueDate } from './planDiff';
-import { buildPlanDetail } from './planDetail';
+import { buildPlanDetail, buildMachineSchedule } from './planDetail';
 import OrderFilterPanel from './OrderFilterPanel';
 import {
   EMPTY_FILTERS, dateFilterActive, countActiveDateFilters, matchOrderDates,
@@ -31,7 +31,8 @@ import {
 
 // meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
 const DATE_EDIT_META = {
-  material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันวัตถุดิบเข้า (Material Ready)', label: 'เลือกวันที่วัตถุดิบเข้า', icon: 'bi-box-seam' },
+  // logKinds: กล่อง Material โชว์ประวัติรวมกับการติ๊ก "Mat'l เข้า" (kind material_arrived) — เรื่องวัตถุดิบเดียวกัน
+  material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam', logKinds: 'material,material_arrived' },
   confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
   release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
 };
@@ -61,6 +62,21 @@ const formatWip = (wip) => {
 
 const shortDate = (v) => (v ? String(v).slice(0, 10) : '-');
 
+// วันนี้เป็น string 'YYYY-MM-DD' โซนกรุงเทพ (UTC+7 คงที่ ไม่มี DST) — ให้ตรงกับ backend nowBangkok()
+// ไม่ใช้เวลาเครื่อง (browser-local) กันเพี้ยนช่วงเที่ยงคืนถ้าเครื่องตั้ง timezone อื่น
+const todayDateStr = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+
+// สถานะ "ของเข้า" ที่ใช้แสดง checkbox = override (material_arrived true/false) ?? default ตามวัน
+// auto: ไม่มี override → ถือว่าเข้าเมื่อถึง material_ready_date (ไม่มีวันคาด = ถือว่าเข้า ไม่มีอะไรต้องรอ)
+const effectiveArrived = (order, today) => {
+  const ov = order.material_arrived;
+  if (ov === true || ov === 1) return true;
+  if (ov === false || ov === 0) return false;
+  const mat = order.material_ready_date ? String(order.material_ready_date).slice(0, 10) : '';
+  if (!mat) return true;
+  return today >= mat;
+};
+
 // marker เล็ก ๆ บอกว่าช่องวันนี้มีประวัติการแก้/ไฟล์แนบกี่รายการ
 const logMarker = (n) =>
   Number(n) > 0 ? (
@@ -72,26 +88,6 @@ const logMarker = (n) =>
     />
   ) : null;
 
-// program_notes → chip สี (จาก backend: Please pull in material / Material enough / N/A)
-const programNoteChip = (note) => {
-  if (!note) return <span className="text-muted">-</span>;
-  if (note === 'Please pull in material') {
-    return (
-      <span className="chip chip-ng" title="วัตถุดิบเข้าช้ากว่าวันเริ่มผลิต">
-        <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" /> ดึงวัตถุดิบเข้า
-      </span>
-    );
-  }
-  if (note === 'Material enough') {
-    return (
-      <span className="chip chip-ok" title="วัตถุดิบพร้อมก่อนเริ่มผลิต">
-        <i className="bi bi-check-circle-fill" aria-hidden="true" /> วัตถุดิบพร้อม
-      </span>
-    );
-  }
-  return <span className="text-muted small">{note}</span>;
-};
-
 // แผน "ค้าง" ถ้ามีการแก้ไขหลังวางแผนล่าสุด (เทียบ string 'YYYY-MM-DD HH:MM:SS')
 const isPlanOutdated = (lastPlan, lastEdit) => {
   if (lastEdit === '-') return false;
@@ -100,7 +96,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, dragLocked, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate }) => {
+const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate, onToggleArrived }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -186,17 +182,6 @@ const SortableRow = ({ order, dragLocked, datesLocked, canEditDates, onEdit, onC
         {due.icon === 'near' && <i className="bi bi-clock-fill me-1" title="ใกล้ถึงกำหนดส่ง" />}
         {String(order.due_date || '').slice(0, 10)}
       </td>
-      <td>
-        {(() => {
-          const mode = order.planMode || order.plan_mode || 'NEW';
-          return (
-            <span className={`chip ${mode === 'FIXED' ? 'chip-warn' : 'chip-info'}`}>
-              <i className={`bi ${mode === 'FIXED' ? 'bi-lock-fill' : 'bi-unlock'}`} aria-hidden="true" />
-              {mode}
-            </span>
-          );
-        })()}
-      </td>
       <td className="num">
         <Button
           variant="link"
@@ -216,12 +201,14 @@ const SortableRow = ({ order, dragLocked, datesLocked, canEditDates, onEdit, onC
           size="sm"
           className="p-0 text-decoration-none num"
           disabled={datesLocked}
-          title={canEditDates ? 'แก้วันวัตถุดิบเข้า (Material Ready)' : 'ดูประวัติวันวัตถุดิบเข้า'}
+          title={canEditDates ? 'แก้วันMaterial เข้า (Material Ready)' : 'ดูประวัติวันMaterial เข้า'}
           onClick={() => onEditDate('material', order)}
         >
           {shortDate(order.material_ready_date)}
         </Button>
-        {logMarker(order.date_log_counts?.material)}
+        {/* รวมจำนวนการติ๊ก "Mat'l เข้า" ด้วย เพราะกดเข้าไปแล้วเห็น timeline เดียวกัน */}
+        {logMarker((Number(order.date_log_counts?.material) || 0)
+          + (Number(order.date_log_counts?.material_arrived) || 0))}
       </td>
       <td className="num">
         <Button
@@ -238,7 +225,40 @@ const SortableRow = ({ order, dragLocked, datesLocked, canEditDates, onEdit, onC
       </td>
       <td className="num">{shortDate(order.start_date)}</td>
       <td className="num">{shortDate(order.fg_date)}</td>
-      <td>{programNoteChip(order.program_notes)}</td>
+      <td className="text-center">
+        {(() => {
+          const ok = effectiveArrived(order, today);
+          return (
+            <Form.Select
+              size="sm"
+              value={ok ? 'ok' : 'notok'}
+              disabled={datesLocked || !canEditDates}
+              title={canEditDates
+                ? 'Mat\'l OK = ยืนยันของเข้า (ปลดการรอ เริ่มได้เลย) · ยังไม่เข้า/ผิดปกติ = คงรอวันวัตถุดิบ'
+                : 'ดูสถานะ Material เข้า'}
+              aria-label="สถานะ Material เข้า"
+              onChange={(e) => onToggleArrived(order, e.target.value === 'ok')}
+              style={{
+                minWidth: 120,
+                fontWeight: 600,
+                color: ok ? '#0f5132' : '#842029',
+                borderColor: ok ? '#198754' : '#dc3545',
+                backgroundColor: ok ? 'rgba(25,135,84,0.10)' : 'rgba(220,53,69,0.10)',
+              }}
+            >
+              <option value="ok">Mat&apos;l OK</option>
+              <option value="notok">ยังไม่เข้า/ผิดปกติ</option>
+            </Form.Select>
+          );
+        })()}
+        {order.program_notes === 'Please pull in material' && (
+          <i
+            className="bi bi-exclamation-triangle-fill text-danger ms-1"
+            title="ดึงวัตถุดิบเข้า — วัตถุดิบยังไม่พร้อม/เข้าช้ากว่าวันเริ่มผลิต"
+            aria-hidden="true"
+          />
+        )}
+      </td>
       <td className="text-center">
         <Badge bg={(order.priority ?? 99) < 10 ? 'danger' : 'secondary'} pill>
           {order.priority ?? 99}
@@ -287,6 +307,7 @@ const OrderControlTower = () => {
   const canManageSettings = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
   // PCMC (=PLANNER) หรือ ADMIN เท่านั้นที่แก้/แนบวันได้ — MFG เปิดดูประวัติ+ดาวน์โหลดได้อย่างเดียว
   const canEditDates = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
+  const today = todayDateStr(); // คำนวณครั้งเดียวต่อ render แล้วส่งให้ทุกแถว (เลี่ยง Intl ต่อแถว)
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -370,7 +391,6 @@ const OrderControlTower = () => {
   );
   const resetDateFilters = useCallback(() => setDateFilters(EMPTY_FILTERS), []);
   const outdated = isPlanOutdated(timestamps.last_plan, timestamps.last_edit);
-  const allFixed = orders.length > 0 && orders.every((o) => (o.plan_mode || 'NEW') === 'FIXED');
   const maxPriority = orders.reduce((max, o) => Math.max(max, o.priority ?? 0), 0);
 
   // ===== drag reorder (optimistic ในจอ — ยังไม่ persist จนกว่าจะยืนยันใน preview) =====
@@ -438,6 +458,39 @@ const OrderControlTower = () => {
     }
   }, [dateEdit, fetchTimestamps, showToast]);
 
+  // ===== dropdown สถานะ Material (material_arrived) — OK(true)=ปลด material floor เริ่มได้เลย /
+  // ยังไม่เข้า(false)=คงรอวันวัตถุดิบ. กระทบแผน (backend markEdit) → "แผนค้าง" เตือนให้ Replan =====
+  const handleToggleArrived = useCallback(async (order, checked) => {
+    const prevArrived = order.material_arrived;
+    const prevNote = order.program_notes;
+    // optimistic — ตั้ง override ชัดเจน (true/false); revert ถ้า API พลาด
+    setOrders((prev) => prev.map((o) => (o.batch === order.batch ? { ...o, material_arrived: checked } : o)));
+    try {
+      const res = await apiCall(`/orders/${encodeURIComponent(order.batch)}/material-arrived`, {
+        method: 'PUT',
+        body: JSON.stringify({ material_arrived: checked }),
+      });
+      // ซิงก์ program_notes ที่ backend คำนวณใหม่ (ป้ายเตือน "ดึงวัตถุดิบเข้า" ในเซลล์เดียวกัน)
+      setOrders((prev) => prev.map((o) => {
+        if (o.batch !== order.batch) return o;
+        const upd = { ...o, material_arrived: res.material_arrived, program_notes: res.program_notes };
+        // bump ตัวนับ marker ถ้า backend บันทึก log สำเร็จ (log_entry ว่าง = ค่าไม่เปลี่ยน หรือยังไม่มีตาราง)
+        if (res.log_entry) {
+          const counts = { ...(o.date_log_counts || {}) };
+          counts.material_arrived = (Number(counts.material_arrived) || 0) + 1;
+          upd.date_log_counts = counts;
+        }
+        return upd;
+      }));
+      fetchTimestamps();
+    } catch (err) {
+      setOrders((prev) => prev.map((o) => (o.batch === order.batch
+        ? { ...o, material_arrived: prevArrived, program_notes: prevNote }
+        : o)));
+      showToast(err.message, 'danger');
+    }
+  }, [fetchTimestamps, showToast]);
+
   // ===== preview dialog control =====
   const closePreview = useCallback(() => setPreview(null), []);
 
@@ -462,7 +515,11 @@ const OrderControlTower = () => {
       });
       // deep detail: เครื่อง/process กินเวลาเท่าไหร่ + คอขวด (จาก decoded.data)
       const detail = buildPlanDetail(decoded.data ?? []);
-      setPreview((p) => (p && p.mode === mode ? { ...p, loading: false, diff, detail } : p));
+      // มุมกลับ: เครื่องไหนรัน batch ไหนบ้าง (แท็บ "เครื่องจักร")
+      const machineSchedule = buildMachineSchedule(decoded.data ?? []);
+      setPreview((p) => (p && p.mode === mode
+        ? { ...p, loading: false, diff, detail, machineSchedule, capacityWarning: decoded.capacity_warning }
+        : p));
     } catch (err) {
       setPreview(null);
       planErrorToast(err);
@@ -480,7 +537,17 @@ const OrderControlTower = () => {
       await fetchOrders();
       await fetchTimestamps();
       setPreview(null);
-      showToast('Replan สำเร็จ — กด "ดูแผน" เพื่อไปหน้าวางแผน', 'success');
+      const cw = decoded.capacity_warning;
+      if (cw) {
+        showToast(
+          `⚠️ ปฏิทินอาจไม่พอ: วางแผนไม่ได้ ${cw.unplanned_count} งาน`
+          + (cw.last_calendar_date ? ` (ปฏิทินถึง ${cw.last_calendar_date})` : '')
+          + ' — กรุณาสร้างปฏิทินเพิ่มแล้ว Replan อีกครั้ง',
+          'warning',
+        );
+      } else {
+        showToast('Replan สำเร็จ — กด "ดูแผน" เพื่อไปหน้าวางแผน', 'success');
+      }
     } catch (err) {
       planErrorToast(err);
     } finally {
@@ -597,40 +664,6 @@ const OrderControlTower = () => {
       },
     });
   };
-
-  // ---- Lock/Unlock ทั้งหมด: sim ด้วย plan_mode override → preview ผลกระทบ → ยืนยัน → persist mode ----
-  const doToggleMode = useCallback(async (target) => {
-    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
-    setIsPlanning(true);
-    try {
-      await apiCall(`/orders/bulk/mode?target_mode=${target}`, {
-        method: 'PUT',
-        body: JSON.stringify({ batches: orders.map((o) => o.batch) }),
-      });
-      baselineRef.current = null;
-      await fetchOrders();
-      await fetchTimestamps();
-      setPreview(null);
-      showToast(`เปลี่ยนทั้งหมดเป็น ${target} สำเร็จ — กด Replan เพื่อคำนวณแผนใหม่`, 'success');
-    } catch (err) {
-      showToast(err.message, 'danger');
-    } finally {
-      setIsPlanning(false);
-    }
-  }, [orders, fetchOrders, fetchTimestamps, showToast]);
-
-  const handleToggleAllMode = useCallback(() => {
-    const target = allFixed ? 'NEW' : 'FIXED';
-    const afterModes = {};
-    orders.forEach((o) => { afterModes[o.batch] = target; });
-    openPreview({
-      mode: target === 'FIXED' ? 'lock' : 'unlock',
-      beforeRows: orders,
-      afterModes,
-      planModeOverrides: afterModes,
-      onConfirm: () => doToggleMode(target),
-    });
-  }, [allFixed, orders, openPreview, doToggleMode]);
 
   // Undo — restore snapshot แล้ว refetch (ไม่ replan อัตโนมัติ; ผู้ใช้กด Replan เอง)
   const handleUndo = async () => {
@@ -773,10 +806,6 @@ const OrderControlTower = () => {
             </>
           ) : (
             <>
-              <Button variant={allFixed ? 'success' : 'warning'} disabled={busy} onClick={handleToggleAllMode}>
-                <i className={`bi ${allFixed ? 'bi-unlock' : 'bi-lock-fill'} me-1`} aria-hidden="true" />
-                {allFixed ? 'ปลดล็อกทั้งหมด' : 'ล็อกทั้งหมด'}
-              </Button>
               <Button
                 variant="warning"
                 disabled={!previousOrderList || busy}
@@ -841,13 +870,12 @@ const OrderControlTower = () => {
                     <th>Delivery mode</th>
                     <th>Qty</th>
                     <th>Due Date</th>
-                    <th>Mode</th>
                     <th>Release Date</th>
                     <th>Material</th>
                     <th>Confirm</th>
                     <th>Start</th>
                     <th>FG</th>
-                    <th>Notes</th>
+                    <th className="text-center">Mat'l เข้า</th>
                     <th className="text-center">Priority</th>
                   </tr>
                 </thead>
@@ -856,6 +884,7 @@ const OrderControlTower = () => {
                     <SortableRow
                       key={order.batch}
                       order={order}
+                      today={today}
                       dragLocked={filterActive}
                       datesLocked={reorderDirty}
                       canEditDates={canEditDates}
@@ -865,6 +894,7 @@ const OrderControlTower = () => {
                       onTracking={(batch) => setTrackingBatch(batch)}
                       onMissingAlert={handleMissingAlert}
                       onEditDate={(kind, o) => setDateEdit({ kind, order: o })}
+                      onToggleArrived={handleToggleArrived}
                     />
                   ))}
                 </tbody>
@@ -907,6 +937,7 @@ const OrderControlTower = () => {
       <DateEditDialog
         show={!!dateEdit}
         kind={dateEdit ? dateEdit.kind : ''}
+        logKinds={dateEdit ? DATE_EDIT_META[dateEdit.kind].logKinds : ''}
         title={dateEdit ? DATE_EDIT_META[dateEdit.kind].title : ''}
         label={dateEdit ? DATE_EDIT_META[dateEdit.kind].label : ''}
         icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}
@@ -929,8 +960,11 @@ const OrderControlTower = () => {
         mode={preview ? preview.mode : 'replan'}
         diff={preview ? preview.diff : null}
         detail={preview ? preview.detail : null}
+        machineSchedule={preview ? preview.machineSchedule : null}
+        capacityWarning={preview ? preview.capacityWarning : null}
         loading={preview ? preview.loading : false}
         settings={settings}
+        todayStr={today}
         onConfirm={preview ? preview.onConfirm : undefined}
         onHide={closePreview}
       />

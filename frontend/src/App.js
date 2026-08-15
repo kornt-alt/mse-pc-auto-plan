@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { Navbar, Nav, NavDropdown, Container } from 'react-bootstrap';
 
 import ProtectedRoute from './auth/ProtectedRoute';
-import { isAuthenticated, getCurrentUser } from './api/client';
+import { isAuthenticated, getCurrentUser, apiCall } from './api/client';
 import { PlanDataProvider } from './context/PlanDataContext';
 
 import Login from './components/manage_user/Login';
@@ -86,13 +86,39 @@ const NotFound = () => (
 
 const ConditionalNavbar = () => {
   const location = useLocation();
+  const [pendingCount, setPendingCount] = useState(0);
 
-  if (['/login', '/register'].includes(location.pathname) || !isAuthenticated()) {
-    return null;
-  }
+  // hooks ต้องเรียกก่อน early return เสมอ → คำนวณ hidden/user ไว้ก่อน
+  const hidden = ['/login', '/register'].includes(location.pathname) || !isAuthenticated();
+  const user = hidden ? null : getCurrentUser();
+  const isAdmin = user?.role === 'ADMIN';
 
-  const user = getCurrentUser();
+  // badge คำขอรออนุมัติ (ADMIN) — refetch ตอนเปลี่ยนหน้าให้ตัวเลขสดหลังกดอนุมัติ; ล้มก็เงียบ (เป็นแค่ backup)
+  useEffect(() => {
+    if (!isAdmin) {
+      setPendingCount(0);
+      return undefined;
+    }
+    let alive = true;
+    apiCall('/users/pending-count')
+      .then((d) => {
+        if (alive) setPendingCount(d.count ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [isAdmin, location.pathname]);
+
+  if (hidden) return null;
+
   const menu = visibleMenu(user.role);
+  const pendingBadge =
+    pendingCount > 0 ? (
+      <span className="badge rounded-pill bg-danger ms-1" title={`รออนุมัติ ${pendingCount} คน`}>
+        {pendingCount}
+      </span>
+    ) : null;
 
   return (
     <Navbar variant="dark" expand="lg" className="mb-3 navbar-mse">
@@ -117,6 +143,8 @@ const ConditionalNavbar = () => {
                     <>
                       <i className={`bi ${entry.icon} me-1`} aria-hidden="true" />
                       {entry.label}
+                      {/* /user ซ่อนใน dropdown → โชว์ badge ที่หัวกลุ่มด้วย ไม่งั้นเห็นเฉพาะตอนเปิดเมนู */}
+                      {entry.items.some((it) => it.path === '/user') && pendingBadge}
                     </>
                   }
                 >
@@ -132,6 +160,7 @@ const ConditionalNavbar = () => {
                       >
                         <i className={`bi ${it.icon} me-2`} aria-hidden="true" />
                         {it.label}
+                        {it.path === '/user' && pendingBadge}
                       </NavDropdown.Item>
                     ),
                   )}

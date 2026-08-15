@@ -6,8 +6,8 @@ const { FACTORY_DAY_START_HOUR, SENTINEL_FAR_DATE } = require('../config/constan
 const BANGKOK_OFFSET_MS = 7 * 3600 * 1000;
 
 // คืน Date ที่เลื่อนเป็นเวลากรุงเทพแล้ว — ต้องอ่านด้วย getUTC* เท่านั้น
-// const nowBangkok = () => new Date(Date.now() + BANGKOK_OFFSET_MS);
-const nowBangkok = () => new Date(Date.now());
+const nowBangkok = () => new Date(Date.now() + BANGKOK_OFFSET_MS);
+// const nowBangkok = () => new Date(Date.now());
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
