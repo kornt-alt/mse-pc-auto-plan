@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { isUniqueViolation, duplicateMessage } = require('../db/errors');
-const { verifyToken, requireRole } = require('../middleware/auth');
+const { verifyToken } = require('../middleware/auth');
 const { rateLimit } = require('../middleware/rateLimit');
 const { sendMail } = require('../services/mailer');
 const {
@@ -371,41 +371,14 @@ Auto-Notification from MSE Auto Plan`,
   }
 });
 
-// สร้าง user เริ่มต้น (ADMIN เท่านั้น) — รายชื่อจาก .env DEFAULT_USER_SEED=user:pass:ROLE,...
-router.post('/create-default-users', verifyToken, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const seedRaw = process.env.DEFAULT_USER_SEED || '';
-    const seeds = seedRaw
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .map((entry) => {
-        const [username, password, role] = entry.split(':');
-        return { username, password, role };
-      })
-      .filter((u) => u.username && u.password && u.role);
-
-    if (seeds.length === 0) {
-      return res.status(400).json({ message: 'ไม่ได้ตั้งค่า DEFAULT_USER_SEED ใน .env' });
-    }
-
-    await execute('DELETE FROM users');
-
-    for (const u of seeds) {
-      const hash = await bcrypt.hash(u.password, SALT_ROUNDS);
-      await execute(
-        `INSERT INTO users (username, password_hash, role, is_active, status, employee_code)
-         VALUES (@username, @hash, @role, 1, 'ACTIVE', @username)`,
-        { username: u.username, hash, role: u.role }
-      );
-    }
-
-    res.json({ message: `สร้างผู้ใช้งานเริ่มต้นสำเร็จ ${seeds.length} คน` });
-  } catch (err) {
-    console.error('Create default users error:', err);
-    res.status(500).json({ message: 'Failed to create default users' });
-  }
-});
+// ลบทิ้งแล้ว (2026-08-15): POST /create-default-users
+// มันทำ `DELETE FROM users` ทั้งตาราง (นอก transaction ด้วย) แล้ว seed ใหม่จาก DEFAULT_USER_SEED
+// = ปุ่มลบทุกบัญชี + card_uid + employee_code ที่ enroll มาทั้งหมด ในคำสั่งเดียว กู้ไม่ได้
+// เหตุผลที่ลบทิ้งแทนที่จะทำให้ปลอดภัย:
+//   - ไม่มีใครเรียกเลย ทั้งฝั่งเว็บและฝั่ง backend (มีมาตั้งแต่ Phase 0 ไม่เคยถูกแตะ)
+//   - **ใช้ bootstrap ไม่ได้อยู่แล้ว** เพราะติด verifyToken + requireRole('ADMIN') คือต้องมี ADMIN
+//     อยู่ก่อนถึงจะเรียกได้ — admin คนแรกบน DB เปล่าต้อง INSERT ด้วย SQL อยู่ดี
+// สรุปคือมันทำได้อย่างเดียวคือสิ่งที่เราไม่อยากให้ทำได้ · DEFAULT_USER_SEED จึงเป็นตัวแปรตายไปด้วย
 
 // เปลี่ยนรหัสผ่านตัวเอง
 router.post('/change-password', verifyToken, async (req, res) => {

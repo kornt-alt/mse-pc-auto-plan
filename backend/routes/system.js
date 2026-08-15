@@ -4,6 +4,8 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
 const { getPool, query, execute } = require('../db/pool');
 const { checkSchema } = require('../db/schemaCheck');
+const { readAttachmentStats } = require('../services/attachmentStats');
+const env = require('../config/env');
 const constants = require('../config/constants');
 
 const router = express.Router();
@@ -88,9 +90,10 @@ router.put('/settings', verifyToken, writeRoles, async (req, res) => {
   }
 });
 
-// ========== GET /api/system/schema — object ที่ต้องรัน DDL มือ ตัวไหนมี/ไม่มี ==========
-// ADMIN เท่านั้น: เป็นข้อมูลโครงสร้าง DB จึงไม่เอาไปแปะไว้ที่ /health ซึ่งเปิดให้คนยังไม่ล็อกอิน
-// เนื้อหาเดียวกับที่ log ตอน server start (ดู db/schemaCheck.js)
+// ========== GET /api/system/schema — สถานะระบบสำหรับ ADMIN ==========
+// (1) object ที่ต้องรัน DDL มือ ตัวไหนมี/ไม่มี — เนื้อหาเดียวกับที่ log ตอน server start (db/schemaCheck.js)
+// (2) ขนาดโฟลเดอร์ไฟล์แนบ — append-only ไม่มี retention ถ้าไม่มีใครดูก็จะรู้ตอนดิสก์เต็มแล้ว
+// ADMIN เท่านั้น: ทั้งสองอย่างเป็นข้อมูลภายในของ server จึงไม่เอาไปแปะที่ /health ซึ่งเปิดให้คนยังไม่ล็อกอิน
 router.get('/schema', verifyToken, requireRole('ADMIN'), async (req, res) => {
   try {
     const results = await checkSchema();
@@ -99,6 +102,8 @@ router.get('/schema', verifyToken, requireRole('ADMIN'), async (req, res) => {
         name, kind, exists, impact, unknown: unknown ?? false,
       })),
       missing_count: results.filter((r) => !r.exists).length,
+      // อ่านอย่างเดียว ไม่ลบอะไร — ตัวเลขไว้ให้ตัดสินใจเรื่องนโยบายลบทีหลัง
+      attachments: await readAttachmentStats(env.ORDER_ATTACHMENTS_DIR),
     });
   } catch (err) {
     sendError(req, res, err);

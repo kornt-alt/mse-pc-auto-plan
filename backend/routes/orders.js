@@ -46,15 +46,17 @@ const cleanNote = (raw) => {
 // เขียนไฟล์ลงดิสก์ คืน stored_name (uuid+ext) — โยน error status 500 ถ้ายังไม่ตั้ง ORDER_ATTACHMENTS_DIR
 // ใช้ AppError เพราะข้อความนี้ **ตั้งใจให้ผู้ใช้เห็น** (บอกว่าต้องไปตั้ง .env) — error ทั่วไปที่ไม่ใช่
 // AppError จะถูก sendError กลืนเป็นข้อความกลาง ๆ ดู middleware/errorHandler.js
-const writeAttachment = (file) => {
+// async: เพดานไฟล์แนบคือ 25 MB — เขียนแบบ sync ขนาดนั้น **บล็อก event loop ทั้ง process**
+// ระหว่างนั้น request อื่นค้างหมด รวมถึงคนหน้าไลน์ที่กำลังกดบันทึกยอด (ของจริงในโฟลเดอร์มีไฟล์ 16 MB อยู่แล้ว)
+const writeAttachment = async (file) => {
   const dir = env.ORDER_ATTACHMENTS_DIR;
   if (!dir) {
     throw new AppError('ระบบยังไม่ได้ตั้งค่าโฟลเดอร์ไฟล์แนบ (ORDER_ATTACHMENTS_DIR)', 500);
   }
-  fs.mkdirSync(dir, { recursive: true });
+  await fs.promises.mkdir(dir, { recursive: true });
   const ext = path.extname(file.originalname).toLowerCase();
   const storedName = crypto.randomUUID() + ext;
-  fs.writeFileSync(path.join(dir, storedName), file.buffer);
+  await fs.promises.writeFile(path.join(dir, storedName), file.buffer);
   return storedName;
 };
 
@@ -759,7 +761,7 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
     if (req.file) {
       const v = validateAttachment(req.file);
       if (!v.ok) return res.status(400).json({ message: v.message });
-      storedName = writeAttachment(req.file);
+      storedName = await writeAttachment(req.file);
       req.file._storedName = storedName;
     }
 
@@ -870,7 +872,7 @@ router.put('/:batch/confirm-date', verifyToken, writeRoles, uploadSingle, async 
       return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
     }
     if (req.file) {
-      storedName = writeAttachment(req.file);
+      storedName = await writeAttachment(req.file);
       req.file._storedName = storedName;
     }
     const logEntry = await logDateEdit({
@@ -907,7 +909,7 @@ router.put('/:batch/release-date', verifyToken, writeRoles, uploadSingle, async 
       return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
     }
     if (req.file) {
-      storedName = writeAttachment(req.file);
+      storedName = await writeAttachment(req.file);
       req.file._storedName = storedName;
     }
     const logEntry = await logDateEdit({
