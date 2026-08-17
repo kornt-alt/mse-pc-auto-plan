@@ -20,6 +20,7 @@ import DailyResultPage from './pages/dailyResult/DailyResultPage';
 import WipPage from './pages/wip/WipPage';
 import PlanActualPage from './pages/planActual/PlanActualPage';
 import RoutingConfigPage from './pages/routingConfig/RoutingConfigPage';
+import JigMasterPage from './pages/jig/JigMasterPage';
 import AlertSettingsPage from './pages/alertSettings/AlertSettingsPage';
 
 // เมนูตาม role (ตาม AppDrawer ของระบบเดิม)
@@ -51,6 +52,7 @@ const MENU = [
       // MFG ดูปฏิทินได้ (GET /calendar เปิดให้อยู่แล้ว) แต่แก้ไม่ได้ — หน้าเพจซ่อนปุ่มแก้เอง
       { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/routing-config', label: 'Routing Config', icon: 'bi-signpost-split', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+      { path: '/jig', label: 'Jig Master', icon: 'bi-tools', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
       { path: '/settings', label: 'Import Data', icon: 'bi-database-up', roles: ['ADMIN', 'PLANNER'] },
       { divider: true },
@@ -291,6 +293,14 @@ const App = () => (
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
             <RoutingConfigPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/jig"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <JigMasterPage />
           </ProtectedRoute>
         }
       />

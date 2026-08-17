@@ -39,6 +39,7 @@ const MODE_META = {
   drag: { title: 'ตรวจผลก่อนบันทึกลำดับ', icon: 'bi-grip-vertical', confirmLabel: 'บันทึกลำดับ', confirmVariant: 'primary' },
   lock: { title: 'ตรวจผลกระทบก่อนล็อกทั้งหมด (FIXED)', icon: 'bi-lock-fill', confirmLabel: 'ยืนยันล็อกทั้งหมด', confirmVariant: 'warning', note: 'FG ด้านล่างคือผลที่ Replan จะได้เมื่อทุกออเดอร์เป็น FIXED — การยืนยันจะเปลี่ยนแค่สถานะล็อก ยังไม่บันทึกแผน (กด Replan เองอีกที)' },
   unlock: { title: 'ตรวจผลกระทบก่อนปลดล็อกทั้งหมด (NEW)', icon: 'bi-unlock', confirmLabel: 'ยืนยันปลดล็อกทั้งหมด', confirmVariant: 'success', note: 'FG ด้านล่างคือผลที่ Replan จะได้เมื่อปลดล็อกทุกออเดอร์ — การยืนยันจะเปลี่ยนแค่สถานะล็อก ยังไม่บันทึกแผน (กด Replan เองอีกที)' },
+  jig: { title: 'ตรวจผลกระทบก่อนบันทึกสถานะ Jig', icon: 'bi-tools', confirmLabel: 'ยืนยันบันทึกสถานะ', confirmVariant: 'warning', note: 'FG ด้านล่างคือผลที่ Replan จะได้ถ้า jig อยู่ในสถานะนี้ — การยืนยันจะบันทึกแค่สถานะ jig ยังไม่บันทึกแผน (กด Replan ที่หน้า Orders อีกที)' },
 };
 
 // tone จาก planRules → คลาส chip ใน theme.css (map ที่เดียว)
@@ -527,6 +528,9 @@ const RulesTab = ({ rows, rulesByBatch, settings }) => {
 
 const PlanPreviewDialog = ({
   show, mode = 'replan', diff, detail, machineSchedule, capacityWarning,
+  // blockedSteps = decoded.blocked_steps — step ที่ทุกเครื่องติด jig ที่ใช้ไม่ได้
+  // ไม่ส่งมา = ไม่มีอะไรถูกบล็อก (หน้าที่เรียกก่อนฟีเจอร์ jig ยังทำงานเหมือนเดิม)
+  blockedSteps = [],
   settings, todayStr, loading, onConfirm, onHide,
 }) => {
   const [tab, setTab] = useState('summary');
@@ -555,9 +559,13 @@ const PlanPreviewDialog = ({
   // กฎรายออเดอร์ — คำนวณครั้งเดียวต่อชุด diff (pure, ไม่มี side effect)
   const rulesByBatch = useMemo(() => {
     const m = new Map();
-    for (const r of rows) m.set(r.batch, buildOrderRules(r.inputs, { todayStr, settings }));
+    for (const r of rows) {
+      m.set(r.batch, buildOrderRules(r.inputs, {
+        todayStr, settings, model: r.model, blockedSteps,
+      }));
+    }
     return m;
-  }, [rows, todayStr, settings]);
+  }, [rows, todayStr, settings, blockedSteps]);
 
   const meta = MODE_META[mode] || MODE_META.replan;
   const visibleRows = onlyChanged ? rows.filter((r) => r.changeType !== 'unchanged') : rows;

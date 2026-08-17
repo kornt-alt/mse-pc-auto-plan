@@ -6,6 +6,7 @@
 
 const { DROP_DATES } = require('../config/constants');
 const { pyRound, pyInt } = require('./pyUtils');
+const { isBlockedThroughHorizon } = require('./jigBlocks');
 
 const isDict = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -104,6 +105,67 @@ function rejectMissingRouting(finalOrders, routing) {
     }
   }
   return { safeOrders, rejectedOrders, missingRoutingMap };
+}
+
+// findBlockedSteps(machineRows, jigBlockMap, lastCalendarDate) → [{ model, flowIndex, stepIndex, jigs }]
+//
+// step ที่ **ทุก** ทางเลือกใช้ไม่ได้ตลอดช่วงที่วางแผนได้ → ต้องบอกเหตุผลจริงกับผู้ใช้
+// ไม่งั้น engine จะลง error 'No Capacity' (engine.js:836-849) ซึ่งแปลว่า "เครื่องไม่พอ"
+// ทั้งที่สาเหตุจริงคือ jig พัง — วินิจฉัยผิดทาง เสียเวลาไล่หาเหตุ
+//
+// ⚠️ machineRows ที่ส่งเข้ามาต้องเป็นแถวที่ **ผ่านการกรอง is_active แล้ว** (ทำที่ schedulerService)
+// step ที่ไม่เหลือแถวเลยจึงนับเป็น blocked ด้วย โดยไม่ต้องรู้เรื่อง is_active ที่นี่
+function findBlockedSteps(machineRows, jigBlockMap, lastCalendarDate) {
+  if (!jigBlockMap || Object.keys(jigBlockMap).length === 0) return [];
+
+  // จัดกลุ่มตาม model|flow|step แล้วดูว่าเหลือทางเลือกที่ใช้ได้ไหม
+  const groups = new Map();
+  for (const r of machineRows || []) {
+    const key = `${r.model}|${pyInt(r.flow_index ?? 0)}|${pyInt(r.step_index ?? 0)}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        model: r.model,
+        flowIndex: pyInt(r.flow_index ?? 0),
+        stepIndex: pyInt(r.step_index ?? 0),
+        usable: 0,
+        jigs: new Set(),
+      });
+    }
+    const g = groups.get(key);
+    if (isBlockedThroughHorizon(jigBlockMap, r.jig_id, lastCalendarDate)) {
+      g.jigs.add(String(r.jig_id ?? '').trim());
+    } else {
+      g.usable += 1;
+    }
+  }
+
+  const blocked = [];
+  for (const g of groups.values()) {
+    if (g.usable === 0 && g.jigs.size > 0) {
+      blocked.push({
+        model: g.model,
+        flowIndex: g.flowIndex,
+        stepIndex: g.stepIndex,
+        jigs: [...g.jigs].sort(),
+      });
+    }
+  }
+  return blocked;
+}
+
+// blockedStepsMessage(blockedSteps, lastCalendarDate) → ข้อความไทย (หรือ '' ถ้าไม่มี)
+// บอกทั้งชื่อ jig **และ** ว่าปฏิทินหมดก่อน jig กลับมา พร้อมทางแก้ — เพราะสองเคสนี้
+// ผู้ใช้แก้คนละวิธี (รอซ่อม vs gen ปฏิทินเพิ่มแล้ว replan)
+function blockedStepsMessage(blockedSteps, lastCalendarDate) {
+  if (!blockedSteps || blockedSteps.length === 0) return '';
+  const jigs = [...new Set(blockedSteps.flatMap((b) => b.jigs))].sort();
+  const models = [...new Set(blockedSteps.map((b) => b.model))];
+  const modelText = models.slice(0, 3).join(', ') + (models.length > 3 ? ` และอีก ${models.length - 3} model` : '');
+  return (
+    ` (⚠️ ${blockedSteps.length} ขั้นตอนของ ${modelText} ไม่มีเครื่องที่ใช้ได้เลย` +
+    ` เพราะ jig ${jigs.join(', ')} ใช้ไม่ได้ตลอดช่วงที่วางแผน` +
+    `${lastCalendarDate ? ` — ปฏิทินมีถึง ${lastCalendarDate} เท่านั้น ถ้า jig กลับมาหลังจากนั้นให้สร้างปฏิทินเพิ่มแล้ว Replan` : ''})`
+  );
 }
 
 // logic.py L117-126: schedule_results -> existing_plan (replan เท่านั้น)
@@ -515,6 +577,8 @@ module.exports = {
   cleanDisplayData,
   buildShipmentReport,
   buildCapacityWarning,
+  findBlockedSteps,
+  blockedStepsMessage,
   safeDateFormat,
   computeProgramNote,
   buildOrderDateUpdates,

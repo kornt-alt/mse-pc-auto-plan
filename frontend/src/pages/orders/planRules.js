@@ -33,11 +33,16 @@ export function effectiveReadyDate({ releaseDate, materialDate, materialArrived 
   return { date, source, waiting: !!(today && date > today) };
 }
 
-// buildOrderRules(inputs, { todayStr, settings }) → [{ id, label, value, tone, detail }]
-//   inputs  = diff row.inputs จาก planDiff.buildPlanDiff
-//   tone    = 'ok' | 'warn' | 'ng' | 'info' (map ตรงกับ .chip-* ใน theme.css)
+// buildOrderRules(inputs, { todayStr, settings, model, blockedSteps }) → [{ id, label, value, tone, detail }]
+//   inputs       = diff row.inputs จาก planDiff.buildPlanDiff
+//   tone         = 'ok' | 'warn' | 'ng' | 'info' (map ตรงกับ .chip-* ใน theme.css)
+//   model        = รุ่นของออเดอร์แถวนี้ (อยู่บน row ไม่ได้อยู่ใน inputs)
+//   blockedSteps = decoded.blocked_steps จาก response ของ /schedule/run|replan
 //   คืนเฉพาะกฎที่ "มีผลจริง" กับออเดอร์นี้ ไม่ใช่ legend รวม
-export function buildOrderRules(inputs, { todayStr = '', settings = {} } = {}) {
+export function buildOrderRules(
+  inputs,
+  { todayStr = '', settings = {}, model = '', blockedSteps = [] } = {},
+) {
   const i = inputs || {};
   const rules = [];
   const isBackward = i.planningMode === 'backward';
@@ -135,6 +140,30 @@ export function buildOrderRules(inputs, { todayStr = '', settings = {} } = {}) {
       value: 'พอ',
       tone: 'ok',
       detail: 'วัตถุดิบเข้าก่อนวันเริ่มผลิตตามแผน',
+    });
+  }
+
+  // ---- 7) jig ที่ใช้ไม่ได้ (pre-flight จาก planBuilder.findBlockedSteps) ----
+  //
+  // นี่คือกฎที่มีไว้แทนคำว่า "No Capacity" โดยเฉพาะ: ก่อนหน้านี้ step ที่ทุกเครื่องติด jig พัง
+  // จะหลุดออกจากแผนพร้อมข้อความ "เครื่องไม่พอ" ซึ่งชี้ไปผิดทางจนไล่หาเหตุไม่เจอ
+  //
+  // ⚠️ ขอบเขต: บอกได้แค่ว่า "รุ่นนี้มีขั้นตอนที่ทุกเครื่องใช้ jig ที่ใช้ไม่ได้" — บอกไม่ได้ว่า
+  // แต่ละ batch ถูกเลื่อนไปวันไหนเพราะ jig ตัวไหน (sim response ไม่มี causal trace รายงาน
+  // ดูหัวไฟล์) จึงเขียนข้อความเป็นระดับรุ่น ไม่ใช่ระดับ batch
+  const blocked = (Array.isArray(blockedSteps) ? blockedSteps : []).filter(
+    (b) => b && b.model === model,
+  );
+  if (blocked.length > 0) {
+    const jigs = [...new Set(blocked.flatMap((b) => b.jigs ?? []))].sort();
+    rules.push({
+      id: 'jig',
+      label: 'Jig ใช้ไม่ได้',
+      value: jigs.join(', ') || '-',
+      tone: 'ng',
+      detail: `${blocked.length} ขั้นตอนของรุ่นนี้ไม่มีเครื่องที่ใช้ได้เลยตลอดช่วงที่วางแผน`
+        + ' — ถ้างานหลุดออกจากแผน สาเหตุคือ jig ไม่ใช่ "เครื่องไม่พอ"'
+        + ' (แก้ที่หน้า Jig Master หรือสร้างปฏิทินเพิ่มถ้า jig กลับมาหลังวันสุดท้ายของปฏิทิน)',
     });
   }
 

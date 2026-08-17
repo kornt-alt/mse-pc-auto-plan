@@ -2,8 +2,38 @@
 // ทุก dialog เรียก apiCall เอง แล้วรายงานกลับผ่าน onSaved(message) / onError(message)
 // (parent ใช้ toast + refresh) — callbacks จาก parent ต้องเป็น useCallback
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
+import { Modal, Button, Form, Row, Col, Collapse } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
+
+// ช่องแก้เลข index ด้วยมือ — พับไว้เป็นค่าเริ่มต้น
+// ทางปกติของการจัดลำดับคือปุ่ม ▲▼ ในตาราง (POST /routing_config/move ที่สลับสองตารางพร้อมกัน
+// ใน transaction เดียว) การพิมพ์เลขเองยังทำได้เพราะบางทีต้องย้ายข้าม flow หรือแก้แถวที่หลุด
+// แต่ backend UPDATE ตามที่ส่งไปตรง ๆ ไม่ตรวจอะไร เลขซ้ำ/ข้ามจึงหลุดลง DB ได้เงียบ ๆ
+const AdvancedIndexPanel = ({ children }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        variant="link"
+        size="sm"
+        className="p-0 text-secondary"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <i className={`bi ${open ? 'bi-chevron-down' : 'bi-chevron-right'} me-1`} aria-hidden="true" />
+        แก้ index เอง (ขั้นสูง)
+      </Button>
+      <Collapse in={open}>
+        <div>
+          <p className="text-muted small mt-2 mb-1">
+            ปกติใช้ปุ่ม ▲▼ ในตารางจัดลำดับแทน — เลขที่ซ้ำหรือข้ามจะทำให้ routing เพี้ยนโดยไม่มีคำเตือน
+          </p>
+          <Row className="g-2">{children}</Row>
+        </div>
+      </Collapse>
+    </>
+  );
+};
 
 // dropdown เครื่องจักร — รับ list จาก parent (parent ดึง /production/machines ครั้งเดียว)
 const MachineSelect = ({ value, machines, onChange, disabled }) => (
@@ -33,6 +63,86 @@ const toFloat = (v) => {
 const resolveJigId = (jig, model, machine, stepIndex) => {
   const j = String(jig ?? '').trim();
   return j.length < 2 ? `${model}-${machine}-${toInt(stepIndex)}` : j;
+};
+
+// ค่าพิเศษของดรอปดาวน์ jig — เลือกแล้วสลับกลับไปเป็นช่องพิมพ์อิสระ
+const JIG_CUSTOM = '__custom__';
+
+// ===== ช่อง Jig: เลือกจากทะเบียน jig_master หรือพิมพ์รหัสใหม่ =====
+//
+// ⚠️ การเลือก jig ที่ใช้ร่วมกันได้ **เปลี่ยนผลการคำนวณแผน** ไม่ใช่แค่ป้ายกำกับ:
+// engine.getSmartSetupTime() ลดเวลา setup เหลือ minor setup เมื่องานติดกันบนเครื่องเดียวกัน
+// ใช้ jig เดียวกัน — ถ้าของจริงต้องเปลี่ยน jig อยู่ดี แผนจะสั้นกว่าความจริงแบบเงียบ ๆ
+// จึงต้องมีข้อความใต้ช่องบอกตรง ๆ ทุกครั้งที่เลือก jig ที่ใช้ร่วมกัน
+//
+// ⚠️ `is_shared` **ไม่ได้กรองรายการในดรอปดาวน์** — มันคุมแค่ป้ายกำกับกับข้อความเตือนใต้ช่อง
+// (เคยคิดจะกรอง jig ที่ is_shared = 0 ออกเมื่ออยู่คนละโมเดล แต่ทำไม่ได้ด้วยข้อมูลที่มี:
+//  `GET /jig` คืนแค่ *จำนวน* ที่ใช้อยู่ ไม่ได้คืนรายชื่อโมเดล และ `EditMachineDialog`
+//  ไม่ได้รับ `model` เข้ามาเลย จะกรองต้องแก้ทั้ง payload ของ endpoint และ signature ของไดอะล็อก)
+// ตัวที่กันความผิดพลาดจริงตอนนี้คือข้อความเตือน ไม่ใช่การกรอง — อย่าเขียนเอกสารว่ามันกรอง
+const JigSelect = ({ value, jigs, onChange, disabled }) => {
+  const list = Array.isArray(jigs) ? jigs : [];
+  const known = list.some((j) => j.jig_id === value);
+  // ไม่มีทะเบียนเลย (ยังไม่รัน DDL) → กลับไปเป็นช่องพิมพ์เปล่าเหมือนเดิม ไม่ขวางการทำงาน
+  const [custom, setCustom] = useState(list.length === 0 || (!!value && !known));
+
+  const selected = list.find((j) => j.jig_id === value);
+
+  if (custom) {
+    return (
+      <>
+        <Form.Control
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          placeholder="เว้นว่างเพื่อให้ระบบตั้งชื่อให้อัตโนมัติ"
+        />
+        {list.length > 0 && (
+          <Button variant="link" size="sm" className="p-0 mt-1" onClick={() => setCustom(false)}>
+            เลือกจากทะเบียน Jig แทน
+          </Button>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Form.Select
+        value={known ? value : ''}
+        disabled={disabled}
+        onChange={(e) => {
+          if (e.target.value === JIG_CUSTOM) {
+            setCustom(true);
+            onChange('');
+            return;
+          }
+          onChange(e.target.value);
+        }}
+      >
+        <option value="">-- ให้ระบบตั้งชื่อให้อัตโนมัติ --</option>
+        {list.map((j) => (
+          <option key={j.jig_id} value={j.jig_id}>
+            {j.jig_id}
+            {j.jig_name ? ` — ${j.jig_name}` : ''}
+            {j.is_shared ? ' (ใช้ร่วมกันได้)' : ''}
+          </option>
+        ))}
+        <option value={JIG_CUSTOM}>+ พิมพ์รหัส Jig ใหม่</option>
+      </Form.Select>
+      {selected?.is_shared ? (
+        <Form.Text className="text-warning-emphasis">
+          <i className="bi bi-exclamation-triangle-fill me-1" aria-hidden="true" />
+          jig นี้ใช้ร่วมกันได้ — งานที่ใช้ jig เดียวกันลงเครื่องเดียวกันติดกันจะคิดเวลา setup
+          แบบสั้น (ค่า minor setup ในหน้าตั้งค่า) เลือกเมื่อของจริงไม่ต้องเปลี่ยน jig เท่านั้น
+        </Form.Text>
+      ) : (
+        <Form.Text muted>
+          เว้นว่าง = ระบบตั้งชื่อเฉพาะของ Step นี้ให้ (ไม่ได้ส่วนลดเวลา setup)
+        </Form.Text>
+      )}
+    </>
+  );
 };
 
 // ===== แก้ไข Routing step (PUT /routing_config/:id) =====
@@ -80,7 +190,23 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <Row className="g-2">
+        <Row className="g-2 mb-3">
+          <Col xs={12}>
+            <Form.Label className="small">Step Name</Form.Label>
+            <Form.Control
+              value={form.step_name}
+              onChange={(e) => setForm((f) => ({ ...f, step_name: e.target.value }))}
+            />
+          </Col>
+          <Col xs={12}>
+            <Form.Label className="small">Setup Group</Form.Label>
+            <Form.Control
+              value={form.setup_group}
+              onChange={(e) => setForm((f) => ({ ...f, setup_group: e.target.value }))}
+            />
+          </Col>
+        </Row>
+        <AdvancedIndexPanel>
           <Col xs={6}>
             <Form.Label className="small">Flow Index</Form.Label>
             <Form.Control
@@ -97,21 +223,7 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
               onChange={(e) => setForm((f) => ({ ...f, step_index: e.target.value }))}
             />
           </Col>
-          <Col xs={12}>
-            <Form.Label className="small">Step Name</Form.Label>
-            <Form.Control
-              value={form.step_name}
-              onChange={(e) => setForm((f) => ({ ...f, step_name: e.target.value }))}
-            />
-          </Col>
-          <Col xs={12}>
-            <Form.Label className="small">Setup Group</Form.Label>
-            <Form.Control
-              value={form.setup_group}
-              onChange={(e) => setForm((f) => ({ ...f, setup_group: e.target.value }))}
-            />
-          </Col>
-        </Row>
+        </AdvancedIndexPanel>
       </Modal.Body>
       <Modal.Footer>
         <Button variant="secondary" onClick={onHide} disabled={busy}>
@@ -126,7 +238,7 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
 };
 
 // ===== แก้ไข Machine config (PUT /machine_config/:id) =====
-export const EditMachineDialog = ({ show, row, machines, onHide, onSaved, onError }) => {
+export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, onError }) => {
   const [form, setForm] = useState({});
   const [busy, setBusy] = useState(false);
 
@@ -176,31 +288,7 @@ export const EditMachineDialog = ({ show, row, machines, onHide, onSaved, onErro
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <Row className="g-2">
-          <Col xs={4}>
-            <Form.Label className="small">Flow</Form.Label>
-            <Form.Control
-              type="number"
-              value={form.flow_index}
-              onChange={(e) => setForm((f) => ({ ...f, flow_index: e.target.value }))}
-            />
-          </Col>
-          <Col xs={4}>
-            <Form.Label className="small">Step</Form.Label>
-            <Form.Control
-              type="number"
-              value={form.step_index}
-              onChange={(e) => setForm((f) => ({ ...f, step_index: e.target.value }))}
-            />
-          </Col>
-          <Col xs={4}>
-            <Form.Label className="small">Alt</Form.Label>
-            <Form.Control
-              type="number"
-              value={form.alternative_index}
-              onChange={(e) => setForm((f) => ({ ...f, alternative_index: e.target.value }))}
-            />
-          </Col>
+        <Row className="g-2 mb-3">
           <Col xs={12}>
             <Form.Label className="small">Machine</Form.Label>
             <MachineSelect
@@ -227,12 +315,39 @@ export const EditMachineDialog = ({ show, row, machines, onHide, onSaved, onErro
           </Col>
           <Col xs={4}>
             <Form.Label className="small">Jig ID</Form.Label>
-            <Form.Control
+            <JigSelect
               value={form.jig_id}
-              onChange={(e) => setForm((f) => ({ ...f, jig_id: e.target.value }))}
+              jigs={jigs}
+              onChange={(v) => setForm((f) => ({ ...f, jig_id: v }))}
             />
           </Col>
         </Row>
+        <AdvancedIndexPanel>
+          <Col xs={4}>
+            <Form.Label className="small">Flow</Form.Label>
+            <Form.Control
+              type="number"
+              value={form.flow_index}
+              onChange={(e) => setForm((f) => ({ ...f, flow_index: e.target.value }))}
+            />
+          </Col>
+          <Col xs={4}>
+            <Form.Label className="small">Step</Form.Label>
+            <Form.Control
+              type="number"
+              value={form.step_index}
+              onChange={(e) => setForm((f) => ({ ...f, step_index: e.target.value }))}
+            />
+          </Col>
+          <Col xs={4}>
+            <Form.Label className="small">Alt</Form.Label>
+            <Form.Control
+              type="number"
+              value={form.alternative_index}
+              onChange={(e) => setForm((f) => ({ ...f, alternative_index: e.target.value }))}
+            />
+          </Col>
+        </AdvancedIndexPanel>
       </Modal.Body>
       <Modal.Footer>
         <Button variant="secondary" onClick={onHide} disabled={busy}>
@@ -247,7 +362,9 @@ export const EditMachineDialog = ({ show, row, machines, onHide, onSaved, onErro
 };
 
 // ===== แทรก Step (POST /routing_config/insert_step) =====
-export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved, onError }) => {
+// defaults = insertStepDefaults(flow) จาก routingTree.js — { flowIndex, stepIndex, setupGroup, steps }
+// ค่าเริ่มต้นคือ "ต่อท้าย flow ที่กด + Step มา" (ของเดิม default step_index = 0 = แทรกหัวสุดเสมอ)
+export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide, onSaved, onError }) => {
   const [form, setForm] = useState({
     flow_index: 0,
     step_index: 0,
@@ -260,20 +377,23 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
   });
   const [busy, setBusy] = useState(false);
 
+  const appendIndex = defaults?.stepIndex ?? 0;
+  const existingSteps = defaults?.steps ?? [];
+
   useEffect(() => {
     if (show) {
       setForm({
-        flow_index: flows?.[0] ?? 0,
-        step_index: 0,
+        flow_index: defaults?.flowIndex ?? 0,
+        step_index: defaults?.stepIndex ?? 0,
         step_name: '',
-        setup_group: '',
+        setup_group: defaults?.setupGroup ?? '',
         machine: '',
         cycle_time: 1,
         setup_time: 1,
         jig_id: '',
       });
     }
-  }, [show, flows]);
+  }, [show, defaults]);
 
   const save = async () => {
     setBusy(true);
@@ -305,27 +425,30 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
           <i className="bi bi-plus-lg me-2" aria-hidden="true" />
-          แทรก Step ใหม่ ({model})
+          แทรก Step ใหม่ ({model}) — Flow {form.flow_index}
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <p className="text-muted small">Step ตั้งแต่ตำแหน่งนี้จะถูกเลื่อนลง 1 ตำแหน่ง</p>
         <Row className="g-2">
-          <Col xs={6}>
-            <Form.Label className="small">Flow Index</Form.Label>
-            <Form.Control
-              type="number"
-              value={form.flow_index}
-              onChange={(e) => setForm((f) => ({ ...f, flow_index: e.target.value }))}
-            />
-          </Col>
-          <Col xs={6}>
-            <Form.Label className="small">Step Index (ตำแหน่งแทรก)</Form.Label>
-            <Form.Control
-              type="number"
+          <Col xs={12}>
+            <Form.Label className="small">ตำแหน่ง</Form.Label>
+            {/* เลือกตำแหน่งจากรายการ step จริง แทนการพิมพ์เลข index เอง
+                (insert_step เลื่อน step ตั้งแต่เลขนี้ลง 1 ตำแหน่ง — "แทรกก่อน Step N" จึงส่ง N ไปตรง ๆ) */}
+            <Form.Select
               value={form.step_index}
               onChange={(e) => setForm((f) => ({ ...f, step_index: e.target.value }))}
-            />
+            >
+              <option value={appendIndex}>ต่อท้าย Flow นี้ (เป็น Step {appendIndex})</option>
+              {existingSteps.map((s) => (
+                <option key={s.stepIndex} value={s.stepIndex}>
+                  แทรกก่อน Step {s.stepIndex}
+                  {s.stepName ? ` — ${s.stepName}` : ''}
+                </option>
+              ))}
+            </Form.Select>
+            <Form.Text className="text-muted">
+              Step ตั้งแต่ตำแหน่งที่เลือกจะถูกเลื่อนลง 1 ตำแหน่ง
+            </Form.Text>
           </Col>
           <Col xs={6}>
             <Form.Label className="small">Step Name</Form.Label>
@@ -367,9 +490,10 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
           </Col>
           <Col xs={4}>
             <Form.Label className="small">Jig ID</Form.Label>
-            <Form.Control
+            <JigSelect
               value={form.jig_id}
-              onChange={(e) => setForm((f) => ({ ...f, jig_id: e.target.value }))}
+              jigs={jigs}
+              onChange={(v) => setForm((f) => ({ ...f, jig_id: v }))}
             />
           </Col>
         </Row>
@@ -387,13 +511,22 @@ export const InsertStepDialog = ({ show, model, flows, machines, onHide, onSaved
 };
 
 // ===== เพิ่มเครื่องสำรอง (POST /machine_config/insert_alt) =====
-export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, onError }) => {
+// primary = เครื่องหลัก (alt ต่ำสุด) ของ step นั้น — ใช้ prefill cycle/setup
+// เพราะเครื่องสำรองของ step เดียวกันเกือบทุกครั้งใช้เวลาใกล้เคียงตัวหลัก (ของเดิมเริ่มที่ 1 เสมอ)
+export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, onHide, onSaved, onError }) => {
   const [form, setForm] = useState({ machine: '', cycle_time: 1, setup_time: 1, jig_id: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (show) setForm({ machine: '', cycle_time: 1, setup_time: 1, jig_id: '' });
-  }, [show]);
+    if (show) {
+      setForm({
+        machine: '',
+        cycle_time: primary?.cycleTime ?? 1,
+        setup_time: primary?.setupTime ?? 1,
+        jig_id: '',
+      });
+    }
+  }, [show, primary]);
 
   const save = async () => {
     setBusy(true);
@@ -402,12 +535,13 @@ export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, 
         method: 'POST',
         body: JSON.stringify({
           model,
-          flow_index: step?.flow_index ?? 0,
-          step_index: step?.step_index ?? 0,
+          // step มาจาก routingTree.js (คีย์ camelCase) ไม่ใช่แถวดิบจาก DB แล้ว
+          flow_index: step?.flowIndex ?? 0,
+          step_index: step?.stepIndex ?? 0,
           machine: form.machine,
           cycle_time: toFloat(form.cycle_time),
           setup_time: toFloat(form.setup_time),
-          jig_id: resolveJigId(form.jig_id, model, form.machine, step?.step_index),
+          jig_id: resolveJigId(form.jig_id, model, form.machine, step?.stepIndex),
         }),
       });
       onSaved('เพิ่มเครื่องสำรองแล้ว');
@@ -423,10 +557,15 @@ export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, 
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
           <i className="bi bi-plus-lg me-2" aria-hidden="true" />
-          เพิ่มเครื่องสำรอง (Flow {step?.flow_index}, Step {step?.step_index})
+          เพิ่มเครื่องสำรอง (Flow {step?.flowIndex}, Step {step?.stepIndex})
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
+        {primary ? (
+          <p className="text-muted small">
+            ค่าเริ่มต้นคัดลอกจากเครื่องหลัก <strong>{primary.machine}</strong> (Alt {primary.altIndex})
+          </p>
+        ) : null}
         <Row className="g-2">
           <Col xs={12}>
             <Form.Label className="small">Machine</Form.Label>
@@ -454,9 +593,10 @@ export const InsertAltDialog = ({ show, model, step, machines, onHide, onSaved, 
           </Col>
           <Col xs={4}>
             <Form.Label className="small">Jig ID</Form.Label>
-            <Form.Control
+            <JigSelect
               value={form.jig_id}
-              onChange={(e) => setForm((f) => ({ ...f, jig_id: e.target.value }))}
+              jigs={jigs}
+              onChange={(v) => setForm((f) => ({ ...f, jig_id: v }))}
             />
           </Col>
         </Row>
@@ -523,13 +663,19 @@ export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError 
 };
 
 // ===== ลบ Flow (DELETE /routing_config/delete_flow?model=&flow_index=&is_last_flow=) =====
-export const DeleteFlowDialog = ({ show, model, flows, onHide, onSaved, onError }) => {
+export const DeleteFlowDialog = ({ show, model, flows, defaultFlowIndex, onHide, onSaved, onError }) => {
   const [flowIndex, setFlowIndex] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // เปิดจากปุ่ม "ลบ Flow" ของ flow ไหน ก็เลือก flow นั้นไว้ให้เลย (ยังเปลี่ยนได้จากดรอปดาวน์)
   useEffect(() => {
-    if (show) setFlowIndex(flows?.length ? String(flows[0]) : '');
-  }, [show, flows]);
+    if (!show) return;
+    if (defaultFlowIndex !== null && defaultFlowIndex !== undefined) {
+      setFlowIndex(String(defaultFlowIndex));
+      return;
+    }
+    setFlowIndex(flows?.length ? String(flows[0]) : '');
+  }, [show, flows, defaultFlowIndex]);
 
   // ตรงกับ Dart (routing_config_screen.dart L1386): isLastFlow = distinct flow_index <= 1
   // backend branch is_last_flow=true จะยุบทั้ง model เหลือ flow 0/step 0 — ต้องเป็น "flow เดียวที่เหลือ" เท่านั้น
@@ -610,10 +756,16 @@ export const BulkSetupGroupDialog = ({ show, model, onHide, onSaved, onError }) 
   return (
     <Modal show={show} onHide={onHide} centered>
       <Modal.Header closeButton>
-        <Modal.Title style={{ fontSize: '1.1rem' }}>Change Setup Group ({model})</Modal.Title>
+        <Modal.Title style={{ fontSize: '1.1rem' }}>Setup Group ของ Product Master ({model})</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <p className="text-muted small">อัปเดต setup_group ในตาราง product_master ของ model นี้</p>
+        {/* จุดที่คนเข้าใจผิดบ่อย: คอลัมน์นี้คนละตัวกับ setup_group ที่โชว์ในตาราง Routing */}
+        <div className="alert alert-info py-2 small">
+          <i className="bi bi-info-circle-fill me-2" aria-hidden="true" />
+          แก้ <code>setup_group</code> ในตาราง <strong>product_master</strong> ของ model นี้ —
+          <strong> คนละคอลัมน์</strong>กับ Setup Group ที่แสดงในแต่ละ Step (อันนั้นอยู่ในตาราง{' '}
+          <code>routing_config</code> แก้ได้จากปุ่มแก้ไข Step) ค่าในตารางจึงจะไม่เปลี่ยนตามการบันทึกนี้
+        </div>
         <Form.Label className="small">Setup Group ใหม่</Form.Label>
         <Form.Control value={value} onChange={(e) => setValue(e.target.value)} />
       </Modal.Body>

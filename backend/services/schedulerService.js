@@ -8,6 +8,8 @@ const { bulkInsert } = require('../db/bulk');
 const { processRouting, processUnifiedMachineConfig } = require('../scheduler/configProcessor');
 const { OrderManager } = require('../scheduler/orderManager');
 const { SchedulerEngine } = require('../scheduler/engine');
+const { buildJigBlockMap, mergeJigOverrides } = require('../scheduler/jigBlocks');
+const { filterActiveMachines } = require('../scheduler/machineFilter');
 const { ENABLE_PACKING } = require('../config/constants');
 const pb = require('../scheduler/planBuilder');
 const timestamps = require('../state/timestamps');
@@ -18,10 +20,23 @@ async function loadInputs(isReplan) {
   const routingRows = await query(
     'SELECT model, flow_index, step_index, step_name, setup_group FROM routing_config ORDER BY id',
   );
+  // is_active อ่านแบบ defensive เหมือน orders.material_arrived — คอลัมน์เพิ่มด้วย DDL รันมือ
+  // ไม่มีคอลัมน์ = ถือว่าเปิดใช้งานทุกแถว = พฤติกรรมเดิมทุกประการ
+  const hasActiveCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
   const machineRows = await query(
     `SELECT model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
+            ${hasActiveCol ? ', is_active' : ''}
      FROM machine_config ORDER BY id`,
   );
+  // jig_master เป็นตารางที่สร้างด้วย DDL รันมือ — ไม่มีตาราง = ไม่มี jig ตัวไหนถูกบล็อก
+  // (กติกาเดียวกับ activity_log / order_date_log: ขาดแล้วต้อง degrade เงียบ ๆ ไม่ใช่พัง)
+  const hasJigTable = (await query("SELECT OBJECT_ID('jig_master') AS id"))[0].id != null;
+  const jigRows = hasJigTable
+    ? await query(
+        `SELECT jig_id, status, unavailable_from, unavailable_to FROM jig_master
+         WHERE status IS NOT NULL AND status <> 'AVAILABLE'`,
+      )
+    : [];
   const calendarRows = await query(
     'SELECT machine, date, available_time FROM calendar_config ORDER BY id',
   );
@@ -62,7 +77,7 @@ async function loadInputs(isReplan) {
   const settings = settingsRows[0] || null;
 
   return {
-    routingRows, machineRows, calendarRows, orderRows,
+    routingRows, machineRows, jigRows, calendarRows, orderRows,
     productMasterRows, productionRecords, statusRows, scheduleRows, settings,
   };
 }
@@ -108,9 +123,16 @@ async function persistOrderDates(updates) {
 // SchedulerService.run (logic.py L13-499) — คืน response shape เดิมเป๊ะ
 // options.isSimulation: ไม่บันทึกอะไรเลย (schedule_results / lastPlan / order dates) — แค่คืนแผนให้ดู
 // options.priorityOverrides: { batch: priority } สวมรอยตอน simulation
+// options.jigOverrides: [{ jig_id, status, unavailable_from, unavailable_to }] สวมรอย jig_master
+//   ตอน simulation — ใช้ทำพรีวิว "ถ้า jig ตัวนี้พังจะเป็นยังไง" โดยยังไม่เขียนอะไรลง DB
 // options.planModeOverrides: { batch: 'FIXED'|'NEW' } สวมรอย plan_mode ตอน simulation (lock/unlock)
 async function run(isReplan = false, options = {}) {
-  const { isSimulation = false, priorityOverrides = {}, planModeOverrides = {} } = options;
+  const {
+    isSimulation = false,
+    priorityOverrides = {},
+    planModeOverrides = {},
+    jigOverrides = [],
+  } = options;
   const inputs = await loadInputs(isReplan);
 
   // ---- config (L15-23) ----
@@ -118,7 +140,11 @@ async function run(isReplan = false, options = {}) {
     Model: r.model, FlowIndex: r.flow_index, StepIndex: r.step_index,
     StepName: r.step_name, SetupGroup: r.setup_group,
   }));
-  const flatMachine = inputs.machineRows.map((m) => ({
+  // เครื่องที่ถูกปิดใช้งาน (is_active = 0 = "เครื่องนี้ทำโมเดลนี้ไม่ได้") ต้องหลุดออกก่อนเข้า
+  // configProcessor และต้อง **เรียง alternative_index ใหม่ให้ต่อเนื่อง** ไม่งั้นเครื่องจะจับคู่
+  // กับ cycle time ของเครื่องอื่น (รายละเอียดอยู่ในหัว scheduler/machineFilter.js)
+  const { rows: activeMachineRows } = filterActiveMachines(inputs.machineRows);
+  const flatMachine = activeMachineRows.map((m) => ({
     Model: m.model, FlowIndex: m.flow_index, StepIndex: m.step_index,
     AlternativeIndex: m.alternative_index, Machine: m.machine,
     CycleTime: m.cycle_time, SetupTime: m.setup_time, JigID: m.jig_id,
@@ -174,10 +200,32 @@ async function run(isReplan = false, options = {}) {
   const actualsDict = pb.buildFakeActuals(rawOrders, routing, flatRouting, actualsRaw);
   const closedDict = pb.buildClosedDict(inputs.statusRows);
 
+  // ---- jig ที่ใช้ไม่ได้เป็นช่วงวัน ----
+  // jigOverrides ใช้เฉพาะตอน simulation (พรีวิว "ถ้า jig ตัวนี้พังจะเป็นยังไง" โดยไม่แตะ DB)
+  // run จริงยึด jig_master ในฐานข้อมูลเท่านั้น — กติกาเดียวกับ priority/plan_mode overrides
+  //
+  // ⚠️ ต้อง **merge ทับรายตัว** ไม่ใช่แทนที่ทั้งก้อน: ถ้าเอา overrides ไปแทน jig_master ทั้งชุด
+  // jig ที่พังอยู่จริงจะหายไปจาก simulation งานที่ติด jig พังจริงจะจบเร็วกว่าแผนที่บันทึกไว้
+  // แล้ว buildPlanDiff จะทาเป็น fg-earlier ปลอม ๆ — พังตรงกลางฟลว์ "ดูผลกระทบก่อนกดจริง" พอดี
+  // ผลพลอยได้: override ที่ส่ง status='AVAILABLE' = "ถ้า jig ตัวนี้กลับมาเร็วกว่ากำหนดจะเป็นยังไง"
+  // (buildJigBlockMap ทิ้งสถานะที่ไม่บล็อกอยู่แล้ว จึงลบตัวที่พังจริงออกจาก map ให้เอง)
+  const effectiveJigRows = mergeJigOverrides(inputs.jigRows, isSimulation ? jigOverrides : []);
+  const jigBlockMap = buildJigBlockMap(effectiveJigRows, todayStr);
+
+  // วันสุดท้ายของปฏิทิน — ใช้ทั้ง pre-flight ของ jig และ capacity warning ตอนท้าย
+  let lastCalendarDate = '';
+  for (const row of inputs.calendarRows) {
+    if (row.date > lastCalendarDate) lastCalendarDate = row.date;
+  }
+
+  // pre-flight: step ที่ทุกทางเลือกใช้ไม่ได้ตลอดช่วงที่วางแผน — ต้องบอกเหตุผลจริง
+  // ไม่งั้น engine จะลง 'No Capacity' ซึ่งแปลว่า "เครื่องไม่พอ" ทั้งที่สาเหตุคือ jig พัง
+  const blockedSteps = pb.findBlockedSteps(activeMachineRows, jigBlockMap, lastCalendarDate);
+
   // ---- engine (L215-225) ----
   const engine = new SchedulerEngine(calendar, routing, fixedMachine, cycleTime, setupConfig, inputs.settings);
   const { mainPlan, totalPlanMap } = engine.run(
-    safeOrders, existingPlan, actualsDict, actualMachines, closedDict, currentTime,
+    safeOrders, existingPlan, actualsDict, actualMachines, closedDict, currentTime, jigBlockMap,
   );
 
   // ---- post: sort + display + persist + report (L227-499) ----
@@ -211,16 +259,14 @@ async function run(isReplan = false, options = {}) {
 
   // เตือน "ปฏิทินไม่พอ": ถ้ามี safe order ที่วางไม่ลง (FinishDate เป็น sentinel)
   // → บอกวันสุดท้ายของปฏิทิน + จำนวนงาน ให้ผู้ใช้ไปสร้างปฏิทินเพิ่ม (คืนทั้ง run/replan/sim)
-  let lastCalendarDate = '';
-  for (const row of inputs.calendarRows) {
-    if (row.date > lastCalendarDate) lastCalendarDate = row.date;
-  }
+  // (lastCalendarDate คำนวณไว้ก่อนเรียก engine แล้ว เพราะ pre-flight ของ jig ต้องใช้ด้วย)
   const capacityWarning = pb.buildCapacityWarning(shipmentReport, lastCalendarDate);
 
   let message = '✅ จัดแผนสำเร็จ (Hybrid Pro Backend)';
   if (rejectedOrders.length > 0) {
     message += ` (⚠️ ข้าม ${rejectedOrders.length} รายการที่ Model ไม่ถูกต้อง)`;
   }
+  message += pb.blockedStepsMessage(blockedSteps, lastCalendarDate);
 
   // shape เดิม: total_plan_map = บัญชี missing routing เท่านั้น (logic.py L498)
   return {
@@ -230,6 +276,7 @@ async function run(isReplan = false, options = {}) {
     report: shipmentReport,
     total_plan_map: missingRoutingMap,
     capacity_warning: capacityWarning,
+    blocked_steps: blockedSteps,
   };
 }
 

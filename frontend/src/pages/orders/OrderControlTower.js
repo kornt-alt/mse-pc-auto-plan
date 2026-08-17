@@ -518,7 +518,16 @@ const OrderControlTower = () => {
       // มุมกลับ: เครื่องไหนรัน batch ไหนบ้าง (แท็บ "เครื่องจักร")
       const machineSchedule = buildMachineSchedule(decoded.data ?? []);
       setPreview((p) => (p && p.mode === mode
-        ? { ...p, loading: false, diff, detail, machineSchedule, capacityWarning: decoded.capacity_warning }
+        ? {
+          ...p,
+          loading: false,
+          diff,
+          detail,
+          machineSchedule,
+          capacityWarning: decoded.capacity_warning,
+          // step ที่ทุกเครื่องติด jig ที่ใช้ไม่ได้ — ให้ PlanPreviewDialog อธิบายแทนคำว่า No Capacity
+          blockedSteps: decoded.blocked_steps ?? [],
+        }
         : p));
     } catch (err) {
       setPreview(null);
@@ -962,6 +971,7 @@ const OrderControlTower = () => {
         detail={preview ? preview.detail : null}
         machineSchedule={preview ? preview.machineSchedule : null}
         capacityWarning={preview ? preview.capacityWarning : null}
+        blockedSteps={preview ? preview.blockedSteps ?? [] : []}
         loading={preview ? preview.loading : false}
         settings={settings}
         todayStr={today}

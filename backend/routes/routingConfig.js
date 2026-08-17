@@ -16,6 +16,7 @@ const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
 const { familyPrefix } = require('../services/routingSuggest');
+const { parseMoveRequest, neighborIndex, sortedIndicesFromRows } = require('../utils/routingOrder');
 
 const router = express.Router();
 const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
@@ -27,7 +28,7 @@ const writeRoles = requireRole('ADMIN', 'PLANNER');
 router.get('/routing_machine_config', verifyToken, readRoles, async (req, res) => {
   try {
     const model = req.query.model;
-    if (!model) return res.json({ routing: [], machine: [] });
+    if (!model) return res.json({ routing: [], machine: [], wip_refs: 0 });
     const routing = await query(
       'SELECT * FROM routing_config WHERE model = @model ORDER BY flow_index, step_index',
       { model }
@@ -36,7 +37,17 @@ router.get('/routing_machine_config', verifyToken, readRoles, async (req, res) =
       'SELECT * FROM machine_config WHERE model = @model ORDER BY flow_index, step_index, alternative_index',
       { model }
     );
-    res.json({ routing, machine });
+    // wip_refs = จำนวน order ที่ "ตรึง" ตำแหน่ง WIP ไว้ด้วยเลข index ของ model นี้
+    // (orders.wip_flow_index / wip_start_step_index เข้า engine ตรง ๆ ที่ scheduler/planBuilder.js:31-32)
+    // การเลื่อนลำดับ step/flow ทำให้เลขที่ตรึงไว้ชี้คนละขั้น — UI เอาไปเตือนก่อนกด ▲▼
+    // เป็นคีย์ที่ **เพิ่มเข้ามา** ไม่ได้เปลี่ยนของเดิม (wizard อ่านแค่ .routing/.machine)
+    const wipRows = await query(
+      `SELECT COUNT(*) AS c FROM orders
+       WHERE model = @model AND is_deleted != 1
+         AND (wip_flow_index > 0 OR wip_start_step_index > 0)`,
+      { model }
+    );
+    res.json({ routing, machine, wip_refs: wipRows[0]?.c ?? 0 });
   } catch (err) {
     sendError(req, res, err);
   }
@@ -153,6 +164,66 @@ router.post('/routing_config/insert_step', verifyToken, writeRoles, async (req, 
       );
     });
     res.json({ message: 'Step inserted successfully' });
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+// ================================================================
+// POST /api/routing_config/move — เลื่อนลำดับ step ภายใน flow / เลื่อนลำดับ flow
+//
+// ⚠️ endpoint นี้ **ไม่มีต้นฉบับใน Python** (เหมือน PUT /calendar/cells) — ของใหม่ ไม่ใช่ของที่ port มา
+// มีเพราะ API เดิมเลื่อนลำดับไม่ได้เลย ต้องพิมพ์เลข index เองผ่าน PUT /routing_config/:id
+// ที่ UPDATE ตามที่ส่งมาดิบ ๆ และการยิงหลายใบฝั่ง client ไม่ atomic (step ที่มี 3 alt = 8 request)
+//
+// ไม่ cascade ไป orders.wip_flow_index / wip_start_step_index โดยตั้งใจ — insert_step กับ delete_flow
+// ก็ไม่ cascade เหมือนกัน (ขยับ index ทิ้งไว้เฉย ๆ) ทำที่นี่ที่เดียวจะกลายเป็นพฤติกรรมที่ไม่สม่ำเสมอ
+// แทนที่ด้วยการให้ GET /routing_machine_config ส่ง wip_refs ไปให้ UI เตือนก่อนกด
+// ต้องมาก่อน /:item_id (เป็นคนละ method อยู่แล้ว แต่วางตามกติกา literal-ก่อน-param ของโปรเจกต์)
+// ================================================================
+router.post('/routing_config/move', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const parsed = parseMoveRequest(req.body);
+    if (!parsed.ok) return res.status(400).json({ message: parsed.error });
+    const { model, level, flowIndex, stepIndex, direction } = parsed.value;
+
+    const isFlow = level === 'flow';
+    const column = isFlow ? 'flow_index' : 'step_index';
+    const current = isFlow ? flowIndex : stepIndex;
+
+    await transaction(async (t) => {
+      // อ่านลำดับที่ "มีอยู่จริง" ก่อน แล้วหาตัวข้างเคียงจากลิสต์นั้น — ห้ามคิดเป็น current ± 1
+      // เพราะ index ในข้อมูลจริงกระโดดได้ (พิมพ์เองได้ + delete_flow/insert_step ขยับเลขไปมา)
+      const rows = isFlow
+        ? await t.query('SELECT DISTINCT flow_index FROM routing_config WHERE model = @model', { model })
+        : await t.query(
+            'SELECT DISTINCT step_index FROM routing_config WHERE model = @model AND flow_index = @flow',
+            { model, flow: flowIndex }
+          );
+      const indices = sortedIndicesFromRows(rows, column);
+      const target = neighborIndex(indices, current, direction);
+      if (target === null) {
+        const err = new Error('เลื่อนต่อไม่ได้ อยู่สุดลำดับแล้ว (หรือข้อมูลเปลี่ยนไปแล้ว กรุณารีเฟรช)');
+        err.expose = true;
+        err.status = 400;
+        throw err;
+      }
+
+      // สลับด้วย CASE ครั้งเดียวต่อตาราง — ไม่ต้องพักค่าไว้ที่ index ชั่วคราว
+      const scope = isFlow
+        ? `WHERE model = @model AND flow_index IN (@a, @b)`
+        : `WHERE model = @model AND flow_index = @flow AND step_index IN (@a, @b)`;
+      const params = isFlow
+        ? { model, a: current, b: target }
+        : { model, flow: flowIndex, a: current, b: target };
+      const swap = `SET ${column} = CASE WHEN ${column} = @a THEN @b ELSE @a END`;
+
+      // routing_config กับ machine_config ต้องขยับพร้อมกัน ไม่งั้นเครื่องหลุดจาก step ของตัวเอง
+      await t.query(`UPDATE routing_config ${swap} ${scope}`, params);
+      await t.query(`UPDATE machine_config ${swap} ${scope}`, params);
+    });
+
+    res.json({ message: level === 'flow' ? 'เลื่อนลำดับ Flow แล้ว' : 'เลื่อนลำดับ Step แล้ว' });
   } catch (err) {
     sendError(req, res, err);
   }
@@ -313,6 +384,60 @@ router.put('/machine_config/:item_id', verifyToken, writeRoles, async (req, res)
     );
     if (count === 0) return res.status(404).json({ message: 'Not found' });
     res.json({ message: 'Machine Config updated successfully' });
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+// ================================================================
+// PUT /api/machine_config/:item_id/active — เปิด/ปิด "เครื่องนี้ทำโมเดลนี้ไม่ได้ถาวร"
+// ไม่มีต้นฉบับใน Python — เป็นทางแก้ที่ถูกต้องแทนการลบแถว (ลบแล้วเสีย cycle/setup/jig ที่ตั้งไว้
+// และลบไม่ได้ถ้าเป็นเครื่องตัวสุดท้าย) ส่วนเครื่องเสียชั่วคราวยังใช้ calendar_config = 0 เหมือนเดิม
+//
+// แยกออกมาเป็น route ของตัวเอง ไม่รวมเข้า PUT /machine_config/:item_id เพราะไดอะล็อกแก้เครื่อง
+// ไม่ได้ส่ง is_active มาด้วย — ถ้าใส่ไว้ในคำสั่งเดียวกัน การกดบันทึกธรรมดาจะเปิดเครื่องคืนเงียบ ๆ
+// (สองเซกเมนต์ จึงไม่ชนกับ /:item_id)
+// ================================================================
+router.put('/machine_config/:item_id/active', verifyToken, writeRoles, async (req, res) => {
+  try {
+    // คอลัมน์เพิ่มด้วย DDL รันมือ — ไม่มีก็บอกไปตรง ๆ ดีกว่าปล่อย SQL error ดิบ
+    const hasCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
+    if (!hasCol) {
+      return res.status(503).json({
+        message: 'ยังไม่ได้เพิ่มคอลัมน์ machine_config.is_active ในฐานข้อมูล (คำสั่ง DDL อยู่ใน CHANGELOG.md)',
+      });
+    }
+
+    const id = parseInt(req.params.item_id, 10);
+    const active = req.body && req.body.is_active ? 1 : 0;
+
+    const rows = await query(
+      'SELECT model, flow_index, step_index FROM machine_config WHERE id = @id',
+      { id }
+    );
+    if (rows.length === 0) return res.status(404).json({ message: 'Not found' });
+    const { model, flow_index, step_index } = rows[0];
+
+    // ⚠️ ปิดเครื่องตัวสุดท้ายที่ยังเปิดอยู่ของ step ไม่ได้ — กลไกเดียวกับ guard ของ DELETE
+    // ถ้าปล่อยให้ปิดครบ กลุ่มนั้นจะไม่มีแถวเหลือเลย findBlockedSteps (planBuilder.js) จึงไม่เห็น
+    // และไม่มีคำเตือนใด ๆ ออกมา แล้ว step หลุดเข้า engine แบบไม่มีเครื่อง → ตกเป็น 'No Capacity'
+    // ซึ่งคือการวินิจฉัยผิดทางที่ทั้งฟีเจอร์นี้ตั้งใจกำจัด — กันที่ปุ่มถูกกว่าไปไล่ทีหลัง
+    if (active === 0) {
+      const cnt = await query(
+        `SELECT COUNT(*) AS c FROM machine_config
+          WHERE model = @model AND flow_index = @flow AND step_index = @step
+            AND ISNULL(is_active, 1) = 1 AND id <> @id`,
+        { model, flow: flow_index, step: step_index, id }
+      );
+      if ((cnt[0]?.c ?? 0) === 0) {
+        return res.status(400).json({
+          message: 'ปิดไม่ได้ — เป็นเครื่องสุดท้ายที่ยังใช้งานได้ของขั้นตอนนี้ (ต้องมีอย่างน้อย 1 เครื่อง)',
+        });
+      }
+    }
+
+    await execute('UPDATE machine_config SET is_active = @active WHERE id = @id', { active, id });
+    res.json({ message: active ? 'เปิดใช้งานเครื่องแล้ว' : 'ปิดใช้งานเครื่องแล้ว' });
   } catch (err) {
     sendError(req, res, err);
   }

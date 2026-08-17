@@ -48,6 +48,7 @@ app.use('/api', require('./routes/wip')); // /wip*, /wip-summary*
 app.use('/api/visualization', require('./routes/visualization'));
 app.use('/api', require('./routes/routingConfig')); // /routing_machine_config, /routing_config/*, /machine_config/*, /routing/*
 app.use('/api', require('./routes/alerts')); // /alert/*
+app.use('/api', require('./routes/jig')); // /jig, /jig/:jig_id, /jig/:jig_id/status
 // ⚠️ ไม่มี route สำหรับ Hana (SAP COOIS) ที่นี่โดยตั้งใจ — เครื่องนี้อยู่ใน DMZ ไม่มีเส้นทางไป plb044
 //    มีแต่ network ของเครื่อง client ที่ถึง การ์ดหน้า Import จึงยิงจาก browser เอง
 //    (เคยเขียน passthrough ไว้แล้วเมื่อ 2026-08-14 แล้วลบทิ้งด้วยเหตุนี้ — ดู CHANGELOG/CLAUDE.md

@@ -46,6 +46,7 @@ const {
   getElapsedMinutes,
 } = require('../utils/dates');
 const { isDayUnitMachine } = require('./dayUnit');
+const { isBlockedOn } = require('./jigBlocks');
 const { pyInt, pyFloat, sortedNumericKeys } = require('./pyUtils');
 
 // clean_text (L426/L676): upper + ตัด space - _ –
@@ -106,6 +107,9 @@ class SchedulerEngine {
     this.actuals = {};
     this.actualMachines = {};
     this.closedStatuses = {};
+    // jig ที่ใช้ไม่ได้เป็นช่วงวัน (พัง/ส่งซ่อม) — {} = ไม่มีอะไรถูกบล็อก = พฤติกรรมเดิมทุกบิต
+    // parity fixtures ไม่มี jig_master จึงไม่ต้อง rebaseline (กติกาเดียวกับ material_arrived)
+    this.jigBlocks = {};
 
     const s = settings || {};
     this.ENABLE_HEAT_DEEP_PLAN = s.enable_heat_deep_plan != null ? Boolean(s.enable_heat_deep_plan) : ENABLE_HEAT_DEEP_PLAN;
@@ -122,6 +126,12 @@ class SchedulerEngine {
   // is_day_unit_machine (L286-292) — delegate ไป pure helper (scheduler/dayUnit.js)
   isDayUnitMachine(machineName) {
     return isDayUnitMachine(machineName, this.DAY_UNIT_KEYWORDS);
+  }
+
+  // jig ตัวนี้ถูกบล็อกในวันนั้นไหม — delegate ไป pure helper (scheduler/jigBlocks.js)
+  // ไม่มี jig_master / ไม่มีตัวไหนพัง → false เสมอ → ไม่กระทบการคำนวณเดิม
+  isJigBlocked(jig, dateStr) {
+    return isBlockedOn(this.jigBlocks, jig, dateStr);
   }
 
   // get_smart_setup_time (L294-299)
@@ -758,6 +768,9 @@ class SchedulerEngine {
           }
 
           let av = targetCalendar[m][d];
+          // jig พัง/ส่งซ่อมในวันนี้ → วันนี้ทำงานชิ้นนี้ไม่ได้ (งานอื่นบนเครื่องเดียวกันยังเดินได้)
+          // ใช้ทางเดิมของ "วันที่ไม่มี capacity" ทั้งหมด ไม่ต้องมี branch ใหม่
+          if (this.isJigBlocked(jig, d)) av = 0;
           if (av < this.MIN_FRAGMENT_TIME) av = 0;
 
           if (av > 0) {
@@ -934,6 +947,7 @@ class SchedulerEngine {
     actualMachines = null,
     closedStatuses = null,
     currentTime = null,
+    jigBlocks = null,
   ) {
     // FIX: Python fallback เป็น datetime.now() — เวอร์ชันนี้บังคับ inject เสมอ
     if (!currentTime) throw new Error('SchedulerEngine.run: currentTime is required');
@@ -943,6 +957,8 @@ class SchedulerEngine {
     this.actuals = actuals || {};
     this.actualMachines = actualMachines || {};
     this.closedStatuses = closedStatuses || {};
+    // ไม่ส่งมา = ไม่มี jig ตัวไหนถูกบล็อก (parity fixtures เข้าทางนี้)
+    this.jigBlocks = jigBlocks || {};
 
     const factoryToday = getFactoryDate(currentTime);
     const elapsedMins = getElapsedMinutes(currentTime);

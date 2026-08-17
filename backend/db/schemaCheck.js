@@ -33,6 +33,18 @@ const OPTIONAL_OBJECTS = [
     impact: 'หน้าตั้งค่า scheduler บันทึกไม่ได้ ระบบใช้ค่า default จาก config/constants.js',
   },
   {
+    name: 'jig_master',
+    kind: 'table',
+    impact: 'หน้า Jig ใช้ไม่ได้ และแผนจะไม่รู้ว่า jig ตัวไหนพัง (scheduler/jigBlocks.js)',
+  },
+  {
+    name: 'machine_config.is_active',
+    kind: 'column',
+    table: 'machine_config',
+    column: 'is_active',
+    impact: 'ปิดเครื่องที่ทำโมเดลนี้ไม่ได้ถาวรไม่ได้ ทุกเครื่องใน machine_config ถือว่าใช้ได้หมด',
+  },
+  {
     name: 'orders.material_arrived',
     kind: 'column',
     table: 'orders',

@@ -29,6 +29,8 @@ test('MFG ไม่เห็น Orders แต่ยังเห็นกลุ�
   expect(screen.getByText('Routing Config')).toBeInTheDocument();
   // Calendar เปิดให้ MFG ดูได้ (read-only) — ปุ่มแก้ถูกซ่อนในหน้าเพจ ไม่ใช่ที่เมนู
   expect(screen.getByText('Calendar')).toBeInTheDocument();
+  // Jig Master เปิดให้ MFG เพราะคนที่รู้ว่า jig พังก่อนคือหน้างาน (แจ้งสถานะได้ แก้ทะเบียนไม่ได้)
+  expect(screen.getByText('Jig Master')).toBeInTheDocument();
   expect(screen.queryByText('Import Data')).not.toBeInTheDocument();
   expect(screen.queryByText('ผู้ใช้งาน')).not.toBeInTheDocument();
 });
