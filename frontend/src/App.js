@@ -23,7 +23,8 @@ import RoutingConfigPage from './pages/routingConfig/RoutingConfigPage';
 import AlertSettingsPage from './pages/alertSettings/AlertSettingsPage';
 
 // เมนูตาม role (ตาม AppDrawer ของระบบเดิม)
-// ADMIN/PLANNER: ทุกเมนู / MFG: ไม่มี Orders, Calendar, Import / OPERATOR: Shop Floor เท่านั้น
+// ADMIN/PLANNER: ทุกเมนู / MFG: ไม่มี Orders, Import (Calendar เข้าได้แต่ดูอย่างเดียว) /
+// OPERATOR: Shop Floor เท่านั้น
 // รายการเดี่ยว = { path, ... } / กลุ่ม dropdown = { label, items: [...] }
 const MENU = [
   {
@@ -47,7 +48,8 @@ const MENU = [
     label: 'ตั้งค่า',
     icon: 'bi-gear',
     items: [
-      { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER'] },
+      // MFG ดูปฏิทินได้ (GET /calendar เปิดให้อยู่แล้ว) แต่แก้ไม่ได้ — หน้าเพจซ่อนปุ่มแก้เอง
+      { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/routing-config', label: 'Routing Config', icon: 'bi-signpost-split', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
       { path: '/settings', label: 'Import Data', icon: 'bi-database-up', roles: ['ADMIN', 'PLANNER'] },
@@ -279,7 +281,7 @@ const App = () => (
       <Route
         path="/calendar"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
             <CalendarPage />
           </ProtectedRoute>
         }

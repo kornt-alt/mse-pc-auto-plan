@@ -19,7 +19,7 @@ test('PLANNER เห็นทั้งกลุ่มแผนการผลิ
   expect(screen.getByText('Orders')).toBeInTheDocument();
 });
 
-test('MFG ไม่เห็น Orders แต่ยังเห็นกลุ่มตั้งค่า (เหลือ Routing Config อย่างเดียว)', () => {
+test('MFG ไม่เห็น Orders แต่ยังเห็นกลุ่มตั้งค่า (Routing Config + Calendar)', () => {
   loginAs('MFG');
   render(<App />);
   expect(screen.queryByText('Orders')).not.toBeInTheDocument();
@@ -27,7 +27,8 @@ test('MFG ไม่เห็น Orders แต่ยังเห็นกลุ�
   // เมนูใน dropdown เรนเดอร์เมื่อเปิดเท่านั้น
   fireEvent.click(screen.getByText('ตั้งค่า'));
   expect(screen.getByText('Routing Config')).toBeInTheDocument();
-  expect(screen.queryByText('Calendar')).not.toBeInTheDocument();
+  // Calendar เปิดให้ MFG ดูได้ (read-only) — ปุ่มแก้ถูกซ่อนในหน้าเพจ ไม่ใช่ที่เมนู
+  expect(screen.getByText('Calendar')).toBeInTheDocument();
   expect(screen.queryByText('Import Data')).not.toBeInTheDocument();
   expect(screen.queryByText('ผู้ใช้งาน')).not.toBeInTheDocument();
 });

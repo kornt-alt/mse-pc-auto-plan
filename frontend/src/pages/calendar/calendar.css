@@ -1,0 +1,170 @@
+/* calendar.css — grid ปฏิทิน เครื่อง × วัน (import จาก CalendarPage.js เท่านั้น)
+   โครง frozen column + sticky header ลอกจาก pages/planning/planning.css แต่ตรึงคอลัมน์เดียว
+   ใช้เฉพาะ token --mse-* ที่มีอยู่แล้วใน theme/theme.css ห้ามเพิ่มเฉดใหม่ */
+
+.cal-matrix-wrap {
+  overflow: auto;
+  border: 1px solid var(--mse-border);
+  border-radius: var(--mse-radius-sm);
+  max-height: calc(100vh - 280px);
+  background: var(--mse-surface);
+}
+
+.cal-matrix {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: var(--fs-meta);
+  /* ระหว่างลากเลือก ห้าม browser ไปลากไฮไลต์ข้อความแทน */
+  user-select: none;
+}
+
+.cal-matrix th,
+.cal-matrix td {
+  border-right: 1px solid var(--mse-border);
+  border-bottom: 1px solid var(--mse-border);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.cal-matrix thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--mse-head-bg);
+  text-align: center;
+  line-height: 1.15;
+  vertical-align: middle;
+}
+
+/* คอลัมน์ชื่อเครื่อง (ตรึงซ้าย) */
+.cal-matrix .cal-machine {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 150px;
+  min-width: 150px;
+  max-width: 150px;
+  background: var(--mse-surface);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--mse-border);
+}
+
+.cal-matrix thead .cal-machine {
+  z-index: 3;
+  background: var(--mse-head-bg);
+}
+
+/* คอลัมน์รวมท้ายตาราง (ตรึงไว้ไม่ได้ เพราะขวาสุด — แค่แยกสีให้ต่าง) */
+.cal-matrix .cal-total {
+  background: var(--mse-canvas);
+  font-weight: 600;
+  text-align: right;
+}
+
+.cal-matrix tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--mse-canvas);
+  font-weight: 600;
+  text-align: center;
+}
+
+.cal-matrix tfoot .cal-machine {
+  z-index: 3;
+  background: var(--mse-canvas);
+  text-align: left;
+}
+
+/* ===== ช่องวัน ===== */
+.cal-day {
+  width: 58px;
+  min-width: 58px;
+  max-width: 58px;
+  text-align: center;
+}
+
+.cal-day-head .cal-dow {
+  font-size: 0.7rem;
+  color: var(--mse-muted);
+}
+
+.cal-sun,
+.cal-sun .cal-dow {
+  color: var(--mse-ng);
+}
+
+.cal-sat,
+.cal-sat .cal-dow {
+  color: var(--mse-info);
+}
+
+.cal-holiday {
+  background: var(--mse-warn-bg);
+}
+
+.cal-matrix thead th.cal-holiday {
+  background: var(--mse-warn-bg);
+}
+
+.cal-cell {
+  cursor: default;
+}
+
+.cal-cell.is-editable {
+  cursor: cell;
+}
+
+.cal-cell.is-empty {
+  color: var(--mse-muted);
+}
+
+.cal-cell.is-zero {
+  color: var(--mse-ng);
+  background: var(--mse-ng-bg);
+}
+
+.cal-cell.is-selected {
+  outline: 2px solid var(--mse-primary);
+  outline-offset: -2px;
+  background: var(--mse-primary-soft);
+}
+
+.cal-cell.is-zero.is-selected {
+  background: var(--mse-primary-soft);
+}
+
+.cal-cell-input {
+  width: 100%;
+  border: 1px solid var(--mse-primary);
+  border-radius: 2px;
+  padding: 0 2px;
+  font-size: var(--fs-meta);
+  text-align: center;
+}
+
+/* หัวคอลัมน์/ชื่อเครื่องที่กดเลือกได้ */
+.cal-pickable {
+  cursor: pointer;
+}
+
+.cal-pickable:hover {
+  background: var(--mse-primary-soft);
+}
+
+/* แถบเลือกอยู่ */
+.cal-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--mse-primary);
+  border-radius: var(--mse-radius-sm);
+  background: var(--mse-primary-soft);
+}
