@@ -394,7 +394,7 @@ const clearExtraJigs = async (t, { mode, models }) => {
 const writeExtraJigs = async (t, ids, rows) => {
   const pairs = [];
   ids.forEach((id, i) => {
-    for (const jig of rows[i]?.[8] ?? []) pairs.push([id, jig]);
+    for (const jig of rows[i]?.[9] ?? []) pairs.push([id, jig]);
   });
   if (pairs.length > 0) {
     await bulkInsert(t, 'machine_config_jig', ['machine_config_id', 'jig_id'], pairs);
@@ -422,11 +422,12 @@ router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (re
           // ⚠️ ตัวที่ 9 เกินจำนวน columns — bulkInsert อ่านแค่ columns.length แรก จึงไม่ถูกเขียน
           // แต่ dedupeExact (JSON.stringify ทั้งแถว) ยังนับมันด้วย ซึ่งถูกต้อง:
           // สองแถวที่ต่างกันแค่จิ๊กเสริมคือคนละแถวจริง ๆ ไม่ควรถูกยุบ
+          (r.Comments || '').trim(),
           extras,
         ];
       });
 
-    const fileHasExtras = hasExtras(parsed.map((r) => r[8]));
+    const fileHasExtras = hasExtras(parsed.map((r) => r[9]));
     const hasJigTable =
       (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
     // ไฟล์ใส่หลายจิ๊กมาแต่ยังไม่ได้สร้างตาราง = บอกไปตรง ๆ ดีกว่าเขียนครึ่งเดียวเงียบ ๆ
@@ -438,7 +439,7 @@ router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (re
 
     await writeConfigTable(req, res, {
       table: 'machine_config',
-      columns: ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id'],
+      columns: ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id', 'comments'],
       parsed,
       label: 'Machine Config',
       beforeDelete: hasJigTable ? clearExtraJigs : undefined,
