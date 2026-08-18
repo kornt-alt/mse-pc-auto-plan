@@ -99,6 +99,51 @@ function isBlockedThroughHorizon(map, jigId, lastCalendarDate) {
   return block.to >= last;
 }
 
+// ===================================================================
+// หลายจิ๊กต่อหนึ่งแถว machine_config — ความหมายคือ **AND** (ต้องครบทุกตัวถึงทำงานได้)
+//
+// ชุดจิ๊กของแถวหนึ่ง = [machine_config.jig_id (ตัวหลัก), ...machine_config_jig (ตัวเสริม)]
+// ⚠️ ทั้งสองฟังก์ชันข้างล่างต้องให้ผล **เท่าเดิมทุกบิตเมื่อมีจิ๊กตัวเดียว** ไม่งั้น parity fixtures พัง
+// ===================================================================
+
+// normalizeJigList(jigs) → ลิสต์จิ๊กจริง ๆ ที่ไม่ซ้ำ เรียงแล้ว (ตัด '' และ '-' ทิ้ง)
+// ⚠️ ต้องตัด sentinel ก่อนเสมอ ไม่งั้นชุด ['J-001','-'] จะได้คีย์ต่างจาก ['J-001']
+// ทั้งที่ความหมายเหมือนกัน (มีจิ๊กจริงตัวเดียว) แล้วส่วนลด setup จะหายไปแบบอธิบายไม่ได้
+function normalizeJigList(jigs) {
+  const out = new Set();
+  for (const j of Array.isArray(jigs) ? jigs : [jigs]) {
+    const id = cleanJigId(j);
+    if (!id || NO_JIG_VALUES.has(id)) continue;
+    out.add(id);
+  }
+  return [...out].sort();
+}
+
+// jigSetKey(jigs) → คีย์เปรียบเทียบสำหรับส่วนลด setup (getSmartSetupTime)
+//
+// ⚠️ **กฎคือชุดต้องเหมือนกันเป๊ะ ไม่ใช่ซ้อนกันบางตัว** — MINOR_SETUP แปลว่า "ไม่ต้องถอดเปลี่ยนจิ๊ก"
+// งานถัดไปที่ใช้ {J1} ต่อจาก {J1,J2} ยังต้องถอด J2 ออกอยู่ดี = setup เต็ม
+// เรียงก่อนต่อคีย์ เพื่อให้ลำดับที่กรอกไม่มีผล ({J1,J2} = {J2,J1})
+//
+// ✅ พฤติกรรมเดิม: จิ๊กตัวเดียว 'J-001' → 'J-001' · ว่าง/'-' → '-' (sentinel ของ configProcessor)
+const jigSetKey = (jigs) => {
+  const list = normalizeJigList(jigs);
+  return list.length === 0 ? '-' : list.join('|');
+};
+
+// isAnyJigBlocked(map, jigs, dateStr) — AND semantics: ตัวใดตัวหนึ่งใช้ไม่ได้ = ทั้งแถวใช้ไม่ได้
+// ✅ ลิสต์ตัวเดียวให้ผลเท่า isBlockedOn เดิมทุกกรณี
+const isAnyJigBlocked = (map, jigs, dateStr) =>
+  normalizeJigList(jigs).some((j) => isBlockedOn(map, j, dateStr));
+
+// blockedJigsOf(map, jigs, dateStr) — ตัวไหนบ้างที่ถูกบล็อก (สำหรับข้อความบอกผู้ใช้ว่า "จิ๊กตัวไหน")
+const blockedJigsOf = (map, jigs, dateStr) =>
+  normalizeJigList(jigs).filter((j) => isBlockedOn(map, j, dateStr));
+
+// ทุกทางเลือกของ step ตันเพราะจิ๊ก — AND เหมือนกัน: ตัวใดตัวหนึ่งใช้ไม่ได้ยาวถึงปลายปฏิทิน = ตัน
+const isAnyBlockedThroughHorizon = (map, jigs, lastCalendarDate) =>
+  normalizeJigList(jigs).some((j) => isBlockedThroughHorizon(map, j, lastCalendarDate));
+
 module.exports = {
   BLOCKING_STATUSES,
   NO_JIG_VALUES,
@@ -106,4 +151,9 @@ module.exports = {
   mergeJigOverrides,
   isBlockedOn,
   isBlockedThroughHorizon,
+  normalizeJigList,
+  jigSetKey,
+  isAnyJigBlocked,
+  blockedJigsOf,
+  isAnyBlockedThroughHorizon,
 };

@@ -5,6 +5,8 @@
 // ⚠️ ชื่อไฟล์คู่นี้ต้องไม่ต่างกันแค่ตัวพิมพ์ใหญ่-เล็ก — ไฟล์ระบบของ Windows ไม่แยก case
 // (routingTree.js กับ RoutingTree.js คือไฟล์เดียวกัน เขียนทับกันเงียบ ๆ) จึงใช้ชื่อ ...View แทน
 
+import { jigListOfRow } from './jigNaming';
+
 const toInt = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : 0;
@@ -72,6 +74,9 @@ export function buildRoutingTree(routing, machine) {
       cycleTime: m.cycle_time ?? 0,
       setupTime: m.setup_time ?? 0,
       jigId: m.jig_id ?? '',
+      // ชุดจิ๊กทั้งหมดของแถว (หลัก + เสริม) — หนึ่งเครื่องใช้หลายจิ๊กพร้อมกันได้ ความหมาย AND
+      // ไม่มี extra_jigs (ยังไม่ได้รัน DDL / payload เก่า) = เหลือแค่จิ๊กหลัก = พฤติกรรมเดิม
+      jigIds: jigListOfRow(m),
       // is_active = 0 คือ "เครื่องนี้ทำโมเดลนี้ไม่ได้ถาวร" — คอลัมน์เพิ่มด้วย DDL รันมือ
       // ไม่มีคอลัมน์ (undefined/null) ต้องถือว่าเปิด = พฤติกรรมเดิม (ตรงกับ scheduler/machineFilter.js)
       isActive: !(m.is_active === 0 || m.is_active === false),

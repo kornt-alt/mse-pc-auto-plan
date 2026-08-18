@@ -46,7 +46,7 @@ const {
   getElapsedMinutes,
 } = require('../utils/dates');
 const { isDayUnitMachine } = require('./dayUnit');
-const { isBlockedOn } = require('./jigBlocks');
+const { isBlockedOn, isAnyJigBlocked } = require('./jigBlocks');
 const { pyInt, pyFloat, sortedNumericKeys } = require('./pyUtils');
 
 // clean_text (L426/L676): upper + ตัด space - _ –
@@ -132,6 +132,12 @@ class SchedulerEngine {
   // ไม่มี jig_master / ไม่มีตัวไหนพัง → false เสมอ → ไม่กระทบการคำนวณเดิม
   isJigBlocked(jig, dateStr) {
     return isBlockedOn(this.jigBlocks, jig, dateStr);
+  }
+
+  // ชุดจิ๊กของแถวถูกบล็อกไหม — **AND**: ตัวใดตัวหนึ่งใช้ไม่ได้ = ทั้งแถวใช้ไม่ได้
+  // ชุดที่มีจิ๊กตัวเดียวให้ผลเท่า isJigBlocked เดิมทุกกรณี (ไม่กระทบ parity)
+  isJigSetBlocked(jigs, dateStr) {
+    return isAnyJigBlocked(this.jigBlocks, jigs, dateStr);
   }
 
   // get_smart_setup_time (L294-299)
@@ -353,9 +359,11 @@ class SchedulerEngine {
         const rawS = j < sOpts.length ? sOpts[j] : sOpts.length ? sOpts[0] : 0;
         let s = 0;
         let jig = '-';
+        let jigs = [];
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
+          jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
@@ -693,9 +701,11 @@ class SchedulerEngine {
         const rawS = j < sOpts.length ? sOpts[j] : sOpts[0];
         let s = 0;
         let jig = '-';
+        let jigs = [];
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
+          jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
@@ -769,8 +779,9 @@ class SchedulerEngine {
 
           let av = targetCalendar[m][d];
           // jig พัง/ส่งซ่อมในวันนี้ → วันนี้ทำงานชิ้นนี้ไม่ได้ (งานอื่นบนเครื่องเดียวกันยังเดินได้)
+          // แถวที่ต้องใช้หลายจิ๊กเป็น AND — ตัวใดตัวหนึ่งพังก็พอ (jigBlocks.isAnyJigBlocked)
           // ใช้ทางเดิมของ "วันที่ไม่มี capacity" ทั้งหมด ไม่ต้องมี branch ใหม่
-          if (this.isJigBlocked(jig, d)) av = 0;
+          if (this.isJigSetBlocked(jigs.length ? jigs : jig, d)) av = 0;
           if (av < this.MIN_FRAGMENT_TIME) av = 0;
 
           if (av > 0) {

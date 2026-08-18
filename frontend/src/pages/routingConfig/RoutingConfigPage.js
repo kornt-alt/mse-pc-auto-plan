@@ -17,6 +17,7 @@ import {
   Spinner,
   Modal,
   ListGroup,
+  ButtonGroup,
 } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import PageHeader from '../../components/shared/PageHeader';
@@ -25,7 +26,20 @@ import ConfirmModal from '../../components/shared/ConfirmModal';
 import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import NewModelWizardDialog from './NewModelWizardDialog';
 import RoutingTreeView from './RoutingTreeView';
+import RoutingEditTable from './RoutingEditTable';
 import { buildRoutingTree, insertStepDefaults, primaryMachineOf } from './routingTree';
+import {
+  buildEditGroups,
+  setEdit,
+  countEditedRows,
+  validateEdits,
+  hasProblems,
+  buildBulkPayload,
+  stepsLeftWithNoMachine,
+  sharedJigWarnings,
+  flowLabel,
+  stepLabel,
+} from './routingEdits';
 import {
   EditRoutingDialog,
   EditMachineDialog,
@@ -97,6 +111,25 @@ const RoutingConfigPage = () => {
   const tree = useMemo(() => buildRoutingTree(routing, machine), [routing, machine]);
   const flows = useMemo(() => tree.flows.map((f) => f.flowIndex), [tree]);
 
+  // ===== โหมดตารางแก้ในช่องได้เลย =====
+  // 'edit'   = แก้ค่า (ชื่อขั้น / เครื่อง / เวลา / จิ๊ก / เปิด-ปิด) หลายแถวแล้วบันทึกครั้งเดียว
+  // 'manage' = จัดการลำดับและโครงสร้าง (เพิ่ม-ลบ-เลื่อน) ซึ่งยังต้องทำทีละรายการ
+  //            เพราะแต่ละอย่างขยับเลขกำกับของสองตารางพร้อมกัน
+  const [mode, setMode] = useState('edit');
+  const [edits, setEdits] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const { groups, orphanGroup } = useMemo(() => buildEditGroups(tree), [tree]);
+  const editCount = countEditedRows(edits);
+  const problems = useMemo(
+    () => validateEdits(groups, orphanGroup, edits),
+    [groups, orphanGroup, edits]
+  );
+
+  const handleCellEdit = useCallback((key, field, value, original) => {
+    setEdits((prev) => setEdit(prev, key, field, value, original));
+  }, []);
+
   // ===== fetch =====
   const fetchMissing = useCallback(() => {
     apiCall('/routing/missing-models')
@@ -127,6 +160,9 @@ const RoutingConfigPage = () => {
   const runSearch = useCallback(async (model) => {
     const q = String(model || '').trim();
     setShowSuggest(false);
+    // ข้อมูลกำลังจะถูกโหลดใหม่ — ช่องที่ค้างอยู่จะอ้างถึงแถวชุดเก่า ต้องล้างทิ้งเสมอ
+    // (ตัวที่กันไม่ให้ของหายโดยไม่ตั้งใจคือคำถามยืนยันใน switchMode ไม่ใช่บรรทัดนี้)
+    setEdits({});
     if (!q) {
       setHasSearched(false);
       setRouting([]);
@@ -224,6 +260,7 @@ const RoutingConfigPage = () => {
   );
 
   const clearSearch = () => {
+    setEdits({});
     setSearchInput('');
     setSearchModel('');
     setHasSearched(false);
@@ -302,6 +339,104 @@ const RoutingConfigPage = () => {
         .catch((err) => onError(err.message));
     },
     [searchModel, onSaved, onError, refresh]
+  );
+
+  // ===== บันทึกตารางแก้ในช่อง (PUT /routing_machine_config/bulk_edit) =====
+  const doBulkSave = useCallback(async () => {
+    setSaving(true);
+    try {
+      const payload = buildBulkPayload(searchModel, groups, orphanGroup, edits);
+      const res = await apiCall('/routing_machine_config/bulk_edit', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      // ล้างช่องที่ค้างก่อน refresh — ไม่งั้นค่าที่บันทึกไปแล้วยังขึ้นสีเหลืองอยู่
+      setEdits({});
+      onSaved(res.message || 'บันทึกแล้ว');
+      refresh();
+    } catch (err) {
+      // ไม่ล้าง edits เมื่อพัง — ผู้ใช้จะได้แก้ต่อจากที่ค้างไว้แทนที่จะพิมพ์ใหม่ทั้งหมด
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [searchModel, groups, orphanGroup, edits, onSaved, onError, refresh]);
+
+  // ถามยืนยันเมื่อการบันทึกจะเปลี่ยนเลขคณิตของแผน ไม่ใช่แค่ป้ายชื่อ:
+  //   - ปิดเครื่องจนบางขั้นไม่เหลือเครื่องเลย (backend ตอบ 400 อยู่แล้ว บอกก่อนกดจะดีกว่า)
+  //   - ผูก jig เดียวกันให้หลายแถว → getSmartSetupTime คิดเวลา setup แบบสั้นให้งานที่ติดกัน
+  const handleBulkSave = useCallback(() => {
+    const empty = stepsLeftWithNoMachine(groups, edits);
+    if (empty.length > 0) {
+      const list = empty
+        .map((g) => `${flowLabel(g.flowPos)} · ${stepLabel(g.stepPos)} (${g.stepName || 'ไม่มีชื่อ'})`)
+        .join('\n');
+      setAsk({
+        title: 'บันทึกไม่ได้',
+        body:
+          'ขั้นตอนต่อไปนี้จะไม่เหลือเครื่องที่ใช้งานได้เลย:\n\n' + list
+          + '\n\nแต่ละขั้นต้องมีเครื่องอย่างน้อย 1 เครื่อง — เปิดเครื่องคืนอย่างน้อยหนึ่งตัวก่อน',
+        confirmLabel: 'เข้าใจแล้ว',
+        variant: 'danger',
+        onConfirm: () => {},
+      });
+      return;
+    }
+
+    const shared = sharedJigWarnings(groups, orphanGroup, edits);
+    if (shared.length > 0) {
+      const list = shared
+        .map((s) => `จิ๊ก ${s.jigId} → ${s.machines.join(', ')}`)
+        .join('\n');
+      setAsk({
+        title: 'ยืนยันการบันทึก',
+        body:
+          'มีเครื่องที่กำลังจะใช้จิ๊กตัวเดียวกัน:\n\n' + list
+          + '\n\nงานที่ใช้จิ๊กเดียวกันและลงเครื่องเดียวกันติดกัน ระบบจะคิดเวลาตั้งเครื่องแบบสั้น '
+          + '(ค่า minor setup ในหน้าตั้งค่า) — เลือกแบบนี้เมื่อของจริงไม่ต้องเปลี่ยนจิ๊กเท่านั้น '
+          + 'ถ้าหน้างานยังต้องเปลี่ยนจิ๊กอยู่ แผนจะสั้นกว่าความจริง',
+        confirmLabel: 'บันทึกเลย',
+        variant: 'warning',
+        onConfirm: doBulkSave,
+      });
+      return;
+    }
+
+    doBulkSave();
+  }, [groups, orphanGroup, edits, doBulkSave]);
+
+  const discardEdits = useCallback(() => {
+    setAsk({
+      title: 'ยกเลิกการแก้ไข',
+      body: `ทิ้งการแก้ที่ยังไม่บันทึก ${editCount} รายการ?`,
+      confirmLabel: 'ทิ้งเลย',
+      variant: 'danger',
+      onConfirm: () => setEdits({}),
+    });
+  }, [editCount]);
+
+  // สลับไปโหมดจัดการลำดับทั้งที่ยังมีของค้าง = ของหายเงียบ ๆ (โหมดนั้นยิง API ทันทีแล้ว refresh)
+  const switchMode = useCallback(
+    (next) => {
+      if (next === mode) return;
+      if (next === 'manage' && editCount > 0) {
+        setAsk({
+          title: 'ยังมีการแก้ที่ไม่ได้บันทึก',
+          body:
+            `มี ${editCount} รายการที่แก้ค้างไว้ — โหมดจัดการลำดับจะโหลดข้อมูลใหม่ทุกครั้งที่กดปุ่ม `
+            + 'การแก้ที่ค้างอยู่จะหายไป\n\nกดบันทึกก่อนสลับโหมด หรือยืนยันเพื่อทิ้ง',
+          confirmLabel: 'ทิ้งแล้วสลับ',
+          variant: 'danger',
+          onConfirm: () => {
+            setEdits({});
+            setMode(next);
+          },
+        });
+        return;
+      }
+      setMode(next);
+    },
+    [mode, editCount]
   );
 
   // ===== เลื่อนลำดับ (POST /routing_config/move) =====
@@ -564,29 +699,113 @@ const RoutingConfigPage = () => {
 
       {hasSearched && !loading && (routing.length > 0 || machine.length > 0) && (
         <>
-          <div className="d-flex align-items-center gap-2 mb-2">
+          <div className="d-flex align-items-center gap-2 mb-2 flex-wrap">
             <span className="fw-bold text-mse" style={{ fontSize: '1.05rem' }}>
               {searchModel}
             </span>
-            <span className="chip chip-muted">{tree.flows.length} Flow</span>
+            <span className="chip chip-muted">
+              {tree.flows.length} สายการผลิต · {groups.length} ขั้นตอน
+            </span>
             {!canEdit && <span className="chip chip-info">ดูอย่างเดียว</span>}
+
+            {/* สองโหมด: แก้ค่าหลายแถวพร้อมกัน กับ จัดการลำดับทีละรายการ */}
+            <ButtonGroup size="sm" className="ms-auto">
+              <Button
+                variant={mode === 'edit' ? 'primary' : 'outline-secondary'}
+                onClick={() => switchMode('edit')}
+              >
+                <i className="bi bi-pencil-square me-1" aria-hidden="true" />
+                แก้ค่า
+              </Button>
+              <Button
+                variant={mode === 'manage' ? 'primary' : 'outline-secondary'}
+                onClick={() => switchMode('manage')}
+              >
+                <i className="bi bi-list-ol me-1" aria-hidden="true" />
+                จัดการลำดับ
+                {editCount > 0 && (
+                  <Badge bg="warning" text="dark" pill className="ms-1">{editCount}</Badge>
+                )}
+              </Button>
+            </ButtonGroup>
           </div>
-          <RoutingTreeView
-            tree={tree}
-            model={searchModel}
-            canEdit={canEdit}
-            wipRefs={wipRefs}
-            onMoveStep={handleMoveStep}
-            onMoveFlow={handleMoveFlow}
-            onAddStep={handleAddStep}
-            onDeleteFlow={handleDeleteFlow}
-            onEditStep={handleEditStep}
-            onDeleteStep={askDeleteRouting}
-            onAddAlt={handleAddAlt}
-            onEditMachine={handleEditMachine}
-            onDeleteMachine={askDeleteMachine}
-            onToggleActive={handleToggleActive}
-          />
+
+          {mode === 'edit' ? (
+            <>
+              {/* แถบบันทึกติดบนสุด — ต้องเห็นตัวนับได้ตลอดโดยไม่ต้องเลื่อนกลับขึ้นมา */}
+              {canEdit && (
+                <div
+                  className="d-flex align-items-center gap-2 flex-wrap mb-2 py-2 px-2 bg-body border rounded"
+                  style={{ position: 'sticky', top: 0, zIndex: 3 }}
+                >
+                  <span className="small text-muted">
+                    แก้ค่าในช่องได้เลย ช่องที่แก้จะขึ้นสีเหลืองจนกว่าจะกดบันทึก
+                  </span>
+                  <div className="ms-auto d-flex align-items-center gap-2">
+                    {hasProblems(problems) && (
+                      <span className="chip chip-ng">มีช่องที่กรอกไม่ถูกต้อง</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      disabled={editCount === 0 || saving}
+                      onClick={discardEdits}
+                    >
+                      ยกเลิกการแก้ไข
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="btn-mse"
+                      disabled={editCount === 0 || saving || hasProblems(problems)}
+                      onClick={handleBulkSave}
+                    >
+                      {saving ? (
+                        <Spinner animation="border" size="sm" className="me-1" />
+                      ) : (
+                        <i className="bi bi-save me-1" aria-hidden="true" />
+                      )}
+                      บันทึก {editCount > 0 ? `${editCount} รายการที่แก้` : ''}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <RoutingEditTable
+                groups={groups}
+                orphanGroup={orphanGroup}
+                edits={edits}
+                problems={problems}
+                machines={machines}
+                jigs={jigs}
+                canEdit={canEdit}
+                onEdit={handleCellEdit}
+              />
+
+              {canEdit && (
+                <p className="small text-muted">
+                  ต้องการเพิ่ม / ลบ / สลับลำดับขั้นตอน หรือแก้เลขกำกับของแถวที่ยังไม่ผูกขั้นตอน?
+                  กด <strong>จัดการลำดับ</strong> ด้านบน
+                </p>
+              )}
+            </>
+          ) : (
+            <RoutingTreeView
+              tree={tree}
+              model={searchModel}
+              canEdit={canEdit}
+              wipRefs={wipRefs}
+              onMoveStep={handleMoveStep}
+              onMoveFlow={handleMoveFlow}
+              onAddStep={handleAddStep}
+              onDeleteFlow={handleDeleteFlow}
+              onEditStep={handleEditStep}
+              onDeleteStep={askDeleteRouting}
+              onAddAlt={handleAddAlt}
+              onEditMachine={handleEditMachine}
+              onDeleteMachine={askDeleteMachine}
+              onToggleActive={handleToggleActive}
+            />
+          )}
         </>
       )}
 

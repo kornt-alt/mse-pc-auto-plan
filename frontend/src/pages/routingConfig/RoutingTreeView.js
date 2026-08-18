@@ -10,6 +10,8 @@ import { Card, Table, Button, Alert } from 'react-bootstrap';
 import {
   flowSummary, isLastMachineOfStep, canDeleteOrphan, isLastActiveOfStep,
 } from './routingTree';
+// ป้ายคำศัพท์ชุดเดียวกับตารางแก้ค่า — สองมุมมองต้องเรียกของสิ่งเดียวกันด้วยคำเดียวกัน
+import { flowLabel, stepLabel, machineRoleLabel } from './routingEdits';
 
 // ปุ่มไอคอนเล็ก — ทุกตัวต้องมี title + aria-label (กฎของโปรเจกต์)
 const IconButton = ({ icon, label, variant, onClick, disabled }) => (
@@ -70,8 +72,8 @@ const RoutingTreeView = ({
       {wipRefs > 0 && (
         <Alert variant="warning" className="py-2">
           <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
-          Model นี้มี <strong>{wipRefs}</strong> batch ที่ตรึงตำแหน่ง WIP ไว้ด้วยเลข Flow/Step —
-          การเลื่อนลำดับจะทำให้เลขที่ตรึงไว้ชี้คนละขั้นตอน ระบบจะถามยืนยันก่อนเลื่อนทุกครั้ง
+          Model นี้มี <strong>{wipRefs}</strong> batch ที่ตรึงตำแหน่งงานค้างไว้ด้วยเลขกำกับ
+          (flow / step) — การเลื่อนลำดับจะทำให้เลขที่ตรึงไว้ชี้คนละขั้นตอน ระบบจะถามยืนยันก่อนเลื่อนทุกครั้ง
         </Alert>
       )}
 
@@ -86,42 +88,45 @@ const RoutingTreeView = ({
                   size="sm"
                   variant="link"
                   className="p-0 icon-btn text-secondary"
-                  title={isCollapsed ? 'ขยาย Flow นี้' : 'ย่อ Flow นี้'}
-                  aria-label={isCollapsed ? `ขยาย Flow ${flow.flowIndex}` : `ย่อ Flow ${flow.flowIndex}`}
+                  title={isCollapsed ? 'ขยายสายการผลิตนี้' : 'ย่อสายการผลิตนี้'}
+                  aria-label={`${isCollapsed ? 'ขยาย' : 'ย่อ'}${flowLabel(flowPos + 1)}`}
                   aria-expanded={!isCollapsed}
                   onClick={() => toggleFlow(flow.flowIndex)}
                 >
                   <i className={`bi ${isCollapsed ? 'bi-chevron-right' : 'bi-chevron-down'}`} aria-hidden="true" />
                 </Button>
-                <span className="fw-bold text-mse">Flow {flow.flowIndex}</span>
+                <span className="fw-bold text-mse">{flowLabel(flowPos + 1)}</span>
                 <span className="chip chip-muted">
-                  {stepCount} Step · {machineCount} เครื่อง
+                  {stepCount} ขั้นตอน · {machineCount} เครื่อง
                 </span>
+                {/* เลขดิบยังต้องอยู่ — orders.wip_flow_index ตรึง batch ไว้ด้วยเลขนี้
+                    และการซ่อมแถวที่หลุดขั้นตอนก็ต้องอ้างเลขนี้ */}
+                <span className="small text-muted num">(flow {flow.flowIndex})</span>
               </div>
 
               {canEdit && (
                 <div className="d-flex align-items-center gap-1 flex-wrap">
                   <IconButton
                     icon="bi-arrow-up"
-                    label={`เลื่อน Flow ${flow.flowIndex} ขึ้น`}
+                    label={`เลื่อน${flowLabel(flowPos + 1)}ขึ้น`}
                     variant="text-secondary"
                     disabled={flowPos === 0}
                     onClick={() => onMoveFlow(flow.flowIndex, 'up')}
                   />
                   <IconButton
                     icon="bi-arrow-down"
-                    label={`เลื่อน Flow ${flow.flowIndex} ลง`}
+                    label={`เลื่อน${flowLabel(flowPos + 1)}ลง`}
                     variant="text-secondary"
                     disabled={flowPos === flows.length - 1}
                     onClick={() => onMoveFlow(flow.flowIndex, 'down')}
                   />
                   <Button size="sm" variant="outline-success" onClick={() => onAddStep(flow)}>
                     <i className="bi bi-plus-lg me-1" aria-hidden="true" />
-                    Step
+                    ขั้นตอน
                   </Button>
                   <Button size="sm" variant="outline-danger" onClick={() => onDeleteFlow(flow.flowIndex)}>
                     <i className="bi bi-trash me-1" aria-hidden="true" />
-                    Flow
+                    ลบสายนี้
                   </Button>
                 </div>
               )}
@@ -133,9 +138,9 @@ const RoutingTreeView = ({
                   <thead className="table-light">
                     <tr>
                       <th>ขั้นตอน / เครื่องจักร</th>
-                      <th className="text-end" style={{ width: 90 }}>Cycle</th>
-                      <th className="text-end" style={{ width: 90 }}>Setup</th>
-                      <th style={{ width: 140 }}>Jig</th>
+                      <th className="text-end" style={{ width: 110 }}>เวลาต่อชิ้น</th>
+                      <th className="text-end" style={{ width: 110 }}>เวลาตั้งเครื่อง</th>
+                      <th style={{ width: 140 }}>รหัสจิ๊ก</th>
                       <th className="text-end" style={{ width: 170 }}>จัดการ</th>
                     </tr>
                   </thead>
@@ -143,7 +148,7 @@ const RoutingTreeView = ({
                     {flow.steps.length === 0 && (
                       <tr>
                         <td colSpan={5} className="text-muted small text-center py-3">
-                          Flow นี้ยังไม่มี Step
+                          สายการผลิตนี้ยังไม่มีขั้นตอน
                         </td>
                       </tr>
                     )}
@@ -153,7 +158,7 @@ const RoutingTreeView = ({
                         {/* ---- แถว Step ---- */}
                         <tr className="table-light">
                           <td>
-                            <span className="num text-muted me-2">Step {step.stepIndex}</span>
+                            <span className="text-muted me-2">{stepLabel(stepPos + 1)}</span>
                             <span className="fw-bold">{step.stepName || '(ไม่มีชื่อ)'}</span>
                             {step.setupGroup ? (
                               <span className="chip chip-info ms-2">setup: {step.setupGroup}</span>
@@ -165,27 +170,27 @@ const RoutingTreeView = ({
                               <>
                                 <IconButton
                                   icon="bi-arrow-up"
-                                  label={`เลื่อน Step ${step.stepName} ขึ้น`}
+                                  label={`เลื่อนขั้นตอน ${step.stepName} ขึ้น`}
                                   variant="text-secondary"
                                   disabled={stepPos === 0}
                                   onClick={() => onMoveStep(step, 'up')}
                                 />
                                 <IconButton
                                   icon="bi-arrow-down"
-                                  label={`เลื่อน Step ${step.stepName} ลง`}
+                                  label={`เลื่อนขั้นตอน ${step.stepName} ลง`}
                                   variant="text-secondary"
                                   disabled={stepPos === flow.steps.length - 1}
                                   onClick={() => onMoveStep(step, 'down')}
                                 />
                                 <IconButton
                                   icon="bi-pencil-square"
-                                  label={`แก้ไข Step ${step.stepName}`}
+                                  label={`แก้ไขขั้นตอน ${step.stepName}`}
                                   variant="text-primary"
                                   onClick={() => onEditStep(step)}
                                 />
                                 <IconButton
                                   icon="bi-trash"
-                                  label={`ลบ Step ${step.stepName}`}
+                                  label={`ลบขั้นตอน ${step.stepName}`}
                                   variant="text-danger"
                                   onClick={() => onDeleteStep(step)}
                                 />
@@ -195,14 +200,14 @@ const RoutingTreeView = ({
                         </tr>
 
                         {/* ---- แถวเครื่องของ Step นั้น ---- */}
-                        {step.machines.map((mc) => (
+                        {step.machines.map((mc, altPos) => (
                           <tr
                             key={mc.id ?? `${step.stepIndex}-${mc.altIndex}`}
                             className={mc.isActive ? undefined : 'opacity-50'}
                           >
                             <td className="ps-4">
                               <i className="bi bi-arrow-return-right text-muted me-2" aria-hidden="true" />
-                              <span className="num text-muted me-2">Alt {mc.altIndex}</span>
+                              <span className="text-muted me-2">{machineRoleLabel(altPos + 1)}</span>
                               <span className="fw-semibold">{mc.machine}</span>
                               {!mc.isActive && <span className="chip chip-ng ms-2">ปิดใช้งาน</span>}
                             </td>
@@ -219,7 +224,7 @@ const RoutingTreeView = ({
                                     icon={mc.isActive ? 'bi-toggle-on' : 'bi-toggle-off'}
                                     label={
                                       isLastActiveOfStep(step, mc)
-                                        ? 'ปิดไม่ได้ — เป็นเครื่องสุดท้ายที่ยังใช้งานได้ของ Step นี้'
+                                        ? 'ปิดไม่ได้ — เป็นเครื่องสุดท้ายที่ยังใช้งานได้ของขั้นตอนนี้'
                                         : mc.isActive
                                           ? `ปิดใช้งาน ${mc.machine} (ทำโมเดลนี้ไม่ได้)`
                                           : `เปิดใช้งาน ${mc.machine}`
@@ -240,7 +245,7 @@ const RoutingTreeView = ({
                                     icon="bi-trash"
                                     label={
                                       isLastMachineOfStep(step)
-                                        ? 'ลบไม่ได้ — แต่ละ Step ต้องมีเครื่องอย่างน้อย 1 ตัว'
+                                        ? 'ลบไม่ได้ — แต่ละขั้นตอนต้องมีเครื่องอย่างน้อย 1 ตัว'
                                         : `ลบ ${mc.machine}`
                                     }
                                     variant="text-danger"
@@ -263,7 +268,7 @@ const RoutingTreeView = ({
                                 onClick={() => onAddAlt(step)}
                               >
                                 <i className="bi bi-plus-lg me-1" aria-hidden="true" />
-                                เพิ่มเครื่องสำรองให้ Step {step.stepIndex}
+                                เพิ่มเครื่องสำรองให้{stepLabel(stepPos + 1)}
                               </Button>
                             </td>
                           </tr>
@@ -283,25 +288,25 @@ const RoutingTreeView = ({
         <Card className="mb-3 border-warning">
           <Card.Header className="bg-warning-subtle fw-bold">
             <i className="bi bi-exclamation-triangle-fill me-2" aria-hidden="true" />
-            เครื่องที่ไม่มี Step รองรับ ({orphanMachines.length})
+            เครื่องที่ยังไม่ผูกกับขั้นตอนไหน ({orphanMachines.length})
           </Card.Header>
           <Card.Body className="p-0">
             <p className="small text-muted px-3 pt-2 mb-2">
-              แถวใน machine_config ของ {model} ที่ Flow/Step ไม่ตรงกับ Step ไหนเลย —
-              เกิดจากการแก้เลข index ของสองตารางไม่ตรงกัน{' '}
-              <strong>วิธีซ่อมคือกดแก้ไขแล้วเปลี่ยนเลข Flow/Step ให้ตรงกับ Step ที่มีอยู่จริง</strong>{' '}
-              (ปุ่มลบใช้ไม่ได้กับแถวที่อยู่โดด ๆ เพราะ backend กันไม่ให้ลบเครื่องตัวสุดท้ายของแต่ละ Flow/Step)
+              เครื่องของ {model} ที่เลขกำกับไม่ตรงกับขั้นตอนไหนเลย — ระบบยังนำไปคำนวณแผนอยู่{' '}
+              <strong>วิธีซ่อมคือกดแก้ไขแล้วเปลี่ยนเลขกำกับให้ตรงกับขั้นตอนที่มีอยู่จริง</strong>{' '}
+              (ปุ่มลบใช้ไม่ได้กับแถวที่อยู่โดด ๆ เพราะระบบกันไม่ให้ลบเครื่องตัวสุดท้ายของแต่ละเลขกำกับ){' '}
+              เลขดิบด้านล่างคือค่าที่ต้องแก้ให้ตรงกัน
             </p>
             <Table size="sm" hover className="mb-0 align-middle">
               <thead className="table-light">
                 <tr>
-                  <th>Flow</th>
-                  <th>Step</th>
-                  <th>Alt</th>
-                  <th>Machine</th>
-                  <th className="text-end">Cycle</th>
-                  <th className="text-end">Setup</th>
-                  <th>Jig</th>
+                  <th>flow</th>
+                  <th>step</th>
+                  <th>alt</th>
+                  <th>เครื่องจักร</th>
+                  <th className="text-end">เวลาต่อชิ้น</th>
+                  <th className="text-end">เวลาตั้งเครื่อง</th>
+                  <th>รหัสจิ๊ก</th>
                   <th className="text-end">จัดการ</th>
                 </tr>
               </thead>
@@ -331,7 +336,7 @@ const RoutingTreeView = ({
                             label={
                               canDeleteOrphan(mc)
                                 ? `ลบ ${mc.machine}`
-                                : 'ลบไม่ได้ — เป็นเครื่องตัวเดียวของ Flow/Step นี้ ให้แก้เลข Flow/Step แทน'
+                                : 'ลบไม่ได้ — เป็นเครื่องตัวเดียวของเลขกำกับนี้ ให้แก้เลขกำกับแทน'
                             }
                             variant="text-danger"
                             disabled={!canDeleteOrphan(mc)}
@@ -351,7 +356,7 @@ const RoutingTreeView = ({
       {flows.length === 0 && orphanMachines.length === 0 && (
         <div className="empty-state">
           <i className="bi bi-diagram-3" aria-hidden="true" />
-          <div className="fw-bold">Model นี้ยังไม่มี Routing</div>
+          <div className="fw-bold">Model นี้ยังไม่มีขั้นตอนการผลิต</div>
         </div>
       )}
     </>

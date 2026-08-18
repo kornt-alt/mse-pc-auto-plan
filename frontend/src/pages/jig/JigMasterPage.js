@@ -19,6 +19,7 @@ import PlanPreviewDialog from '../orders/PlanPreviewDialog';
 import { buildPlanDiff } from '../orders/planDiff';
 import { buildPlanDetail, buildMachineSchedule } from '../orders/planDetail';
 import JigStatusDialog from './JigStatusDialog';
+import JigAssignDialog from './JigAssignDialog';
 import {
   STATUS_META, normStatus, blockState, describeWindow, effectiveLabel, buildJigOverride,
 } from './jigStatus';
@@ -59,6 +60,7 @@ const JigMasterPage = () => {
   const [editing, setEditing] = useState(null); // null | {} (เพิ่ม) | jig (แก้)
   const [form, setForm] = useState(emptyForm());
   const [statusFor, setStatusFor] = useState(null); // jig ที่กำลังแจ้งสถานะ
+  const [assignFor, setAssignFor] = useState(null); // jig ที่กำลังตั้งค่าการใช้งาน
   const [confirm, setConfirm] = useState(null);
   const [preview, setPreview] = useState(null);
 
@@ -151,6 +153,23 @@ const JigMasterPage = () => {
       setBusy(false);
     }
   }, [statusFor, showToast, load]);
+
+  // ---- ตั้งค่าการใช้งาน (ADMIN/PLANNER) ----
+  // callbacks ต้อง stable — ไดอะล็อกใช้ onError ใน useEffect ตอนโหลดรายการที่ผูกอยู่เดิม
+  const onAssignSaved = useCallback((msg) => {
+    setAssignFor(null);
+    showToast(`${msg} — กด Replan ที่หน้า Orders เพื่อให้แผนสะท้อนการเปลี่ยนแปลง`);
+    load();
+  }, [showToast, load]);
+  // ⚠️ ต่างจาก onAssignSaved ตรงที่ **ไม่ปิดไดอะล็อก** — การลบแถวเป็นขั้นระหว่างทาง
+  // ถ้าปิดจอ ของที่ผู้ใช้ปลดติ๊กค้างไว้จะหายทั้งหมดตอนเปิดใหม่ (effect ตอน mount รีเซ็ต selection)
+  // แต่ยัง load() เพื่อให้เลข "ใช้กับ" ในตารางข้างหลังตรงกับความจริงทันที
+  const onAssignDeleted = useCallback((msg) => {
+    showToast(msg);
+    load();
+  }, [showToast, load]);
+  const onAssignError = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
+  const closeAssign = useCallback(() => setAssignFor(null), []);
 
   // ดูผลกระทบก่อนบันทึก: simulation ล้วน ไม่เขียนอะไรลง DB
   // jig_overrides ส่งไปตัวเดียว — backend merge ทับ jig_master รายตัว ตัวอื่นที่พังจริงยังอยู่ครบ
@@ -288,9 +307,23 @@ const JigMasterPage = () => {
                         </td>
                         <td className="num small">{describeWindow(j, today) || '-'}</td>
                         <td className="text-center num">
-                          {j.usage_count > 0
-                            ? `${j.usage_count} รายการ / ${j.model_count} โมเดล`
-                            : <span className="text-muted">ไม่ถูกใช้</span>}
+                          {/* กดที่ตัวเลขเพื่อดู/จัดการว่าใช้กับอะไรบ้าง — เดิมบอกแค่จำนวน
+                              ไม่มีทางรู้ว่าเป็นรายการไหน นอกจากไล่ค้นทีละโมเดล
+                              MFG กดได้ด้วย (อ่านอย่างเดียว) เพราะเป็นคนแจ้งจิ๊กพังและต้องตอบว่ากระทบอะไร */}
+                          {j.usage_count > 0 ? (
+                            <Button
+                              size="sm"
+                              variant="link"
+                              className="p-0"
+                              onClick={() => setAssignFor(j)}
+                              title={`ดูว่า ${j.jig_id} ใช้กับขั้นตอน/เครื่องไหนบ้าง`}
+                              aria-label={`ดูรายการที่ใช้ ${j.jig_id}`}
+                            >
+                              {`${j.usage_count} รายการ / ${j.model_count} โมเดล`}
+                            </Button>
+                          ) : (
+                            <span className="text-muted">ไม่ถูกใช้</span>
+                          )}
                         </td>
                         <td className="small text-muted">{j.updated_by || '-'}</td>
                         <td className="text-end text-nowrap">
@@ -308,6 +341,16 @@ const JigMasterPage = () => {
                           )}
                           {canEditRegistry && (
                             <>
+                              <Button
+                                size="sm"
+                                variant="link"
+                                className="p-0 me-3 text-success icon-btn"
+                                title="ตั้งค่าการใช้งาน (ใช้กับเครื่อง/Step ไหนบ้าง)"
+                                aria-label={`ตั้งค่าการใช้งานของ ${j.jig_id}`}
+                                onClick={() => setAssignFor(j)}
+                              >
+                                <i className="bi bi-diagram-3" aria-hidden="true" />
+                              </Button>
                               <Button
                                 size="sm"
                                 variant="link"
@@ -415,6 +458,18 @@ const JigMasterPage = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* ตั้งค่าการใช้งาน — callbacks ต้อง stable ไม่งั้น useEffect ในไดอะล็อกจะโหลดใหม่กลางคัน */}
+      <JigAssignDialog
+        show={!!assignFor}
+        jig={assignFor}
+        busy={busy}
+        readOnly={!canEditRegistry}
+        onSaved={onAssignSaved}
+        onDeleted={onAssignDeleted}
+        onError={onAssignError}
+        onHide={closeAssign}
+      />
 
       <JigStatusDialog
         show={!!statusFor}

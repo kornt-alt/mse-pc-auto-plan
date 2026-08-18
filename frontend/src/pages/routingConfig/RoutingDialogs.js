@@ -4,6 +4,8 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Row, Col, Collapse } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
+// สูตรตั้งชื่อ jig อัตโนมัติอยู่ที่เดียว — หน้า Jig ใช้ตัวเดียวกันตอนถอดการผูก jig ออก
+import { resolveJigId } from './jigNaming';
 
 // ช่องแก้เลข index ด้วยมือ — พับไว้เป็นค่าเริ่มต้น
 // ทางปกติของการจัดลำดับคือปุ่ม ▲▼ ในตาราง (POST /routing_config/move ที่สลับสองตารางพร้อมกัน
@@ -53,16 +55,6 @@ const toInt = (v) => parseInt(v, 10) || 0;
 const toFloat = (v) => {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : 0;
-};
-
-// jig_id ที่สั้นกว่า 2 ตัวอักษร → gen "{model}-{machine}-{step}" ให้ unique ต่อ step
-// port จาก routing_config_screen.dart L911-914 (insert step) และ L1302-1308 (insert alt)
-// สำคัญ: ถ้าปล่อย jig ว่าง configProcessor จะแปลงเป็น '-' แล้ว engine.getSmartSetupTime()
-// จะมองว่างานคนละตัวใช้ jig เดียวกัน → คิด MINOR_SETUP แทน setup เต็ม (แผนเพี้ยนแบบเงียบ)
-// หมายเหตุ: dialog แก้ไข (edit) ส่งค่าดิบตามระบบเดิม (dart L499) — ไม่ใช้ helper นี้
-const resolveJigId = (jig, model, machine, stepIndex) => {
-  const j = String(jig ?? '').trim();
-  return j.length < 2 ? `${model}-${machine}-${toInt(stepIndex)}` : j;
 };
 
 // ค่าพิเศษของดรอปดาวน์ jig — เลือกแล้วสลับกลับไปเป็นช่องพิมพ์อิสระ
@@ -128,17 +120,17 @@ const JigSelect = ({ value, jigs, onChange, disabled }) => {
             {j.is_shared ? ' (ใช้ร่วมกันได้)' : ''}
           </option>
         ))}
-        <option value={JIG_CUSTOM}>+ พิมพ์รหัส Jig ใหม่</option>
+        <option value={JIG_CUSTOM}>+ พิมพ์รหัสจิ๊กใหม่</option>
       </Form.Select>
       {selected?.is_shared ? (
         <Form.Text className="text-warning-emphasis">
           <i className="bi bi-exclamation-triangle-fill me-1" aria-hidden="true" />
-          jig นี้ใช้ร่วมกันได้ — งานที่ใช้ jig เดียวกันลงเครื่องเดียวกันติดกันจะคิดเวลา setup
-          แบบสั้น (ค่า minor setup ในหน้าตั้งค่า) เลือกเมื่อของจริงไม่ต้องเปลี่ยน jig เท่านั้น
+          จิ๊กตัวนี้ใช้ร่วมกันได้ — งานที่ใช้จิ๊กเดียวกันลงเครื่องเดียวกันติดกันจะคิดเวลาตั้งเครื่อง
+          แบบสั้น (ค่า minor setup ในหน้าตั้งค่า) เลือกเมื่อของจริงไม่ต้องเปลี่ยนจิ๊กเท่านั้น
         </Form.Text>
       ) : (
         <Form.Text muted>
-          เว้นว่าง = ระบบตั้งชื่อเฉพาะของ Step นี้ให้ (ไม่ได้ส่วนลดเวลา setup)
+          เว้นว่าง = ระบบตั้งชื่อเฉพาะของขั้นตอนนี้ให้ (ไม่ได้ส่วนลดเวลาตั้งเครื่อง)
         </Form.Text>
       )}
     </>
@@ -186,20 +178,20 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
           <i className="bi bi-pencil-square me-2" aria-hidden="true" />
-          แก้ไข Routing
+          แก้ไขขั้นตอนการผลิต
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <Row className="g-2 mb-3">
           <Col xs={12}>
-            <Form.Label className="small">Step Name</Form.Label>
+            <Form.Label className="small">ชื่อขั้นตอน</Form.Label>
             <Form.Control
               value={form.step_name}
               onChange={(e) => setForm((f) => ({ ...f, step_name: e.target.value }))}
             />
           </Col>
           <Col xs={12}>
-            <Form.Label className="small">Setup Group</Form.Label>
+            <Form.Label className="small">กลุ่มการตั้งเครื่อง (Setup Group)</Form.Label>
             <Form.Control
               value={form.setup_group}
               onChange={(e) => setForm((f) => ({ ...f, setup_group: e.target.value }))}
@@ -208,7 +200,7 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
         </Row>
         <AdvancedIndexPanel>
           <Col xs={6}>
-            <Form.Label className="small">Flow Index</Form.Label>
+            <Form.Label className="small">เลขกำกับสายการผลิต</Form.Label>
             <Form.Control
               type="number"
               value={form.flow_index}
@@ -216,7 +208,7 @@ export const EditRoutingDialog = ({ show, row, onHide, onSaved, onError }) => {
             />
           </Col>
           <Col xs={6}>
-            <Form.Label className="small">Step Index</Form.Label>
+            <Form.Label className="small">เลขกำกับขั้นตอน</Form.Label>
             <Form.Control
               type="number"
               value={form.step_index}
@@ -284,13 +276,13 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
           <i className="bi bi-pencil-square me-2" aria-hidden="true" />
-          แก้ไข Machine Config
+          แก้ไขเครื่องจักร
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <Row className="g-2 mb-3">
           <Col xs={12}>
-            <Form.Label className="small">Machine</Form.Label>
+            <Form.Label className="small">เครื่องจักร</Form.Label>
             <MachineSelect
               value={form.machine}
               machines={machines}
@@ -298,7 +290,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Cycle Time</Form.Label>
+            <Form.Label className="small">เวลาต่อชิ้น (นาที)</Form.Label>
             <Form.Control
               type="number"
               value={form.cycle_time}
@@ -306,7 +298,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Setup Time</Form.Label>
+            <Form.Label className="small">เวลาตั้งเครื่อง (นาที)</Form.Label>
             <Form.Control
               type="number"
               value={form.setup_time}
@@ -314,7 +306,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Jig ID</Form.Label>
+            <Form.Label className="small">รหัสจิ๊ก</Form.Label>
             <JigSelect
               value={form.jig_id}
               jigs={jigs}
@@ -324,7 +316,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
         </Row>
         <AdvancedIndexPanel>
           <Col xs={4}>
-            <Form.Label className="small">Flow</Form.Label>
+            <Form.Label className="small">เลขกำกับสายการผลิต</Form.Label>
             <Form.Control
               type="number"
               value={form.flow_index}
@@ -332,7 +324,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Step</Form.Label>
+            <Form.Label className="small">เลขกำกับขั้นตอน</Form.Label>
             <Form.Control
               type="number"
               value={form.step_index}
@@ -340,7 +332,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Alt</Form.Label>
+            <Form.Label className="small">ลำดับเครื่องสำรอง</Form.Label>
             <Form.Control
               type="number"
               value={form.alternative_index}
@@ -361,7 +353,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
   );
 };
 
-// ===== แทรก Step (POST /routing_config/insert_step) =====
+// ===== แทรกขั้นตอน (POST /routing_config/insert_step) =====
 // defaults = insertStepDefaults(flow) จาก routingTree.js — { flowIndex, stepIndex, setupGroup, steps }
 // ค่าเริ่มต้นคือ "ต่อท้าย flow ที่กด + Step มา" (ของเดิม default step_index = 0 = แทรกหัวสุดเสมอ)
 export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide, onSaved, onError }) => {
@@ -412,7 +404,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
           jig_id: resolveJigId(form.jig_id, model, form.machine, form.step_index),
         }),
       });
-      onSaved('แทรก Step แล้ว');
+      onSaved('แทรกขั้นตอน แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -425,7 +417,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
           <i className="bi bi-plus-lg me-2" aria-hidden="true" />
-          แทรก Step ใหม่ ({model}) — Flow {form.flow_index}
+          แทรกขั้นตอน ใหม่ ({model}) — Flow {form.flow_index}
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -438,7 +430,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
               value={form.step_index}
               onChange={(e) => setForm((f) => ({ ...f, step_index: e.target.value }))}
             >
-              <option value={appendIndex}>ต่อท้าย Flow นี้ (เป็น Step {appendIndex})</option>
+              <option value={appendIndex}>ต่อท้ายสายการผลิตนี้ (เป็นขั้นสุดท้าย)</option>
               {existingSteps.map((s) => (
                 <option key={s.stepIndex} value={s.stepIndex}>
                   แทรกก่อน Step {s.stepIndex}
@@ -451,21 +443,21 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
             </Form.Text>
           </Col>
           <Col xs={6}>
-            <Form.Label className="small">Step Name</Form.Label>
+            <Form.Label className="small">ชื่อขั้นตอน</Form.Label>
             <Form.Control
               value={form.step_name}
               onChange={(e) => setForm((f) => ({ ...f, step_name: e.target.value }))}
             />
           </Col>
           <Col xs={6}>
-            <Form.Label className="small">Setup Group</Form.Label>
+            <Form.Label className="small">กลุ่มการตั้งเครื่อง (Setup Group)</Form.Label>
             <Form.Control
               value={form.setup_group}
               onChange={(e) => setForm((f) => ({ ...f, setup_group: e.target.value }))}
             />
           </Col>
           <Col xs={12}>
-            <Form.Label className="small">Machine (Alt 0)</Form.Label>
+            <Form.Label className="small">เครื่องหลักของขั้นนี้</Form.Label>
             <MachineSelect
               value={form.machine}
               machines={machines}
@@ -473,7 +465,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Cycle Time</Form.Label>
+            <Form.Label className="small">เวลาต่อชิ้น (นาที)</Form.Label>
             <Form.Control
               type="number"
               value={form.cycle_time}
@@ -481,7 +473,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Setup Time</Form.Label>
+            <Form.Label className="small">เวลาตั้งเครื่อง (นาที)</Form.Label>
             <Form.Control
               type="number"
               value={form.setup_time}
@@ -489,7 +481,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Jig ID</Form.Label>
+            <Form.Label className="small">รหัสจิ๊ก</Form.Label>
             <JigSelect
               value={form.jig_id}
               jigs={jigs}
@@ -568,7 +560,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
         ) : null}
         <Row className="g-2">
           <Col xs={12}>
-            <Form.Label className="small">Machine</Form.Label>
+            <Form.Label className="small">เครื่องจักร</Form.Label>
             <MachineSelect
               value={form.machine}
               machines={machines}
@@ -576,7 +568,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Cycle Time</Form.Label>
+            <Form.Label className="small">เวลาต่อชิ้น (นาที)</Form.Label>
             <Form.Control
               type="number"
               value={form.cycle_time}
@@ -584,7 +576,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Setup Time</Form.Label>
+            <Form.Label className="small">เวลาตั้งเครื่อง (นาที)</Form.Label>
             <Form.Control
               type="number"
               value={form.setup_time}
@@ -592,7 +584,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
             />
           </Col>
           <Col xs={4}>
-            <Form.Label className="small">Jig ID</Form.Label>
+            <Form.Label className="small">รหัสจิ๊ก</Form.Label>
             <JigSelect
               value={form.jig_id}
               jigs={jigs}
@@ -613,7 +605,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
   );
 };
 
-// ===== เพิ่ม Flow ใหม่ (POST /routing_config/add_flow) =====
+// ===== เพิ่มสายการผลิต ใหม่ (POST /routing_config/add_flow) =====
 export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError }) => {
   const [machine, setMachine] = useState('');
   const [busy, setBusy] = useState(false);
@@ -629,7 +621,7 @@ export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError 
         method: 'POST',
         body: JSON.stringify({ model, machine }),
       });
-      onSaved('เพิ่ม Flow ใหม่แล้ว');
+      onSaved('เพิ่มสายการผลิต ใหม่แล้ว');
     } catch (err) {
       onError(err.message);
     } finally {
@@ -642,7 +634,7 @@ export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError 
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }}>
           <i className="bi bi-plus-lg me-2" aria-hidden="true" />
-          เพิ่ม Flow ใหม่ ({model})
+          เพิ่มสายการผลิต ใหม่ ({model})
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -655,19 +647,19 @@ export const AddFlowDialog = ({ show, model, machines, onHide, onSaved, onError 
           ยกเลิก
         </Button>
         <Button className="btn-mse" onClick={save} disabled={busy || !machine}>
-          เพิ่ม Flow
+          เพิ่มสายการผลิต
         </Button>
       </Modal.Footer>
     </Modal>
   );
 };
 
-// ===== ลบ Flow (DELETE /routing_config/delete_flow?model=&flow_index=&is_last_flow=) =====
+// ===== ลบสายการผลิต (DELETE /routing_config/delete_flow?model=&flow_index=&is_last_flow=) =====
 export const DeleteFlowDialog = ({ show, model, flows, defaultFlowIndex, onHide, onSaved, onError }) => {
   const [flowIndex, setFlowIndex] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // เปิดจากปุ่ม "ลบ Flow" ของ flow ไหน ก็เลือก flow นั้นไว้ให้เลย (ยังเปลี่ยนได้จากดรอปดาวน์)
+  // เปิดจากปุ่ม "ลบสายการผลิต" ของ flow ไหน ก็เลือก flow นั้นไว้ให้เลย (ยังเปลี่ยนได้จากดรอปดาวน์)
   useEffect(() => {
     if (!show) return;
     if (defaultFlowIndex !== null && defaultFlowIndex !== undefined) {
@@ -686,7 +678,7 @@ export const DeleteFlowDialog = ({ show, model, flows, defaultFlowIndex, onHide,
     try {
       const qs = `model=${encodeURIComponent(model)}&flow_index=${toInt(flowIndex)}&is_last_flow=${isLastFlow}`;
       await apiCall(`/routing_config/delete_flow?${qs}`, { method: 'DELETE' });
-      onSaved(`ลบ Flow ${flowIndex} แล้ว`);
+      onSaved(`ลบสายการผลิต ${flowIndex} แล้ว`);
     } catch (err) {
       onError(err.message);
     } finally {
@@ -699,11 +691,11 @@ export const DeleteFlowDialog = ({ show, model, flows, defaultFlowIndex, onHide,
       <Modal.Header closeButton>
         <Modal.Title style={{ fontSize: '1.1rem' }} className="text-danger">
           <i className="bi bi-trash me-2" aria-hidden="true" />
-          ลบ Flow ({model})
+          ลบสายการผลิต ({model})
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <Form.Label className="small">เลือก Flow ที่จะลบ</Form.Label>
+        <Form.Label className="small">เลือกสายการผลิตที่จะลบ</Form.Label>
         <Form.Select value={flowIndex} onChange={(e) => setFlowIndex(e.target.value)}>
           {(flows ?? []).map((f) => (
             <option key={f} value={f}>
@@ -722,7 +714,7 @@ export const DeleteFlowDialog = ({ show, model, flows, defaultFlowIndex, onHide,
           ยกเลิก
         </Button>
         <Button variant="danger" onClick={save} disabled={busy || flowIndex === ''}>
-          ลบ Flow
+          ลบสายการผลิต
         </Button>
       </Modal.Footer>
     </Modal>

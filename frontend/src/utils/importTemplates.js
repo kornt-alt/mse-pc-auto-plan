@@ -53,7 +53,7 @@ export const TEMPLATE_SPECS = {
       { name: 'Machine', format: 'ข้อความ', example: 'CNC-01' },
       { name: 'CycleTime', format: 'ตัวเลข (นาที/ชิ้น)', default: '0', example: '2.5' },
       { name: 'SetupTime', format: 'ตัวเลข (นาที)', default: '0', example: '30' },
-      { name: 'JigID', format: 'ข้อความ', default: '-', example: 'JIG-01' },
+      { name: 'JigID', format: 'ข้อความ (ใส่หลายตัวคั่นด้วย , ได้)', default: '-', example: 'JIG-01,JIG-07' },
     ],
   },
   routing: {

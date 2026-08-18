@@ -6,7 +6,7 @@
 
 const { DROP_DATES } = require('../config/constants');
 const { pyRound, pyInt } = require('./pyUtils');
-const { isBlockedThroughHorizon } = require('./jigBlocks');
+const { isBlockedThroughHorizon, normalizeJigList } = require('./jigBlocks');
 
 const isDict = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -132,8 +132,12 @@ function findBlockedSteps(machineRows, jigBlockMap, lastCalendarDate) {
       });
     }
     const g = groups.get(key);
-    if (isBlockedThroughHorizon(jigBlockMap, r.jig_id, lastCalendarDate)) {
-      g.jigs.add(String(r.jig_id ?? '').trim());
+    // แถวที่ต้องใช้หลายจิ๊กเป็น AND — ตัวใดตัวหนึ่งตันยาวถึงปลายปฏิทิน ทางเลือกนี้ก็ใช้ไม่ได้
+    // (รายงานชื่อจิ๊กที่ตันจริง ๆ ทุกตัว ไม่ใช่แค่จิ๊กหลัก ไม่งั้นผู้ใช้ไปแก้ผิดตัว)
+    const required = normalizeJigList([r.jig_id, ...(Array.isArray(r.extra_jigs) ? r.extra_jigs : [])]);
+    const blockedHere = required.filter((j) => isBlockedThroughHorizon(jigBlockMap, j, lastCalendarDate));
+    if (blockedHere.length > 0) {
+      for (const j of blockedHere) g.jigs.add(j);
     } else {
       g.usable += 1;
     }

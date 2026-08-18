@@ -8,6 +8,7 @@
 'use strict';
 
 const { isDigit, pyInt, pyFloat } = require('./pyUtils');
+const { normalizeJigList, jigSetKey } = require('./jigBlocks');
 
 // get_value_strict (L53-58): lookup คีย์แบบ case-insensitive + trim
 function getValueStrict(row, keyName) {
@@ -84,8 +85,22 @@ function processUnifiedMachineConfig(flatData) {
     } catch {
       stVal = 0.0;
     }
+    // ชุดจิ๊กของแถวนี้ = จิ๊กหลัก (JigID) + จิ๊กเสริม (ExtraJigs จากตาราง machine_config_jig)
+    // ความหมายเป็น AND — ต้องว่างครบทุกตัวถึงทำงานวันนั้นได้ (ดู scheduler/jigBlocks.js)
     const rawJig = getValueStrict(row, 'JigID');
-    const stDict = { time: stVal, jig: rawJig || '-' };
+    const rawExtras = getValueStrict(row, 'ExtraJigs');
+    const extras = Array.isArray(rawExtras) ? rawExtras : [];
+    const jigs = normalizeJigList([rawJig, ...extras]);
+
+    // ⚠️ ไม่มีจิ๊กเสริม = คำนวณ jig **ด้วยนิพจน์เดิมเป๊ะ** ไม่ผ่าน normalize
+    // เพราะ normalizeJigList trim ช่องว่างทิ้ง ส่วนโค้ดเดิมไม่ trim — ค่าที่มีช่องว่างติดมา
+    // จะได้คีย์คนละตัวกับที่ Python เคยได้ แล้ว parity fixtures พังโดยไม่ได้ตั้งใจ
+    // มีจิ๊กเสริมเมื่อไหร่ถึงใช้คีย์แบบชุด (เคสนั้นไม่มีใน fixtures อยู่แล้ว)
+    const stDict = {
+      time: stVal,
+      jig: extras.length ? jigSetKey(jigs) : (rawJig || '-'),
+      jigs,
+    };
 
     for (const outDict of [fmOut, ctOut, stOut]) {
       if (!(model in outDict)) outDict[model] = new Map();

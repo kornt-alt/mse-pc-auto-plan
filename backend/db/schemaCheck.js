@@ -38,6 +38,11 @@ const OPTIONAL_OBJECTS = [
     impact: 'หน้า Jig ใช้ไม่ได้ และแผนจะไม่รู้ว่า jig ตัวไหนพัง (scheduler/jigBlocks.js)',
   },
   {
+    name: 'machine_config_jig',
+    kind: 'table',
+    impact: 'แถวที่ต้องใช้หลายจิ๊กพร้อมกันเก็บได้แค่ตัวเดียว จิ๊กตัวที่สองพังแล้วแผนไม่รู้ (scheduler/jigBlocks.js)',
+  },
+  {
     name: 'machine_config.is_active',
     kind: 'column',
     table: 'machine_config',

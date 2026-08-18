@@ -24,10 +24,27 @@ async function loadInputs(isReplan) {
   // ไม่มีคอลัมน์ = ถือว่าเปิดใช้งานทุกแถว = พฤติกรรมเดิมทุกประการ
   const hasActiveCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
   const machineRows = await query(
-    `SELECT model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
+    `SELECT id, model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
             ${hasActiveCol ? ', is_active' : ''}
      FROM machine_config ORDER BY id`,
   );
+
+  // จิ๊กเสริม (แถวที่ต้องใช้หลายจิ๊กพร้อมกัน) — ตารางสร้างด้วย DDL รันมือ
+  // ไม่มีตาราง = ไม่มีแถวไหนใช้จิ๊กเสริม = พฤติกรรมเดิมทุกบิต (กติกาเดียวกับ jig_master)
+  // ⚠️ ผูกด้วย machine_config.id ไม่ใช่ตำแหน่งในอาเรย์ — filterActiveMachines เรียง
+  // alternative_index ใหม่ทีหลัง ถ้าผูกด้วยตำแหน่งจิ๊กเสริมจะไปโผล่ผิดเครื่อง
+  const hasExtraJigTable =
+    (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
+  const extraJigRows = hasExtraJigTable
+    ? await query('SELECT machine_config_id, jig_id FROM machine_config_jig')
+    : [];
+  const extraJigsById = new Map();
+  for (const r of extraJigRows) {
+    const list = extraJigsById.get(r.machine_config_id) ?? [];
+    list.push(r.jig_id);
+    extraJigsById.set(r.machine_config_id, list);
+  }
+  for (const m of machineRows) m.extra_jigs = extraJigsById.get(m.id) ?? [];
   // jig_master เป็นตารางที่สร้างด้วย DDL รันมือ — ไม่มีตาราง = ไม่มี jig ตัวไหนถูกบล็อก
   // (กติกาเดียวกับ activity_log / order_date_log: ขาดแล้วต้อง degrade เงียบ ๆ ไม่ใช่พัง)
   const hasJigTable = (await query("SELECT OBJECT_ID('jig_master') AS id"))[0].id != null;
@@ -148,6 +165,7 @@ async function run(isReplan = false, options = {}) {
     Model: m.model, FlowIndex: m.flow_index, StepIndex: m.step_index,
     AlternativeIndex: m.alternative_index, Machine: m.machine,
     CycleTime: m.cycle_time, SetupTime: m.setup_time, JigID: m.jig_id,
+    ExtraJigs: m.extra_jigs ?? [],
   }));
   const routing = processRouting(flatRouting);
   const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(flatMachine);

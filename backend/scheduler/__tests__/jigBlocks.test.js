@@ -10,6 +10,10 @@ const {
   mergeJigOverrides,
   isBlockedOn,
   isBlockedThroughHorizon,
+  jigSetKey,
+  isAnyJigBlocked,
+  blockedJigsOf,
+  isAnyBlockedThroughHorizon,
 } = require('../jigBlocks');
 
 const TODAY = '2026-08-17';
@@ -159,4 +163,80 @@ test('isBlockedThroughHorizon: jig ที่ไม่ได้ถูกบล็
   const map = buildJigBlockMap([{ jig_id: 'J1', status: 'BROKEN' }], TODAY);
   assert.equal(isBlockedThroughHorizon(map, 'J2', '2026-11-30'), false);
   assert.equal(isBlockedThroughHorizon(map, '-', '2026-11-30'), false);
+});
+
+// ===================================================================
+// หลายจิ๊กต่อแถว (AND) — ต้องให้ผลเท่าเดิมทุกบิตเมื่อมีจิ๊กตัวเดียว
+// ===================================================================
+test('jigSetKey: จิ๊กตัวเดียวได้คีย์เท่ากับตัวมันเอง (พฤติกรรมเดิมเป๊ะ)', () => {
+  assert.equal(jigSetKey(['J-001']), 'J-001');
+  assert.equal(jigSetKey('J-001'), 'J-001');
+});
+
+// '-' คือ sentinel "ไม่มีจิ๊ก" ที่ configProcessor ใส่ให้ — คีย์ต้องออกมาเป็น '-' เหมือนเดิม
+test('jigSetKey: ว่าง / มีแต่ sentinel → "-"', () => {
+  assert.equal(jigSetKey([]), '-');
+  assert.equal(jigSetKey(['']), '-');
+  assert.equal(jigSetKey(['-']), '-');
+  assert.equal(jigSetKey(null), '-');
+  assert.equal(jigSetKey(undefined), '-');
+});
+
+test('jigSetKey: ลำดับที่กรอกไม่มีผล — {J1,J2} ต้องได้คีย์เดียวกับ {J2,J1}', () => {
+  assert.equal(jigSetKey(['J-002', 'J-001']), jigSetKey(['J-001', 'J-002']));
+});
+
+// ⚠️ ถ้าไม่กรอง sentinel ทิ้งก่อน ชุดนี้จะได้คีย์ต่างจาก ['J-001'] แล้วส่วนลด setup หายเงียบ ๆ
+test('jigSetKey: sentinel ปนมาต้องถูกตัดทิ้ง ไม่ทำให้คีย์เพี้ยน', () => {
+  assert.equal(jigSetKey(['J-001', '-']), 'J-001');
+  assert.equal(jigSetKey(['J-001', '']), 'J-001');
+});
+
+test('jigSetKey: ตัวซ้ำถูกยุบ', () => {
+  assert.equal(jigSetKey(['J-001', 'J-001']), 'J-001');
+});
+
+// ⚠️ กฎคือ "ชุดเหมือนกันเป๊ะ" ไม่ใช่ซ้อนกันบางตัว — {J1} ต่อจาก {J1,J2} ยังต้องถอด J2 = setup เต็ม
+test('jigSetKey: ชุดที่ซ้อนกันบางส่วนต้องได้คีย์ต่างกัน (ไม่ได้ส่วนลด)', () => {
+  assert.notEqual(jigSetKey(['J-001']), jigSetKey(['J-001', 'J-002']));
+});
+
+const twoBroken = buildJigBlockMap(
+  [
+    { jig_id: 'J-A', status: 'BROKEN', unavailable_from: '2026-08-10', unavailable_to: '2026-08-12' },
+  ],
+  '2026-08-01'
+);
+
+test('isAnyJigBlocked: ลิสต์ตัวเดียวให้ผลเท่า isBlockedOn เดิม', () => {
+  assert.equal(isAnyJigBlocked(twoBroken, ['J-A'], '2026-08-11'), isBlockedOn(twoBroken, 'J-A', '2026-08-11'));
+  assert.equal(isAnyJigBlocked(twoBroken, ['J-A'], '2026-08-20'), isBlockedOn(twoBroken, 'J-A', '2026-08-20'));
+});
+
+// นี่คือหัวใจของ AND — J-B ว่างก็ช่วยไม่ได้ ถ้า J-A พัง
+test('isAnyJigBlocked: ตัวใดตัวหนึ่งพัง = ทั้งแถวใช้ไม่ได้', () => {
+  assert.equal(isAnyJigBlocked(twoBroken, ['J-A', 'J-B'], '2026-08-11'), true);
+  assert.equal(isAnyJigBlocked(twoBroken, ['J-B', 'J-A'], '2026-08-11'), true);
+});
+
+test('isAnyJigBlocked: ไม่มีตัวไหนพาดช่วงนั้น = ใช้ได้', () => {
+  assert.equal(isAnyJigBlocked(twoBroken, ['J-B', 'J-C'], '2026-08-11'), false);
+  assert.equal(isAnyJigBlocked(twoBroken, ['J-A', 'J-B'], '2026-08-13'), false);
+});
+
+test('isAnyJigBlocked: ชุดว่าง / sentinel ไม่เคยถูกบล็อก', () => {
+  assert.equal(isAnyJigBlocked(twoBroken, [], '2026-08-11'), false);
+  assert.equal(isAnyJigBlocked(twoBroken, ['-'], '2026-08-11'), false);
+  assert.equal(isAnyJigBlocked({}, ['J-A'], '2026-08-11'), false);
+});
+
+test('blockedJigsOf: บอกได้ว่าตัวไหนพัง (เอาไปขึ้นข้อความว่า "จิ๊กตัวไหน")', () => {
+  assert.deepEqual(blockedJigsOf(twoBroken, ['J-A', 'J-B'], '2026-08-11'), ['J-A']);
+  assert.deepEqual(blockedJigsOf(twoBroken, ['J-A', 'J-B'], '2026-08-20'), []);
+});
+
+test('isAnyBlockedThroughHorizon: ตัวใดตัวหนึ่งตันยาว = step ตัน', () => {
+  const forever = buildJigBlockMap([{ jig_id: 'J-X', status: 'BROKEN' }], '2026-08-01');
+  assert.equal(isAnyBlockedThroughHorizon(forever, ['J-X', 'J-Y'], '2026-09-30'), true);
+  assert.equal(isAnyBlockedThroughHorizon(forever, ['J-Y'], '2026-09-30'), false);
 });

@@ -57,10 +57,10 @@ test('แสดง step พร้อมเครื่องของ step น�
 
 test('ปุ่มเลื่อนขึ้นของ step แรก และเลื่อนลงของ step สุดท้าย ต้อง disable', () => {
   renderTree();
-  expect(screen.getByLabelText('เลื่อน Step CUT ขึ้น')).toBeDisabled();
-  expect(screen.getByLabelText('เลื่อน Step CUT ลง')).toBeEnabled();
-  expect(screen.getByLabelText('เลื่อน Step WASH ขึ้น')).toBeEnabled();
-  expect(screen.getByLabelText('เลื่อน Step WASH ลง')).toBeDisabled();
+  expect(screen.getByLabelText('เลื่อนขั้นตอน CUT ขึ้น')).toBeDisabled();
+  expect(screen.getByLabelText('เลื่อนขั้นตอน CUT ลง')).toBeEnabled();
+  expect(screen.getByLabelText('เลื่อนขั้นตอน WASH ขึ้น')).toBeEnabled();
+  expect(screen.getByLabelText('เลื่อนขั้นตอน WASH ลง')).toBeDisabled();
 });
 
 test('เครื่องตัวสุดท้ายของ step ลบไม่ได้ (ตรงกับ guard ฝั่ง backend)', () => {
@@ -69,7 +69,7 @@ test('เครื่องตัวสุดท้ายของ step ลบ�
   expect(screen.getByLabelText('ลบ MC-A')).toBeEnabled();
   // step WASH เหลือเครื่องเดียว → ปุ่มลบ disable พร้อมบอกเหตุผลเป็นภาษาไทย
   expect(
-    screen.getByLabelText('ลบไม่ได้ — แต่ละ Step ต้องมีเครื่องอย่างน้อย 1 ตัว')
+    screen.getByLabelText('ลบไม่ได้ — แต่ละขั้นตอนต้องมีเครื่องอย่างน้อย 1 ตัว')
   ).toBeDisabled();
 });
 
@@ -77,23 +77,23 @@ test('canEdit=false (MFG) ไม่เห็นปุ่มแก้ไข/ล�
   renderTree({ canEdit: false });
   expect(screen.getByText('CUT')).toBeInTheDocument();
   expect(screen.getByText('MC-A')).toBeInTheDocument();
-  expect(screen.queryByLabelText('แก้ไข Step CUT')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('แก้ไขขั้นตอน CUT')).not.toBeInTheDocument();
   expect(screen.queryByLabelText('ลบ MC-A')).not.toBeInTheDocument();
-  expect(screen.queryByLabelText('เลื่อน Step CUT ลง')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('เลื่อนขั้นตอน CUT ลง')).not.toBeInTheDocument();
 });
 
 test('wipRefs > 0 ขึ้นแถบเตือน, = 0 ไม่ขึ้น', () => {
   const { unmount } = renderTree({ wipRefs: 3 });
-  expect(screen.getByText(/ตรึงตำแหน่ง WIP/)).toBeInTheDocument();
+  expect(screen.getByText(/ตรึงตำแหน่งงานค้าง/)).toBeInTheDocument();
   unmount();
   renderTree({ wipRefs: 0 });
-  expect(screen.queryByText(/ตรึงตำแหน่ง WIP/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/ตรึงตำแหน่งงานค้าง/)).not.toBeInTheDocument();
 });
 
 test('เครื่องที่หลุดจาก step โผล่ในกล่องเตือน ไม่หายเงียบ', () => {
   const tree = buildRoutingTree([r(1, 0, 0, 'CUT')], [m(10, 0, 0, 0, 'MC-A'), m(99, 0, 7, 0, 'MC-LOST')]);
   render(<RoutingTreeView tree={tree} model="KT1" canEdit {...handlers} />);
-  expect(screen.getByText(/เครื่องที่ไม่มี Step รองรับ/)).toBeInTheDocument();
+  expect(screen.getByText(/เครื่องที่ยังไม่ผูกกับขั้นตอนไหน/)).toBeInTheDocument();
   expect(screen.getByText('MC-LOST')).toBeInTheDocument();
 });
 
@@ -104,7 +104,7 @@ test('orphan ที่อยู่โดด ๆ ปุ่มลบต้อง d
   );
   render(<RoutingTreeView tree={tree} model="KT1" canEdit {...handlers} />);
   expect(
-    screen.getByLabelText('ลบไม่ได้ — เป็นเครื่องตัวเดียวของ Flow/Step นี้ ให้แก้เลข Flow/Step แทน')
+    screen.getByLabelText('ลบไม่ได้ — เป็นเครื่องตัวเดียวของเลขกำกับนี้ ให้แก้เลขกำกับแทน')
   ).toBeDisabled();
   // orphan ที่มีเพื่อนร่วม (flow, step) ยังลบได้ตามปกติ
   expect(screen.getByLabelText('ลบ MC-P1')).toBeEnabled();
@@ -115,16 +115,16 @@ test('orphan ที่อยู่โดด ๆ ปุ่มลบต้อง d
 test('ย่อ Flow แล้วตารางหายไป กดอีกทีกลับมา', () => {
   renderTree();
   expect(screen.getByText('CUT')).toBeInTheDocument();
-  fireEvent.click(screen.getByLabelText('ย่อ Flow 0'));
+  fireEvent.click(screen.getByLabelText('ย่อสายการผลิตที่ 1'));
   expect(screen.queryByText('CUT')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByLabelText('ขยาย Flow 0'));
+  fireEvent.click(screen.getByLabelText('ขยายสายการผลิตที่ 1'));
   expect(screen.getByText('CUT')).toBeInTheDocument();
 });
 
 test('ปุ่มเลื่อน step ส่ง direction ที่ถูกต้องกลับไปให้ parent', () => {
   const onMoveStep = jest.fn();
   render(<RoutingTreeView tree={sampleTree()} model="KT1" canEdit {...handlers} onMoveStep={onMoveStep} />);
-  fireEvent.click(screen.getByLabelText('เลื่อน Step CUT ลง'));
+  fireEvent.click(screen.getByLabelText('เลื่อนขั้นตอน CUT ลง'));
   expect(onMoveStep).toHaveBeenCalledTimes(1);
   expect(onMoveStep.mock.calls[0][0].stepName).toBe('CUT');
   expect(onMoveStep.mock.calls[0][1]).toBe('down');
@@ -149,7 +149,7 @@ test('เครื่องสุดท้ายที่ยังเปิด�
   );
   render(<RoutingTreeView tree={tree} model="KT1" canEdit {...handlers} />);
   expect(
-    screen.getByLabelText('ปิดไม่ได้ — เป็นเครื่องสุดท้ายที่ยังใช้งานได้ของ Step นี้'),
+    screen.getByLabelText('ปิดไม่ได้ — เป็นเครื่องสุดท้ายที่ยังใช้งานได้ของขั้นตอนนี้'),
   ).toBeDisabled();
   // ตัวที่ปิดอยู่แล้วต้องเปิดคืนได้เสมอ
   expect(screen.getByLabelText('เปิดใช้งาน MC-B')).toBeEnabled();
