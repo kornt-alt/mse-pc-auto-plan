@@ -50,6 +50,13 @@ const OPTIONAL_OBJECTS = [
     impact: 'ปิดเครื่องที่ทำโมเดลนี้ไม่ได้ถาวรไม่ได้ ทุกเครื่องใน machine_config ถือว่าใช้ได้หมด',
   },
   {
+    name: 'machine_config.comments',
+    kind: 'column',
+    table: 'machine_config',
+    column: 'comments',
+    impact: 'ช่อง Comments ในหน้า Shop Floor / Tracking ว่างเสมอ และ import machines ไม่เก็บคอลัมน์นี้',
+  },
+  {
     name: 'orders.material_arrived',
     kind: 'column',
     table: 'orders',

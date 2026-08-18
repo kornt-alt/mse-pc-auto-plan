@@ -44,7 +44,11 @@ test('OPTIONAL_OBJECTS: ครอบ object ที่ CLAUDE.md ระบุว�
     'activity_log',
     'order_date_log',
     'system_settings',
+    'jig_master',
+    'machine_config_jig',
     'orders.material_arrived',
+    'machine_config.is_active',
+    'machine_config.comments',
   ]) {
     assert.ok(names.includes(expected), `ขาด ${expected} ในลิสต์`);
   }

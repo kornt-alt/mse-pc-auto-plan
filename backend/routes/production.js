@@ -280,19 +280,25 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       });
     }
 
-    const configRows = await query(
-      // หมายเหตุ: ตรวจสอบชื่อคอลัมน์ในตาราง machine_config ของคุณด้วย 
-      // ถ้าไม่ได้ใช้ process_step ให้แก้เป็นชื่อที่ถูกต้อง (เช่น step)
-      `SELECT step_index, machine, comments 
-       FROM machine_config 
-       WHERE model = @model`,
-      { model: orderModelName }
-    );
+    // คำแนะนำการทำงานต่อเครื่อง — machine_config.comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ
+    // ไม่มีก็ต้องไม่พัง (house style เดียวกับ orders.material_arrived / machine_config.is_active)
+    // แถวของหน้านี้เป็น "เครื่องที่วางแผนไว้" จึงจับคู่ตรง ๆ ด้วย step_index|machine ได้
+    // ⚠️ กรอง flow_index ไม่ได้ เพราะ plannedSteps มาจาก schedule_results ซึ่งไม่มีคอลัมน์นั้น
+    //    (ดู SCHEDULE_RESULT_COLUMNS ใน services/schedulerService.js) — โมเดลที่มีหลาย flow
+    //    และ step_index+machine ซ้ำกันข้าม flow จะชนกันใน Map (ตัวหลังทับ) เป็นข้อจำกัดเดิม
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
 
     const commentsMap = new Map();
-    for (const c of configRows) {
-      if (c.comments) {
-        commentsMap.set(`${c.step_index}|${c.machine}`, String(c.comments).trim());
+    if (hasComments) {
+      const configRows = await query(
+        'SELECT step_index, machine, comments FROM machine_config WHERE model = @model',
+        { model: orderModelName }
+      );
+      for (const c of configRows) {
+        if (c.comments) {
+          commentsMap.set(`${c.step_index}|${c.machine}`, String(c.comments).trim());
+        }
       }
     }
 

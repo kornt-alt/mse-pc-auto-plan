@@ -419,10 +419,12 @@ router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (re
           floatOr0(r.CycleTime),
           floatOr0(r.SetupTime),
           primary,
-          // ⚠️ ตัวที่ 9 เกินจำนวน columns — bulkInsert อ่านแค่ columns.length แรก จึงไม่ถูกเขียน
-          // แต่ dedupeExact (JSON.stringify ทั้งแถว) ยังนับมันด้วย ซึ่งถูกต้อง:
-          // สองแถวที่ต่างกันแค่จิ๊กเสริมคือคนละแถวจริง ๆ ไม่ควรถูกยุบ
+          // ⚠️ ตำแหน่งที่ 9 (index 8) = comments — เขียนจริงเฉพาะเมื่อคอลัมน์มีอยู่ (ดู hasComments
+          // ข้างล่าง) ไม่มีคอลัมน์ = columns เหลือ 8 ตัว bulkInsert จึงข้ามช่องนี้ไปเอง
           (r.Comments || '').trim(),
+          // ⚠️ ตำแหน่งที่ 10 (index 9) เกินจำนวน columns เสมอ — bulkInsert อ่านแค่ columns.length
+          // แรก จึงไม่ถูกเขียน แต่ dedupeExact (JSON.stringify ทั้งแถว) ยังนับมันด้วย ซึ่งถูกต้อง:
+          // สองแถวที่ต่างกันแค่จิ๊กเสริมคือคนละแถวจริง ๆ ไม่ควรถูกยุบ
           extras,
         ];
       });
@@ -437,9 +439,18 @@ router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (re
       });
     }
 
+    // comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ — ไม่มีก็แค่ไม่เขียนช่องนั้น ไฟล์ยัง import ได้ปกติ
+    // (ต่างจากจิ๊กเสริมข้างบนที่ต้องปฏิเสธ เพราะข้อมูลจะหายไปแบบเงียบ ๆ ถ้าเขียนครึ่งเดียว)
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+
     await writeConfigTable(req, res, {
       table: 'machine_config',
-      columns: ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id', 'comments'],
+      columns: [
+        'model', 'flow_index', 'step_index', 'alternative_index',
+        'machine', 'cycle_time', 'setup_time', 'jig_id',
+        ...(hasComments ? ['comments'] : []),
+      ],
       parsed,
       label: 'Machine Config',
       beforeDelete: hasJigTable ? clearExtraJigs : undefined,

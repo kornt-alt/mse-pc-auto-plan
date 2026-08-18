@@ -1058,11 +1058,43 @@ router.get('/:batchId/tracking', verifyToken, readRoles, async (req, res) => {
       }
     }
 
+    // machine_config.comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ — ไม่มีก็ต้องไม่พัง
+    // (house style เดียวกับ orders.material_arrived / machine_config.is_active)
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+
+    // คำแนะนำการทำงานต่อ step — แถวของหน้านี้คือ "หนึ่ง step" ไม่ใช่ "หนึ่งเครื่อง"
+    // (ต่างจาก /production/tracking ที่แถวเป็นเครื่องที่วางแผนไว้ จับคู่ step_index|machine ได้ตรง ๆ)
+    // ช่อง machine ตรงนี้เป็นเครื่องที่ "ผลิตจริง" ซึ่งเป็น '-' ตอนยังไม่เริ่ม จึงรวม comment ของ
+    // ทุกเครื่องทางเลือกใน step นั้นมาต่อกัน — step ที่ยังไม่เริ่มก็ยังอ่านคำแนะนำได้
+    const commentsByStep = new Map(); // STEP_NAME (upper) -> [comment, ...]
+    if (hasComments) {
+      const commentRows = await query(
+        `SELECT r.step_name, m.comments
+           FROM routing_config r
+           JOIN machine_config m
+             ON m.model = r.model AND m.flow_index = r.flow_index AND m.step_index = r.step_index
+          WHERE r.model = @model AND r.flow_index = 0
+            AND m.comments IS NOT NULL AND LTRIM(RTRIM(m.comments)) <> ''
+          ORDER BY m.step_index, m.alternative_index`,
+        { model: modelStr }
+      );
+      for (const c of commentRows) {
+        // คีย์ต้อง upper ให้ตรงกับ uniqueSteps ไม่งั้นไม่มีวัน match
+        const key = String(c.step_name).trim().toUpperCase();
+        const text = String(c.comments).trim();
+        const list = commentsByStep.get(key) ?? [];
+        if (!list.includes(text)) list.push(text); // หลายเครื่องเขียนเหมือนกัน = โชว์ครั้งเดียว
+        commentsByStep.set(key, list);
+      }
+    }
+
     const stepsData = uniqueSteps.map((stepName) => {
       const rec = recMap[stepName];
       return {
         step_name: stepName,
         machine: rec ? rec.machine : '-',
+        comments: (commentsByStep.get(stepName) ?? []).join(' / '),
         qty_ok: rec ? rec.qty_ok : 0.0,
         qty_ng: rec ? rec.qty_ng : 0.0,
         last_record: rec ? formatThaiTimestamp(rec._lastTime) : '-',
