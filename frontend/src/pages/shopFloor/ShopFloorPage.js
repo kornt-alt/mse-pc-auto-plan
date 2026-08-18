@@ -361,6 +361,7 @@ const ShopFloorPage = () => {
                 <tr>
                   <th>Process Step</th>
                   <th>Machine</th>
+                  <th>Comments</th>
                   <th>Qty OK</th>
                   <th>Qty NG</th>
                   <th>Last Record</th>
@@ -413,6 +414,7 @@ const ShopFloorPage = () => {
                           </Button>
                         )}
                       </td>
+                      <td>{row.comments || '-'}</td>
                       <td className="text-end fw-bold num" style={{ color: 'var(--mse-ok)' }}>
                         {row.qtyOK ?? '-'}
                       </td>

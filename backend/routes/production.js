@@ -280,6 +280,22 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       });
     }
 
+    const configRows = await query(
+      // หมายเหตุ: ตรวจสอบชื่อคอลัมน์ในตาราง machine_config ของคุณด้วย 
+      // ถ้าไม่ได้ใช้ process_step ให้แก้เป็นชื่อที่ถูกต้อง (เช่น step)
+      `SELECT step_index, machine, comments 
+       FROM machine_config 
+       WHERE model = @model`,
+      { model: orderModelName }
+    );
+
+    const commentsMap = new Map();
+    for (const c of configRows) {
+      if (c.comments) {
+        commentsMap.set(`${c.step_index}|${c.machine}`, String(c.comments).trim());
+      }
+    }
+
     // Map เพื่อคง insertion order เหมือน dict เดิม (past_steps ไล่ตามลำดับที่เจอ)
     const actualDict = new Map();
     for (const rec of actualRecords) {
@@ -325,6 +341,7 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       resultData.push({
         processStep: step,
         machine: 'Finished',
+        comments: '',
         qtyOK: act.qtyOK,
         qtyNG: act.qtyNG,
         lastRecord: formatThaiTimestamp(act.lastRecord),
@@ -336,9 +353,11 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
 
     for (const p of plannedSteps) {
       const act = actualDict.get(p.step);
+      const stepComments = commentsMap.get(`${p.step_index}|${p.machine}`) || '';
       resultData.push({
         processStep: p.step,
         machine: p.machine,
+        comments: stepComments,
         qtyOK: act ? act.qtyOK : null,
         qtyNG: act ? act.qtyNG : null,
         lastRecord: act && act.lastRecord ? formatThaiTimestamp(act.lastRecord) : '-',
