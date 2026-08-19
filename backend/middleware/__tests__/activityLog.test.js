@@ -70,3 +70,30 @@ test('activityLogger: POST ใต้ /api ผูก finish listener + เรี�
   assert.strictEqual(nexted, true);
   assert.strictEqual(typeof res._listeners.finish, 'function');
 });
+
+// ===== toDetail: แนบ "ผลลัพธ์" เพิ่มจาก request body (res.locals.auditDetail) =====
+// body อย่างเดียวตอบไม่ได้ว่าเกิดอะไรขึ้น — Replan ส่ง {is_simulation:false} มาเสมอ
+test('toDetail: ไม่ส่ง outcome → พฤติกรรมเดิมทุกประการ', () => {
+  assert.equal(toDetail({ a: 1 }), '{"a":1}');
+  assert.equal(toDetail(null), null);
+  assert.equal(toDetail(undefined), null);
+});
+
+test('toDetail: ส่ง outcome → ห่อเป็น {request, result}', () => {
+  const s = toDetail({ is_simulation: false }, { plan_change: { fg_later: 3 } });
+  assert.deepEqual(JSON.parse(s), {
+    request: { is_simulation: false },
+    result: { plan_change: { fg_later: 3 } },
+  });
+});
+
+test('toDetail: outcome มาแต่ body ว่าง ก็ยังต้องบันทึก (ไม่ใช่ null)', () => {
+  const s = toDetail(null, { plan_change: { total: 0 } });
+  assert.deepEqual(JSON.parse(s), { request: null, result: { plan_change: { total: 0 } } });
+});
+
+test('toDetail: ความลับใน body ยังถูกปกปิดแม้มี outcome', () => {
+  const s = toDetail({ password: 'p', user: 'u' }, { ok: true });
+  assert.ok(s.includes('***'));
+  assert.ok(!s.includes('"p"'));
+});

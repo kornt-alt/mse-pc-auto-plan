@@ -175,7 +175,9 @@ export function buildPlanDetail(dataRows = []) {
 //  [{ machine, used, available, pct, days,
 //     peakDay: { date, used, available, pct, batches:[{batch,min}] } | null,
 //     batches: [{ batch, totalMin, run, setup, sharePct, firstDate, lastDate, steps:[{step,min}] }] }]
-//  เรียงเครื่องตาม utilization มากไปน้อย (คอขวดขึ้นก่อน), batches เรียงเวลามากไปน้อย
+//  เรียงเครื่องตาม utilization มากไปน้อย (คอขวดขึ้นก่อน), batches เรียงตามวันที่เข้าเครื่อง (เก่า → ใหม่)
+//  ⚠️ การเรียง**ระดับเครื่อง**ห้ามเปลี่ยน — SummaryTab ตัด .slice(0,3) จากลำดับนี้เป็น "เครื่องที่เป็นคอขวด"
+//     เปลี่ยนแล้วสรุปจะกลายเป็นเครื่องมั่ว ๆ สามตัวโดยไม่มีอะไรฟ้อง
 //
 //  sharePct = สัดส่วนของ "โหลดเครื่องนั้น" ไม่ใช่สัดส่วนของปฏิทิน — รวมกันได้ ~100% เสมอ
 //  available/pct เป็น null ได้ เมื่อ machine-day นั้นไม่มีแถว META (ปฏิทินไม่ครอบคลุมวันนั้น)
@@ -234,7 +236,16 @@ export function buildMachineSchedule(dataRows = []) {
               .sort((a, b2) => b2.min - a.min),
           };
         })
-        .sort((a, b) => b.totalMin - a.totalMin);
+        // เรียงตามวันที่เข้าเครื่อง (เก่า → ใหม่) = ลำดับคิวจริงของเครื่องนั้น ซึ่งเป็นวิธีที่หน้าไลน์อ่านเครื่อง
+        // tiebreak lastDate แล้ว batch เพื่อให้ผลคงที่ · ไม่มีวัน (ไม่ควรเกิด) ไปท้าย
+        .sort((a, b) => {
+          if (a.firstDate == null && b.firstDate == null) return a.batch < b.batch ? -1 : 1;
+          if (a.firstDate == null) return 1;
+          if (b.firstDate == null) return -1;
+          if (a.firstDate !== b.firstDate) return a.firstDate < b.firstDate ? -1 : 1;
+          if (a.lastDate !== b.lastDate) return (a.lastDate ?? '') < (b.lastDate ?? '') ? -1 : 1;
+          return a.batch < b.batch ? -1 : 1;
+        });
 
       const peak = totals.peak;
       return {

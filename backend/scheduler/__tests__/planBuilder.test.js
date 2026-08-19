@@ -255,3 +255,226 @@ test('buildOrderDateUpdates: batch ที่ไม่อยู่ใน safeOrde
   const updates = pb.buildOrderDateUpdates([{ date: '2026-07-20', batch: 'X' }], statusMap, [], {});
   assert.equal(updates.length, 0);
 });
+
+// ===== buildUnplannedReport: "หลุดแผนเพราะอะไร" =====
+// ข้อมูลชุดนี้ engine รู้อยู่แล้วแต่ DROP_DATES ตัดทิ้งก่อนถึงผู้ใช้เสมอ
+
+const UP_MACHINES = [
+  { model: 'M1', flow_index: 0, step_index: 0, alternative_index: 0, machine: 'MC-A', cycle_time: 1, setup_time: 30, jig_id: 'J-001', extra_jigs: [] },
+  { model: 'M1', flow_index: 0, step_index: 0, alternative_index: 1, machine: 'MC-B', cycle_time: 2, setup_time: 30, jig_id: 'J-002', extra_jigs: [] },
+  { model: 'M1', flow_index: 1, step_index: 0, alternative_index: 0, machine: 'MC-C', cycle_time: 3, setup_time: 10, jig_id: '-', extra_jigs: [] },
+];
+const upFail = (over = {}) => ({
+  batch: 'B1', model: 'M1', flowIndex: 0, stepIndex: 0, step: 'TURNING', qty: 10, kind: 'no-capacity', ...over,
+});
+
+test('buildUnplannedReport: ไม่มีงานหลุด → [] (พฤติกรรมเดิมทุกประการ)', () => {
+  assert.deepEqual(pb.buildUnplannedReport({ failedSteps: [] }), []);
+  assert.deepEqual(pb.buildUnplannedReport(), []);
+});
+
+test('buildUnplannedReport: ตอบเป็นชุดเครื่องทางเลือก ไม่ใช่เครื่องเดียว', () => {
+  const [row] = pb.buildUnplannedReport({
+    failedSteps: [upFail()],
+    machineRows: UP_MACHINES,
+    remainingCalendar: { 'MC-A': { '2026-09-01': 500 }, 'MC-B': { '2026-09-01': 500 } },
+    lastCalendarDate: '2026-09-01',
+    dueByBatch: { B1: '2026-08-20' },
+  });
+  assert.deepEqual(row.steps[0].candidates.map((c) => c.machine), ['MC-A', 'MC-B']);
+  // flow 1 ของโมเดลเดียวกันเป็นทางเลือกที่หน้างานทำได้จริง ต้องเสนอด้วย
+  assert.deepEqual(row.altFlows, [{ flowIndex: 1, stepCount: 1, machines: ['MC-C'] }]);
+});
+
+// ⚠️ กับดัก: engine วางเป็นกลุ่ม ชื่อ 'PACK-…' ห้ามหลุดถึงผู้ใช้เด็ดขาด
+test('buildUnplannedReport: PACK ถูกขยายเป็น sub-batch จริง', () => {
+  const statusMap = new Map([['PACK-M1-01', { original_batches: [{ batch: 'B1', qty: 5 }, { batch: 'B2', qty: 5 }] }]]);
+  const rows = pb.buildUnplannedReport({
+    failedSteps: [upFail({ batch: 'PACK-M1-01' })],
+    statusMap,
+    machineRows: UP_MACHINES,
+    lastCalendarDate: '2026-09-01',
+    dueByBatch: { B1: '2026-08-20', B2: '2026-08-25' },
+  });
+  assert.deepEqual(rows.map((r) => r.batch), ['B1', 'B2']); // เรียงตามเลย Due มากสุดก่อน
+  assert.ok(!rows.some((r) => String(r.batch).startsWith('PACK')));
+  assert.equal(rows[0].daysPastDueAtHorizon, 12); // 2026-08-20 → 2026-09-01
+});
+
+// ⚠️ บอก 5 วันแล้วจริง 30 แย่กว่าไม่บอก — ขาดข้อมูลต้องเป็น null ไม่ใช่ 0
+test('buildUnplannedReport: ไม่มี due หรือไม่มีปฏิทิน → daysPastDueAtHorizon เป็น null', () => {
+  const [noDue] = pb.buildUnplannedReport({
+    failedSteps: [upFail()], machineRows: UP_MACHINES, lastCalendarDate: '2026-09-01', dueByBatch: {},
+  });
+  assert.equal(noDue.daysPastDueAtHorizon, null);
+  assert.equal(noDue.dueDate, null);
+
+  const [noCal] = pb.buildUnplannedReport({
+    failedSteps: [upFail()], machineRows: UP_MACHINES, lastCalendarDate: '', dueByBatch: { B1: '2026-08-20' },
+  });
+  assert.equal(noCal.daysPastDueAtHorizon, null);
+});
+
+test('buildUnplannedReport: ปฏิทินยังไม่ถึง Due → ค่าติดลบ (ไม่ใช่ null)', () => {
+  const [row] = pb.buildUnplannedReport({
+    failedSteps: [upFail()], machineRows: UP_MACHINES,
+    lastCalendarDate: '2026-08-10', dueByBatch: { B1: '2026-08-20' },
+  });
+  assert.equal(row.daysPastDueAtHorizon, -10);
+});
+
+test('buildUnplannedReport: step อยู่ใน blockedSteps → jig-blocked (ไม่ใช่ capacity-full)', () => {
+  const [row] = pb.buildUnplannedReport({
+    failedSteps: [upFail()],
+    machineRows: UP_MACHINES,
+    blockedSteps: [{ model: 'M1', flowIndex: 0, stepIndex: 0, jigs: ['J-001', 'J-002'] }],
+    remainingCalendar: {}, // เวลาว่าง 0 — ถ้าจัดลำดับผิดจะกลายเป็น capacity-full
+    lastCalendarDate: '2026-09-01',
+  });
+  assert.equal(row.reason, 'jig-blocked');
+});
+
+test('buildUnplannedReport: เวลาว่างรวมไม่พอ → capacity-full, พอแต่วางไม่ลง → calendar-short', () => {
+  const args = {
+    machineRows: UP_MACHINES, lastCalendarDate: '2026-09-01', dueByBatch: { B1: '2026-08-20' },
+  };
+  // ต้องใช้ 10*1+30 = 40 น. (ทางเลือกที่เร็วสุด)
+  const [full] = pb.buildUnplannedReport({
+    ...args, failedSteps: [upFail()], remainingCalendar: { 'MC-A': { '2026-09-01': 5 } },
+  });
+  assert.equal(full.reason, 'capacity-full');
+
+  const [short] = pb.buildUnplannedReport({
+    ...args, failedSteps: [upFail()], remainingCalendar: { 'MC-A': { '2026-09-01': 5000 } },
+  });
+  assert.equal(short.reason, 'calendar-short');
+});
+
+test('buildUnplannedReport: ไม่มีเครื่องรองรับ step เลย → no-machine · backward วางไม่ทัน → backward-full', () => {
+  const [noMachine] = pb.buildUnplannedReport({
+    failedSteps: [upFail({ stepIndex: 9 })], machineRows: UP_MACHINES, lastCalendarDate: '2026-09-01',
+  });
+  assert.equal(noMachine.reason, 'no-machine');
+  assert.deepEqual(noMachine.steps[0].candidates, []);
+
+  const [backward] = pb.buildUnplannedReport({
+    failedSteps: [upFail({ kind: 'backward-full', flowIndex: null, stepIndex: null, step: null })],
+    machineRows: UP_MACHINES, lastCalendarDate: '2026-09-01',
+  });
+  assert.equal(backward.reason, 'backward-full');
+});
+
+// ขั้นหลังตันตามขั้นแรก — ต้นเหตุคือขั้นแรกเสมอ
+test('buildUnplannedReport: หลายขั้นตันในงานเดียว → รวมเป็นแถวเดียว เรียงตาม stepIndex', () => {
+  const [row] = pb.buildUnplannedReport({
+    failedSteps: [
+      upFail({ stepIndex: 1, step: 'MILLING' }),
+      upFail({ stepIndex: 0, step: 'TURNING' }),
+    ],
+    machineRows: UP_MACHINES,
+    blockedSteps: [{ model: 'M1', flowIndex: 0, stepIndex: 0, jigs: ['J-001'] }],
+    lastCalendarDate: '2026-09-01',
+  });
+  assert.deepEqual(row.steps.map((s) => s.step), ['TURNING', 'MILLING']);
+  assert.equal(row.reason, 'jig-blocked'); // ของขั้นแรก ไม่ใช่ขั้นสุดท้ายที่วนมาทีหลัง
+});
+
+// ⚠️ งาน missing-routing ไม่เคยเข้า engine (rejectMissingRouting คัดออกก่อน) จึงไม่มีใน failedSteps
+// แต่มันก็ไม่อยู่ใน shipmentReport เหมือนกัน → ฝั่ง UI เห็นเป็น "หลุดออกจากแผน"
+// ถ้าไม่รวมไว้ที่นี่ replan ที่หลุดเพราะ routing อย่างเดียวจะโชว์ "หลุดแผน N" โดยไม่มีเหตุผล = สภาพเดิม
+test('buildUnplannedReport: missing-routing ถูกรวมด้วย ทั้งที่ไม่มีใน failedSteps', () => {
+  const rows = pb.buildUnplannedReport({
+    failedSteps: [],
+    missingRoutingMap: { B9: { Batch: 'B9', is_missing_routing: true, original_batches: [] } },
+    modelByBatch: { B9: 'UNKNOWN-MODEL' },
+    dueByBatch: { B9: '2026-08-20' },
+    lastCalendarDate: '2026-09-01',
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reason, 'missing-routing');
+  assert.equal(rows[0].model, 'UNKNOWN-MODEL');
+  assert.deepEqual(rows[0].steps, []); // ไม่มีขั้นตอนที่ตันให้ชี้ — ไม่ได้เข้า engine เลย
+  assert.equal(rows[0].daysPastDueAtHorizon, 12);
+});
+
+test('buildUnplannedReport: missing-routing ของ PACK ก็ต้องแตกเป็น sub-batch', () => {
+  const rows = pb.buildUnplannedReport({
+    missingRoutingMap: {
+      'PACK-X': { Batch: 'PACK-X', is_missing_routing: true, original_batches: [{ batch: 'B1' }, { batch: 'B2' }] },
+    },
+    modelByBatch: { B1: 'MX', B2: 'MX' },
+    lastCalendarDate: '2026-09-01',
+  });
+  assert.deepEqual(rows.map((r) => r.batch).sort(), ['B1', 'B2']);
+  assert.ok(!rows.some((r) => String(r.batch).startsWith('PACK')));
+});
+
+// capacity_warning เป็น null ได้ทั้งที่มีงานหลุด (เช่นหลุดเพราะ routing) → UI พึ่งมันไม่ได้
+test('buildUnplannedReport: lastCalendarDate ติดไปกับทุกแถว', () => {
+  const rows = pb.buildUnplannedReport({
+    missingRoutingMap: { B9: { Batch: 'B9', original_batches: [] } },
+    lastCalendarDate: '2026-09-01',
+  });
+  assert.equal(rows[0].lastCalendarDate, '2026-09-01');
+});
+
+// ===== buildPlanChangeSummary: บันทึกว่าแผนที่ยืนยันไปเปลี่ยนอะไร =====
+const upd = (batch, fgDate) => ({ batch, startDate: '2026-08-01', fgDate, programNotes: 'x' });
+
+test('buildPlanChangeSummary: แยก fg ช้าลง / เร็วขึ้น / เข้าแผนใหม่ / ไม่เปลี่ยน', () => {
+  const s = pb.buildPlanChangeSummary({
+    dateUpdates: [upd('L', '2026-08-20'), upd('E', '2026-08-05'), upd('N', '2026-08-10'), upd('S', '2026-08-09')],
+    orderStateMap: {
+      L: { fg_date: '2026-08-15' },
+      E: { fg_date: '2026-08-12' },
+      N: { fg_date: null },
+      S: { fg_date: '2026-08-09' },
+    },
+  });
+  assert.equal(s.fg_later, 1);
+  assert.equal(s.fg_earlier, 1);
+  assert.equal(s.newly_planned, 1);
+  assert.equal(s.unchanged, 1);
+  assert.equal(s.total, 4);
+  assert.equal(s.makespan, '2026-08-20'); // FG ช้าสุดในแผนใหม่
+  assert.deepEqual(s.samples.fg_later, ['L']);
+});
+
+test('buildPlanChangeSummary: นับงานส่งไม่ทันก่อน/หลัง จาก due', () => {
+  const s = pb.buildPlanChangeSummary({
+    dateUpdates: [upd('A', '2026-08-25'), upd('B', '2026-08-05')],
+    orderStateMap: { A: { fg_date: '2026-08-10' }, B: { fg_date: '2026-08-30' } },
+    dueByBatch: { A: '2026-08-20', B: '2026-08-20' },
+  });
+  assert.equal(s.late_before, 1); // B เดิมเลย due
+  assert.equal(s.late_after, 1);  // A ใหม่เลย due
+});
+
+// ⚠️ buildOrderDateUpdates ตั้งใจคงค่า fg_date เดิมไว้เมื่อวางไม่ลง → มองจากคอลัมน์นั้นจะเห็นเป็น
+// "ไม่เปลี่ยน" · จำนวนงานหลุดจึงต้องมาจาก unplanned เท่านั้น
+test('buildPlanChangeSummary: จำนวนงานหลุดมาจาก unplanned ไม่ใช่จาก fg_date', () => {
+  const s = pb.buildPlanChangeSummary({
+    dateUpdates: [upd('X', '2026-08-10')],
+    orderStateMap: { X: { fg_date: '2026-08-10' } },
+    unplanned: [{ batch: 'X' }, { batch: 'Y' }],
+  });
+  assert.equal(s.unchanged, 1);
+  assert.equal(s.unplanned, 2);
+  assert.deepEqual(s.samples.unplanned, ['X', 'Y']);
+});
+
+// activity_log.detail ตัดที่ 4000 ตัวอักษร — samples ต้องไม่พองตามจำนวนงาน
+test('buildPlanChangeSummary: samples ถูกจำกัดจำนวน แต่ตัวนับยังครบ', () => {
+  const many = Array.from({ length: 50 }, (_, i) => upd(`B${i}`, '2026-08-20'));
+  const state = {};
+  for (const u of many) state[u.batch] = { fg_date: '2026-08-01' };
+  const s = pb.buildPlanChangeSummary({ dateUpdates: many, orderStateMap: state });
+  assert.equal(s.fg_later, 50);
+  assert.equal(s.samples.fg_later.length, 5);
+});
+
+test('buildPlanChangeSummary: ไม่มีอะไรเลย → ตัวนับเป็น 0 ไม่พัง', () => {
+  const s = pb.buildPlanChangeSummary();
+  assert.equal(s.total, 0);
+  assert.equal(s.makespan, null);
+});

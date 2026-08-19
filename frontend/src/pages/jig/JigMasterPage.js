@@ -200,6 +200,8 @@ const JigMasterPage = () => {
         machineSchedule: buildMachineSchedule(decoded.data ?? []),
         capacityWarning: decoded.capacity_warning,
         blockedSteps: decoded.blocked_steps ?? [],
+        // งานที่วางไม่ลง พร้อมเหตุผล/เครื่องทางเลือก — แท็บ "ทางเลือก" ในไดอะล็อก
+        unplanned: decoded.unplanned ?? [],
       } : p));
     } catch (err) {
       setPreview(null);
@@ -492,6 +494,7 @@ const JigMasterPage = () => {
         machineSchedule={preview?.machineSchedule}
         capacityWarning={preview?.capacityWarning}
         blockedSteps={preview?.blockedSteps ?? []}
+        unplanned={preview?.unplanned ?? []}
         todayStr={today}
         loading={!!preview?.loading}
         onConfirm={async () => {

@@ -242,7 +242,7 @@ async function run(isReplan = false, options = {}) {
 
   // ---- engine (L215-225) ----
   const engine = new SchedulerEngine(calendar, routing, fixedMachine, cycleTime, setupConfig, inputs.settings);
-  const { mainPlan, totalPlanMap } = engine.run(
+  const { mainPlan, totalPlanMap, failedSteps } = engine.run(
     safeOrders, existingPlan, actualsDict, actualMachines, closedDict, currentTime, jigBlockMap,
   );
 
@@ -250,6 +250,32 @@ async function run(isReplan = false, options = {}) {
   pb.sortMainPlanForDb(mainPlan, totalPlanMap);
   const displayRows = pb.buildDisplayRows(mainPlan, totalPlanMap, actualsDict);
   const scheduleResultRows = pb.toScheduleResultRows(displayRows, totalPlanMap);
+
+  // "หลุดแผนเพราะอะไร ขั้นตอนไหน เครื่องอะไรเป็นทางเลือก" — ของที่ engine รู้อยู่แล้วแต่ไม่เคยส่งออกมา
+  // engine.workingCalendar หลังรันจบ = เวลาว่างที่ยังเหลือจริงต่อเครื่อง-วัน (ใช้แยก capacity-full
+  // ออกจาก calendar-short) · ไม่มี query ใหม่ ทุก input มาจากของที่โหลดไว้แล้ว
+  const dueByBatch = {};
+  const modelByBatch = {};
+  for (const r of inputs.orderRows) {
+    dueByBatch[r.batch] = r.due_date;
+    modelByBatch[r.batch] = r.model;
+  }
+  const unplanned = pb.buildUnplannedReport({
+    failedSteps,
+    statusMap: totalPlanMap,
+    dueByBatch,
+    modelByBatch,
+    machineRows: activeMachineRows,
+    blockedSteps,
+    jigBlockMap,
+    remainingCalendar: engine.workingCalendar,
+    lastCalendarDate,
+    // งาน missing-routing ถูกคัดออกก่อนถึง engine — ถ้าไม่ส่งเข้าไปด้วย จอจะโชว์ "หลุดแผน" โดยไม่มีเหตุผล
+    missingRoutingMap,
+  });
+
+  // สรุปความต่างของแผนที่ยืนยันจริง — ตั้งค่าเฉพาะตอน !isSimulation (ดูในบล็อกข้างล่าง)
+  let planChange = null;
 
   // Simulation: ห้ามบันทึกอะไรลง DB (schedule_results / lastPlan / order dates) — แค่คืนแผน (logic.py L293-300, L455-458)
   if (!isSimulation) {
@@ -270,6 +296,10 @@ async function run(isReplan = false, options = {}) {
     for (const r of orderStateRows) orderStateMap[r.batch] = r;
     const dateUpdates = pb.buildOrderDateUpdates(mainPlan, totalPlanMap, safeOrders, orderStateMap);
     await persistOrderDates(dateUpdates);
+
+    // สรุปว่าแผนที่เพิ่งเขียนลง DB ต่างจากของเดิมยังไง — route เอาไปแปะ activity_log
+    // ต้องคำนวณตรงนี้ เพราะ orderStateMap คือ "ค่าก่อนเขียนทับ" ที่มีอยู่แค่ในบล็อกนี้
+    planChange = pb.buildPlanChangeSummary({ dateUpdates, orderStateMap, dueByBatch, unplanned });
   }
 
   const cleanedData = pb.cleanDisplayData(displayRows, calendar);
@@ -295,6 +325,9 @@ async function run(isReplan = false, options = {}) {
     total_plan_map: missingRoutingMap,
     capacity_warning: capacityWarning,
     blocked_steps: blockedSteps,
+    unplanned,
+    // null ตอน simulation (ไม่ได้เขียนอะไร) — route เอาไปแปะ activity_log ตอนรันจริง
+    plan_change: planChange,
   };
 }
 

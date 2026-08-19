@@ -121,6 +121,14 @@ class SchedulerEngine {
     this.DAY_UNIT_KEYWORDS = DAY_UNIT_KEYWORDS;
 
     this.decisionLog = [];
+    // ขั้นตอนที่วางไม่ลง — เก็บไว้ตอบ "หลุดแผนเพราะอะไร / ขั้นตอนไหน" (planBuilder.buildUnplannedReport)
+    //
+    // ⚠️ ที่ต้องเป็น log แยกแทนการเติมฟิลด์ในแถว NO_CAPACITY/OVERDUE ของ mainPlan:
+    // deepCompare ของ parity เทียบ **union ของ key** แถวที่มี key เกินจาก fixture จะ fail ทันที
+    // (ตอนนี้ยังไม่ fail เพราะไม่มี fixture ไหนสร้างแถวพวกนั้นเลย = โชค ไม่ใช่ความปลอดภัย)
+    // ตัวนี้ปลอดภัยโดยโครงสร้าง เพราะ parity.test.js รับแค่ { mainPlan, totalPlanMap }
+    // — แพตเทิร์นเดียวกับ decisionLog ที่อยู่บรรทัดบน
+    this.failedSteps = [];
   }
 
   // is_day_unit_machine (L286-292) — delegate ไป pure helper (scheduler/dayUnit.js)
@@ -868,6 +876,12 @@ class SchedulerEngine {
             step,
             error: 'No Capacity',
           });
+          // แถวข้างบนถูก DROP_DATES ตัดทิ้งก่อนถึงผู้ใช้เสมอ — บันทึกซ้ำที่นี่เพื่อบอกเหตุผลได้
+          // (flowIndex/stepIndex ต้องมี: ชื่อ step ซ้ำข้าม flow ได้จริง จะ join กลับด้วยชื่ออย่างเดียวไม่ได้)
+          this.failedSteps.push({
+            batch, model, flowIndex: flowIdx, stepIndex: i, step,
+            qty: stepQtyRem, kind: 'no-capacity',
+          });
         }
         stepFailed = true;
         continue;
@@ -964,6 +978,10 @@ class SchedulerEngine {
     if (!currentTime) throw new Error('SchedulerEngine.run: currentTime is required');
 
     if (!existingPlan) existingPlan = [];
+
+    // ต่างจาก decisionLog (สะสมข้ามการเรียกโดยตั้งใจ — ดูหมายเหตุข้อ 13 หัวไฟล์):
+    // failedSteps ต้องเป็นของรอบนี้เท่านั้น ไม่งั้นเรียก run() ซ้ำบน instance เดิมจะรายงานงานที่หลุดไปแล้วซ้ำ
+    this.failedSteps = [];
 
     this.actuals = actuals || {};
     this.actualMachines = actualMachines || {};
@@ -1154,6 +1172,12 @@ class SchedulerEngine {
       } else {
         totalPlanMap.set(batch, { Batch: batch, StatusLOT: 'Backward Failed' });
         mainPlan.push({ date: 'OVERDUE', machine: 'N/A', batch, error: 'Backward Full' });
+        // backward วางย้อนจาก due ไม่ทัน — คนละเหตุผลกับ 'no-capacity' และไม่รู้ว่าตันที่ step ไหน
+        // (ล้มทั้ง flow ไม่ใช่ step เดียว) จึงปล่อย step/index เป็น null ตามความจริง
+        this.failedSteps.push({
+          batch, model: order.Model, flowIndex: null, stepIndex: null, step: null,
+          qty: order.qty ?? 0, kind: 'backward-full',
+        });
       }
     }
 
@@ -1303,7 +1327,8 @@ class SchedulerEngine {
       if (res.failed) order.StatusLOT = 'Failed';
     }
 
-    return { mainPlan, totalPlanMap };
+    // key ที่สามเพิ่มมาได้โดยไม่กระทบ parity — parity.test.js destructure แค่ { mainPlan, totalPlanMap }
+    return { mainPlan, totalPlanMap, failedSteps: this.failedSteps };
   }
 }
 

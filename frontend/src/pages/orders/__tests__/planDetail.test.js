@@ -176,3 +176,39 @@ describe('buildMachineSchedule — มุมกลับ: เครื่อง�
     expect(buildMachineSchedule([])).toEqual([]);
   });
 });
+
+// ===== ลำดับงานในเครื่อง = ลำดับคิวจริง (เก่า → ใหม่) =====
+// หน้าไลน์อ่านเครื่องเป็นลำดับเวลาเสมอ ไม่ใช่ "ใครกินเวลาเยอะสุด"
+describe('buildMachineSchedule — เรียง batch ตามวันที่เข้าเครื่อง', () => {
+  test('เก่าไปใหม่ ไม่ใช่เวลามากไปน้อย', () => {
+    const [m] = buildMachineSchedule([
+      // งานสั้นแต่เข้าเครื่องก่อน ต้องมาก่อนงานยาวที่เข้าทีหลัง
+      { date: '2026-08-01', machine: 'M1', batch: 'EARLY', step: 'CNC', timeUsed_min: 10, isSetup: false, parent_batch: 'EARLY' },
+      { date: '2026-08-05', machine: 'M1', batch: 'LATE', step: 'CNC', timeUsed_min: 900, isSetup: false, parent_batch: 'LATE' },
+      { date: '2026-08-03', machine: 'M1', batch: 'MID', step: 'CNC', timeUsed_min: 400, isSetup: false, parent_batch: 'MID' },
+    ]);
+    expect(m.batches.map((b) => b.batch)).toEqual(['EARLY', 'MID', 'LATE']);
+  });
+
+  test('วันเข้าเครื่องเท่ากัน → ตัดสินด้วยวันจบ แล้วชื่อ batch (ผลคงที่)', () => {
+    const [m] = buildMachineSchedule([
+      { date: '2026-08-01', machine: 'M1', batch: 'B', step: 'CNC', timeUsed_min: 10, isSetup: false, parent_batch: 'B' },
+      { date: '2026-08-01', machine: 'M1', batch: 'A', step: 'CNC', timeUsed_min: 10, isSetup: false, parent_batch: 'A' },
+      { date: '2026-08-02', machine: 'M1', batch: 'B', step: 'CNC', timeUsed_min: 10, isSetup: false, parent_batch: 'B' },
+    ]);
+    // A จบ 08-01, B จบ 08-02 → A ก่อน
+    expect(m.batches.map((b) => b.batch)).toEqual(['A', 'B']);
+  });
+
+  // ⚠️ ห้ามเผลอเรียงระดับเครื่องใหม่ตามไปด้วย — SummaryTab ตัด slice(0,3) จากลำดับนั้น
+  test('ลำดับของ "เครื่อง" ยังเป็น utilization มากไปน้อยเหมือนเดิม', () => {
+    const sorted = buildMachineSchedule([
+      { date: '2026-08-09', machine: 'BUSY', batch: 'X', step: 'S', timeUsed_min: 280, isSetup: false, parent_batch: 'X' },
+      { date: '2026-08-09', machine: 'BUSY', batch: '_META_CAPACITY_', step: 'META', timeUsed_min: 0, isSetup: false, parent_batch: '_META_CAPACITY_', available_min: 300 },
+      // เข้าเครื่องก่อน BUSY แต่ว่างกว่า — ถ้าเรียงเครื่องด้วยวันจะขึ้นก่อน ซึ่งผิด
+      { date: '2026-08-01', machine: 'IDLE', batch: 'Y', step: 'S', timeUsed_min: 30, isSetup: false, parent_batch: 'Y' },
+      { date: '2026-08-01', machine: 'IDLE', batch: '_META_CAPACITY_', step: 'META', timeUsed_min: 0, isSetup: false, parent_batch: '_META_CAPACITY_', available_min: 300 },
+    ]);
+    expect(sorted.map((m) => m.machine)).toEqual(['BUSY', 'IDLE']);
+  });
+});

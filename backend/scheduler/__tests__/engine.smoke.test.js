@@ -174,3 +174,75 @@ test('parseDdMmYyyy: quirk %d/%m/%Y', () => {
   assert.equal(parseDdMmYyyy('2026-07-16'), '2026-07-16'); // ไม่ตรง format → คงเดิม
   assert.equal(parseDdMmYyyy('32/13/2026'), '32/13/2026'); // ไม่ใช่วันจริง → คงเดิม
 });
+
+// ===== failedSteps: log ของขั้นตอนที่วางไม่ลง =====
+// ⚠️ ต้องเป็น log แยก ไม่ใช่ฟิลด์ในแถว mainPlan — deepCompare ของ parity เทียบ union ของ key
+// แถว NO_CAPACITY ที่มี key เกินจาก fixture จะ fail ทันที
+
+test('failedSteps: แผนที่วางได้ครบ → ว่าง (พฤติกรรมเดิมทุกประการ)', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B001', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  const { failedSteps } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.deepEqual(failedSteps, []);
+});
+
+test('failedSteps: งานใหญ่เกินปฏิทิน → บอก batch/model/flow/step ที่ตัน', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B999', Model: 'M1', qty: 100000, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  const { mainPlan, failedSteps } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+
+  assert.ok(failedSteps.length > 0, 'ต้องมี failedSteps เมื่อวางไม่ลง');
+  const first = failedSteps[0];
+  assert.equal(first.batch, 'B999');
+  assert.equal(first.model, 'M1');
+  assert.equal(first.kind, 'no-capacity');
+  assert.equal(first.flowIndex, 1);       // ชื่อ step ซ้ำข้าม flow ได้ → ต้องมี index ไว้ join กลับ
+  assert.equal(typeof first.stepIndex, 'number');
+  assert.ok(first.step);
+
+  // แถว NO_CAPACITY ใน mainPlan ต้องมีหน้าตาเดิมเป๊ะ (ห้ามมีคีย์เกิน)
+  const noCap = mainPlan.find((r) => r.date === 'NO_CAPACITY');
+  assert.deepEqual(Object.keys(noCap).sort(), ['batch', 'date', 'error', 'machine', 'model', 'step']);
+});
+
+test('failedSteps: เรียก run() ซ้ำบน instance เดิมต้องไม่สะสมของรอบก่อน', () => {
+  const engine = buildEngine();
+  const om = new OrderManager(false);
+  const [big] = om.processOrders([
+    { Batch: 'B999', Model: 'M1', qty: 100000, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  engine.run(big, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const after = engine.run(big, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.ok(after.failedSteps.every((f) => f.batch === 'B999'));
+  assert.equal(after.failedSteps.length, engine.failedSteps.length);
+});
+
+// ⚠️ failedSteps push อยู่ใต้ if (!isSimulation) = เฉพาะ pass ที่ commit จริง
+// เคสที่ทุก flow วางไม่ลงคือเคสที่แท็บ "ทางเลือก" มีประโยชน์ที่สุด — ต้องไม่เงียบ
+test('failedSteps: โมเดลหลาย flow ที่วางไม่ลงทุก flow ต้องยังรายงาน', () => {
+  const twoFlowRouting = [
+    { Model: 'M2', FlowIndex: 1, StepIndex: 0, StepName: 'TURNING' },
+    { Model: 'M2', FlowIndex: 2, StepIndex: 0, StepName: 'TURNING-ALT' },
+  ];
+  const twoFlowMachines = [
+    { Model: 'M2', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1' },
+    { Model: 'M2', FlowIndex: 2, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 2, SetupTime: 30, JigID: 'J2' },
+  ];
+  const routing = processRouting(twoFlowRouting);
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(twoFlowMachines);
+  const engine = new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B888', Model: 'M2', qty: 100000, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  const { failedSteps } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.ok(failedSteps.length > 0, 'ทุก flow วางไม่ลง แต่ไม่มี failedSteps เลย');
+  assert.equal(failedSteps[0].batch, 'B888');
+  assert.equal(typeof failedSteps[0].flowIndex, 'number');
+});

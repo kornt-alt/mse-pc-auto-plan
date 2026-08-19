@@ -94,6 +94,11 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
       });
     }
 
+    // สรุปว่าแผนที่บันทึกไปเปลี่ยนอะไร → activity_log (middleware/activityLog อ่านจาก res.locals)
+    // diff เดิมเห็นได้เฉพาะตอนกดยืนยันในไดอะล็อก คนที่ไม่ได้อยู่ตรงนั้นไม่มีทางรู้ว่าแผนขยับเพราะอะไร
+    // ⚠️ ใช้ค่าที่ service คำนวณจากสิ่งที่ **เขียนลง DB จริง** ไม่ใช่สรุปที่ client ส่งมา (คนละการรัน + แต่งค่าได้)
+    if (result.plan_change) res.locals.auditDetail = { plan_change: result.plan_change };
+
     res.json(result);
   } catch (err) {
     sendError(req, res, err);
@@ -147,6 +152,11 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
         await t.query('UPDATE orders SET is_new = 0 WHERE is_new = 1');
       });
     }
+
+    // สรุปว่าแผนที่บันทึกไปเปลี่ยนอะไร → activity_log (middleware/activityLog อ่านจาก res.locals)
+    // diff เดิมเห็นได้เฉพาะตอนกดยืนยันในไดอะล็อก คนที่ไม่ได้อยู่ตรงนั้นไม่มีทางรู้ว่าแผนขยับเพราะอะไร
+    // ⚠️ ใช้ค่าที่ service คำนวณจากสิ่งที่ **เขียนลง DB จริง** ไม่ใช่สรุปที่ client ส่งมา (คนละการรัน + แต่งค่าได้)
+    if (result.plan_change) res.locals.auditDetail = { plan_change: result.plan_change };
 
     res.json(result);
   } catch (err) {

@@ -5,7 +5,7 @@ import { buildPlanDiff } from '../planDiff';
 import { buildPlanDetail, buildMachineSchedule } from '../planDetail';
 
 // smoke test ของ render path — logic ลึกอยู่ใน pure module (planDiff/planDetail/planRules) แล้ว
-// ที่นี่สนใจว่า "4 แท็บ render ได้ และ props ขาด ๆ ที่ parent ส่งจริงไม่ทำให้พัง"
+// ที่นี่สนใจว่า "ทุกแท็บ render ได้ และ props ขาด ๆ ที่ parent ส่งจริงไม่ทำให้พัง"
 
 const TODAY = '2026-08-05';
 
@@ -51,7 +51,7 @@ const renderDialog = (over = {}) => {
 
 const openTab = (name) => fireEvent.click(screen.getByRole('tab', { name }));
 
-describe('PlanPreviewDialog — 4 แท็บ', () => {
+describe('PlanPreviewDialog — แท็บหลัก', () => {
   test('เปิดมาที่แท็บสรุป และโชว์ความเสี่ยงที่ต้องตัดสินใจ', () => {
     const { panel } = renderDialog();
     expect(panel().getByText('สิ่งที่ต้องตัดสินใจ')).toBeInTheDocument();
@@ -145,5 +145,117 @@ describe('PlanPreviewDialog — props ขาด/ระหว่างโหล�
     const alert = screen.getByRole('alert');
     expect(within(alert).getByText('2026-08-31')).toBeInTheDocument();
     expect(within(alert).getByText('3')).toBeInTheDocument();
+  });
+});
+
+// ===== แท็บ "ทางเลือก" — งานที่วางไม่ลง พร้อมทางออกหน้างาน =====
+const unplanned = [{
+  batch: 'B-200', model: 'AR-12', dueDate: '2026-08-15', daysPastDueAtHorizon: 16,
+  kind: 'no-capacity', reason: 'jig-blocked',
+  steps: [{
+    step: 'GRINDING', flowIndex: 0, stepIndex: 1, qty: 50, neededMinutes: 130,
+    reason: 'jig-blocked',
+    candidates: [
+      { machine: 'MC-A', cycleTime: 2, setupTime: 30, jigs: ['J-001'], blockedJigs: ['J-001'], freeMinutes: 500 },
+    ],
+  }],
+  altFlows: [{ flowIndex: 1, stepCount: 2, machines: ['MC-Z'] }],
+}];
+
+describe('แท็บทางเลือก', () => {
+  test('ไม่มีงานหลุด → ไม่มีแท็บนี้เลย (ไม่ใช่แท็บว่าง)', () => {
+    renderDialog();
+    expect(screen.queryByRole('tab', { name: /ทางเลือก/ })).not.toBeInTheDocument();
+  });
+
+  test('มีงานหลุด → แท็บโผล่พร้อมจำนวน และบอกเหตุผล/ขั้นตอน/เครื่องทางเลือก', () => {
+    const { panel } = renderDialog({ unplanned });
+    openTab(/ทางเลือก/);
+    expect(panel().getByText('จิ๊กใช้ไม่ได้')).toBeInTheDocument();
+    expect(panel().getByText('GRINDING')).toBeInTheDocument();
+    expect(panel().getByText(/จิ๊ก J-001 ใช้ไม่ได้/)).toBeInTheDocument();
+    expect(panel().getByText(/flow 1/)).toBeInTheDocument();
+  });
+
+  // ⚠️ ตัวเลขนี้เป็น "อย่างน้อย" — งานที่หลุดไม่มีวันจบ จึงบอกความล่าช้าจริงไม่ได้
+  test('จำนวนวันต้องกำกับว่า "อย่างน้อย" เสมอ', () => {
+    const { panel } = renderDialog({ unplanned });
+    openTab(/ทางเลือก/);
+    expect(panel().getByText(/อย่างน้อย 16 วัน/)).toBeInTheDocument();
+  });
+
+  // ขอบเขตที่ประกาศไว้: บอกได้แค่ว่าทำได้ ไม่ได้บอกว่าจะเร็วขึ้นเท่าไหร่
+  test('ประกาศขอบเขตว่าต้อง Replan ใหม่ถึงจะรู้วันจริง', () => {
+    const { panel } = renderDialog({ unplanned });
+    openTab(/ทางเลือก/);
+    expect(panel().getByText(/Replan อีกครั้งถึงจะได้วันจริง/)).toBeInTheDocument();
+  });
+
+  test('แท็บสรุปแตกจำนวนงานหลุดตามเหตุผล และมีปุ่มข้ามไปดูทางเลือก', () => {
+    const { panel } = renderDialog({ unplanned });
+    expect(panel().getByText(/จิ๊กใช้ไม่ได้ 1/)).toBeInTheDocument();
+    fireEvent.click(panel().getByRole('button', { name: 'ดูทางเลือกที่ทำได้' }));
+    expect(screen.getByRole('tab', { name: /ทางเลือก/ })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('แท็บเครื่องจักร — คิวของเครื่อง', () => {
+  test('มีคอลัมน์ลำดับคิว และบอกว่าเรียงตามวันที่เข้าเครื่อง', () => {
+    const { panel } = renderDialog();
+    openTab(/เครื่องจักร/);
+    expect(panel().getByText(/เรียงตามวันที่เข้าเครื่อง \(เก่า → ใหม่\)/)).toBeInTheDocument();
+    fireEvent.click(panel().getByRole('button', { name: /รายการงานของเครื่อง M3/ }));
+    expect(panel().getByText('คิว')).toBeInTheDocument();
+  });
+});
+
+// ⚠️ "หลุดแผน" (planDiff) กับ "วางไม่ลง" (engine) ไม่ใช่ชุดเดียวกัน และไม่ครอบกันทั้งสองทาง
+describe('เหตุผลที่วางไม่ลง ต้องไม่ผูกกับจำนวน fell-out', () => {
+  // งานใหม่ที่ยังไม่เคยมี fg_date → planDiff จัดเป็น unchanged (ไม่ใช่ fell-out) แต่ engine รายงานว่าหลุด
+  const freshRows = [{ batch: 'B-NEW', model: 'NEW-1', priority: 1, due_date: '2026-08-20' }];
+  const freshUnplanned = [{
+    batch: 'B-NEW', model: 'NEW-1', dueDate: '2026-08-20', daysPastDueAtHorizon: 5,
+    lastCalendarDate: '2026-08-25', kind: 'no-capacity', reason: 'capacity-full',
+    steps: [{
+      step: 'CNC', flowIndex: 0, stepIndex: 0, qty: 10, neededMinutes: 100, reason: 'capacity-full',
+      candidates: [{ machine: 'MC-A', cycleTime: 1, setupTime: 0, jigs: [], blockedJigs: [], freeMinutes: 5 }],
+    }],
+    altFlows: [],
+  }];
+
+  test('ออเดอร์ใหม่ที่วางไม่ลง: fell-out เป็น 0 แต่เหตุผลยังต้องขึ้นบนแท็บสรุป', () => {
+    const { panel } = renderDialog({
+      diff: buildPlanDiff({ beforeRows: freshRows, afterReport: [] }),
+      unplanned: freshUnplanned,
+    });
+    expect(panel().queryByText(/หลุดแผน/)).not.toBeInTheDocument();
+    expect(panel().getByText(/วางไม่ลง 1/)).toBeInTheDocument();
+    expect(panel().getByText(/เครื่องเต็ม 1/)).toBeInTheDocument();
+  });
+
+  // งาน missing-routing ถูกคัดออกก่อนถึง engine — ถ้า backend ไม่ส่งมาด้วยจะเห็น "หลุดแผน" ลอย ๆ
+  test('missing-routing มีเหตุผลของตัวเองพร้อมทางแก้', () => {
+    const { panel } = renderDialog({
+      unplanned: [{
+        batch: 'B-200', model: 'AR-12', dueDate: '2026-08-15', daysPastDueAtHorizon: null,
+        lastCalendarDate: '2026-08-31', kind: 'missing-routing', reason: 'missing-routing',
+        steps: [], altFlows: [],
+      }],
+    });
+    expect(panel().getByText(/ไม่มี Routing 1/)).toBeInTheDocument();
+    openTab(/ทางเลือก/);
+    expect(panel().getByText(/สร้าง Routing ให้โมเดลนี้/)).toBeInTheDocument();
+    expect(panel().getByText('ทั้งเส้นทาง')).toBeInTheDocument();
+  });
+
+  // capacity_warning เป็น null ได้ทั้งที่มีงานหลุด → ต้องอ่านวันสุดท้ายจากแถวเอง
+  test('วันสุดท้ายของปฏิทินมาจากแถว ไม่ใช่จาก capacityWarning', () => {
+    const { panel } = renderDialog({
+      diff: buildPlanDiff({ beforeRows: freshRows, afterReport: [] }),
+      unplanned: freshUnplanned,
+      capacityWarning: null,
+    });
+    openTab(/ทางเลือก/);
+    expect(panel().getByText(/อย่างน้อย 5 วัน \(ปฏิทินมีถึง 2026-08-25\)/)).toBeInTheDocument();
   });
 });

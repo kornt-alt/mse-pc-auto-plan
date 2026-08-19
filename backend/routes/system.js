@@ -5,6 +5,8 @@ const { sendError } = require('../middleware/errorHandler');
 const { getPool, query, execute } = require('../db/pool');
 const { checkSchema } = require('../db/schemaCheck');
 const { readAttachmentStats } = require('../services/attachmentStats');
+const { summarizeHorizon } = require('../utils/calendarHorizon');
+const { nowBangkok, toDateString } = require('../utils/dates');
 const env = require('../config/env');
 const constants = require('../config/constants');
 
@@ -85,6 +87,27 @@ router.put('/settings', verifyToken, writeRoles, async (req, res) => {
     }
     timestamps.markEdit(); // เปลี่ยน setting = แผนเดิม outdated
     res.json({ ...p, enable_heat_deep_plan: !!p.enable_heat_deep_plan, enable_stickiness: !!p.enable_stickiness });
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+// ========== GET /api/system/calendar-horizon — ปฏิทินเหลือถึงเมื่อไหร่ ==========
+// เตือน**ก่อน**งานจะเริ่มหลุด — ต่างจาก capacity_warning ที่เห็นก็ต่อเมื่อมีงานวางไม่ลงไปแล้ว
+// วันของโรงงานคำนวณฝั่ง server เสมอ (nowBangkok เป็นสวิตช์มือ ดู utils/dates.js) ห้ามให้ browser
+// ตัดสินเองด้วย new Date() ไม่งั้นกลายเป็นนาฬิกาตัวที่สองที่เพี้ยนกันได้
+router.get('/calendar-horizon', verifyToken, readRoles, async (req, res) => {
+  try {
+    const rows = await query('SELECT MAX(date) AS last_date FROM calendar_config');
+    const todayStr = toDateString(nowBangkok());
+    res.json({
+      ...summarizeHorizon(rows[0] && rows[0].last_date, todayStr, {
+        warnDays: constants.CALENDAR_WARN_DAYS,
+        criticalDays: constants.CALENDAR_CRITICAL_DAYS,
+      }),
+      today: todayStr,
+      warn_days: constants.CALENDAR_WARN_DAYS,
+    });
   } catch (err) {
     sendError(req, res, err);
   }
