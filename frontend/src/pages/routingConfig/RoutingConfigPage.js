@@ -1,11 +1,13 @@
 // Routing & Machine Configuration — port จาก routing_config_screen.dart
-// ค้นหา model → ตาราง routing/machine พร้อมปุ่มจัดการ + กระดานงานด่วน (missing-models) + wizard สร้าง model
+// ค้นหา model → มุมมองเดียว Flow > Step > เครื่อง + กระดานงานด่วน (missing-models) + wizard สร้าง model
 // FIX: รายชื่อเครื่องดึงจาก /production/machines (Flutter เดิม hardcode 8 ตัว)
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+//
+// การแสดงผลถูกรื้อจาก "สองตารางวางข้างกัน" (Routing ซ้าย / Machine ขวา ที่ต้องกวาดตาจับคู่
+// flow_index+step_index เอง) มาเป็น tree เดียว — ตรรกะการรวมอยู่ใน routingTree.js (pure)
+// และการวาดอยู่ใน RoutingTreeView.js
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Container,
-  Row,
-  Col,
   Card,
   Table,
   Button,
@@ -14,12 +16,30 @@ import {
   Badge,
   Spinner,
   Modal,
+  ListGroup,
+  ButtonGroup,
 } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import PageHeader from '../../components/shared/PageHeader';
 import Toolbar from '../../components/shared/Toolbar';
+import ConfirmModal from '../../components/shared/ConfirmModal';
 import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import NewModelWizardDialog from './NewModelWizardDialog';
+import RoutingTreeView from './RoutingTreeView';
+import RoutingEditTable from './RoutingEditTable';
+import { buildRoutingTree, insertStepDefaults, primaryMachineOf } from './routingTree';
+import {
+  buildEditGroups,
+  setEdit,
+  countEditedRows,
+  validateEdits,
+  hasProblems,
+  buildBulkPayload,
+  stepsLeftWithNoMachine,
+  sharedJigWarnings,
+  flowLabel,
+  stepLabel,
+} from './routingEdits';
 import {
   EditRoutingDialog,
   EditMachineDialog,
@@ -31,17 +51,37 @@ import {
   ConfirmDeleteDialog,
 } from './RoutingDialogs';
 
+const RECENT_KEY = 'routingConfig.recentModels';
+const RECENT_MAX = 8;
+
+const readRecents = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_KEY));
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
 const RoutingConfigPage = () => {
   const [searchInput, setSearchInput] = useState('');
   const [searchModel, setSearchModel] = useState('');
   const [routing, setRouting] = useState([]);
   const [machine, setMachine] = useState([]);
+  const [wipRefs, setWipRefs] = useState(0);
   const [hasSearched, setHasSearched] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const [missingModels, setMissingModels] = useState([]);
   const [showUrgent, setShowUrgent] = useState(false);
   const [machines, setMachines] = useState([]);
+  const [jigs, setJigs] = useState([]);
+
+  // autocomplete
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [recents, setRecents] = useState(readRecents);
+  const blurTimer = useRef(null);
 
   const { toast, showToast, hideToast } = useToast();
   const onSaved = useCallback(
@@ -52,18 +92,43 @@ const RoutingConfigPage = () => {
   );
   const onError = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
 
+  // MFG เข้าหน้านี้ได้ (readRoles มี MFG) แต่ mutation ทุกตัวเป็น ADMIN/PLANNER —
+  // ซ่อนปุ่มไม่ให้กดแล้วเจอ 403 (backend ยังเป็นด่านจริง อันนี้แค่มารยาทฝั่ง UI เหมือนหน้า Calendar)
+  const currentUser = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
+  }, []);
+  const canEdit = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
+
   // dialog state: {type, payload}
   const [dialog, setDialog] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
-  const [confirm, setConfirm] = useState(null); // {title, message, run}
+  const [confirm, setConfirm] = useState(null); // {title, message, run} — ของ ConfirmDeleteDialog
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [ask, setAsk] = useState(null); // {title, body, confirmLabel, variant, onConfirm} — ConfirmModal
 
   const closeDialog = useCallback(() => setDialog(null), []);
 
-  const flows = useMemo(
-    () => [...new Set(routing.map((r) => r.flow_index ?? 0))].sort((a, b) => a - b),
-    [routing]
+  const tree = useMemo(() => buildRoutingTree(routing, machine), [routing, machine]);
+  const flows = useMemo(() => tree.flows.map((f) => f.flowIndex), [tree]);
+
+  // ===== โหมดตารางแก้ในช่องได้เลย =====
+  // 'edit'   = แก้ค่า (ชื่อขั้น / เครื่อง / เวลา / จิ๊ก / เปิด-ปิด) หลายแถวแล้วบันทึกครั้งเดียว
+  // 'manage' = จัดการลำดับและโครงสร้าง (เพิ่ม-ลบ-เลื่อน) ซึ่งยังต้องทำทีละรายการ
+  //            เพราะแต่ละอย่างขยับเลขกำกับของสองตารางพร้อมกัน
+  const [mode, setMode] = useState('edit');
+  const [edits, setEdits] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const { groups, orphanGroup } = useMemo(() => buildEditGroups(tree), [tree]);
+  const editCount = countEditedRows(edits);
+  const problems = useMemo(
+    () => validateEdits(groups, orphanGroup, edits),
+    [groups, orphanGroup, edits]
   );
+
+  const handleCellEdit = useCallback((key, field, value, original) => {
+    setEdits((prev) => setEdit(prev, key, field, value, original));
+  }, []);
 
   // ===== fetch =====
   const fetchMissing = useCallback(() => {
@@ -77,14 +142,32 @@ const RoutingConfigPage = () => {
     apiCall('/production/machines')
       .then((res) => setMachines(res.data || []))
       .catch(() => setMachines([]));
+    // ทะเบียน jig สำหรับดรอปดาวน์ในไดอะล็อก — ตาราง jig_master สร้างด้วย DDL รันมือ
+    // ยังไม่มีก็ไม่เป็นไร ช่อง Jig จะกลับไปเป็นช่องพิมพ์เปล่าเหมือนเดิม
+    apiCall('/jig')
+      .then((res) => setJigs(Array.isArray(res) ? res : []))
+      .catch(() => setJigs([]));
   }, [fetchMissing]);
+
+  const pushRecent = useCallback((model) => {
+    setRecents((prev) => {
+      const next = [model, ...prev.filter((m) => m !== model)].slice(0, RECENT_MAX);
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* โควตาเต็ม — ไม่เป็นไร */ }
+      return next;
+    });
+  }, []);
 
   const runSearch = useCallback(async (model) => {
     const q = String(model || '').trim();
+    setShowSuggest(false);
+    // ข้อมูลกำลังจะถูกโหลดใหม่ — ช่องที่ค้างอยู่จะอ้างถึงแถวชุดเก่า ต้องล้างทิ้งเสมอ
+    // (ตัวที่กันไม่ให้ของหายโดยไม่ตั้งใจคือคำถามยืนยันใน switchMode ไม่ใช่บรรทัดนี้)
+    setEdits({});
     if (!q) {
       setHasSearched(false);
       setRouting([]);
       setMachine([]);
+      setWipRefs(0);
       setSearchModel('');
       return;
     }
@@ -95,14 +178,71 @@ const RoutingConfigPage = () => {
       const res = await apiCall(`/routing_machine_config?model=${encodeURIComponent(q)}`);
       setRouting(res.routing || []);
       setMachine(res.machine || []);
+      setWipRefs(res.wip_refs || 0);
+      if ((res.routing || []).length > 0) pushRecent(q);
     } catch (err) {
       setRouting([]);
       setMachine([]);
+      setWipRefs(0);
       showToast(err.message, 'danger');
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, pushRecent]);
+
+  // ===== autocomplete: /routing/search-master (LIKE model หรือ description) =====
+  // ⚠️ endpoint นั้นคืนเฉพาะ model ที่ **มี** routing อยู่แล้ว ซึ่งตัด model ที่คนอยากมาสร้าง routing
+  // ให้ทิ้งพอดี — จึงเอา missingModels (โหลดไว้แล้ว) มาผสมฝั่ง client แล้วติดป้ายให้
+  useEffect(() => {
+    const kw = searchInput.trim();
+    if (!kw) {
+      setSuggestions([]);
+      return undefined;
+    }
+    const t = setTimeout(() => {
+      apiCall(`/routing/search-master?keyword=${encodeURIComponent(kw)}`)
+        .then((res) => setSuggestions(Array.isArray(res) ? res : []))
+        .catch(() => setSuggestions([]));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  const suggestList = useMemo(() => {
+    const kw = searchInput.trim().toLowerCase();
+    const withRouting = suggestions.map((s) => ({ ...s, hasRouting: true }));
+    const seen = new Set(withRouting.map((s) => s.model));
+    // missingModels อาจเป็นลิสต์ว่างอย่างถูกต้อง (ควิร์ก NOT IN + NULL ที่ backend คงไว้ 1:1)
+    const withoutRouting = (missingModels || [])
+      .filter((m) => !seen.has(m.model))
+      .filter((m) => {
+        if (!kw) return true;
+        return (
+          String(m.model || '').toLowerCase().includes(kw) ||
+          String(m.description || '').toLowerCase().includes(kw)
+        );
+      })
+      .map((m) => ({ ...m, hasRouting: false }));
+    return [...withRouting, ...withoutRouting].slice(0, 12);
+  }, [suggestions, missingModels, searchInput]);
+
+  const pickSuggestion = useCallback(
+    (model) => {
+      setSearchInput(model);
+      setShowSuggest(false);
+      runSearch(model);
+    },
+    [runSearch]
+  );
+
+  // เมนูแนะนำปิดตอน blur แต่ต้องหน่วงก่อน ไม่งั้นคลิกรายการไม่ติด (blur มาก่อน click)
+  const handleBlur = useCallback(() => {
+    blurTimer.current = setTimeout(() => setShowSuggest(false), 150);
+  }, []);
+  const handleFocus = useCallback(() => {
+    if (blurTimer.current) clearTimeout(blurTimer.current);
+    setShowSuggest(true);
+  }, []);
+  useEffect(() => () => { if (blurTimer.current) clearTimeout(blurTimer.current); }, []);
 
   // refresh หลัง mutation: ค้นซ้ำ model เดิม + โหลดกระดานงานด่วนใหม่
   const refresh = useCallback(() => {
@@ -120,11 +260,13 @@ const RoutingConfigPage = () => {
   );
 
   const clearSearch = () => {
+    setEdits({});
     setSearchInput('');
     setSearchModel('');
     setHasSearched(false);
     setRouting([]);
     setMachine([]);
+    setWipRefs(0);
   };
 
   // ===== delete (routing step / machine) ผ่าน confirm modal =====
@@ -143,21 +285,230 @@ const RoutingConfigPage = () => {
     }
   };
 
-  const askDeleteRouting = (row) =>
-    setConfirm({
-      title: 'ลบ Step',
-      message: `ยืนยันลบ Step "${row.step_name}" (Flow ${row.flow_index}, Step ${row.step_index})? เครื่องของ Step นี้จะถูกลบด้วย`,
-      successMsg: 'ลบ Step แล้ว',
-      run: () => apiCall(`/routing_config/${row.id}`, { method: 'DELETE' }),
-    });
+  const askDeleteRouting = useCallback(
+    (step) =>
+      setConfirm({
+        title: 'ลบ Step',
+        message: `ยืนยันลบ Step "${step.stepName}" (Flow ${step.flowIndex}, Step ${step.stepIndex})? เครื่องของ Step นี้จะถูกลบด้วย`,
+        successMsg: 'ลบ Step แล้ว',
+        run: () => apiCall(`/routing_config/${step.id}`, { method: 'DELETE' }),
+      }),
+    []
+  );
 
-  const askDeleteMachine = (row) =>
-    setConfirm({
-      title: 'ลบเครื่อง',
-      message: `ยืนยันลบเครื่อง "${row.machine}" (Flow ${row.flow_index}, Step ${row.step_index}, Alt ${row.alternative_index})?`,
-      successMsg: 'ลบเครื่องแล้ว',
-      run: () => apiCall(`/machine_config/${row.id}`, { method: 'DELETE' }),
+  const askDeleteMachine = useCallback(
+    (mc) =>
+      setConfirm({
+        title: 'ลบเครื่อง',
+        message: `ยืนยันลบเครื่อง "${mc.machine}" (Flow ${mc.flowIndex}, Step ${mc.stepIndex}, Alt ${mc.altIndex})?`,
+        successMsg: 'ลบเครื่องแล้ว',
+        run: () => apiCall(`/machine_config/${mc.id}`, { method: 'DELETE' }),
+      }),
+    []
+  );
+
+  // ===== เปิด/ปิดเครื่อง (is_active) =====
+  // "เครื่องนี้ทำโมเดลนี้ไม่ได้ถาวร" — คนละเรื่องกับเครื่องเสียชั่วคราว (นั่นใช้ปฏิทิน = 0)
+  // ถามยืนยันเฉพาะตอนปิด เพราะปิดแล้วแผนจะเลิกใช้เครื่องนี้ทันทีตั้งแต่ Replan ครั้งถัดไป
+  const handleToggleActive = useCallback(
+    (mc) => {
+      if (mc.isActive) {
+        setConfirm({
+          title: 'ปิดใช้งานเครื่อง',
+          message:
+            `ยืนยันปิดใช้งาน "${mc.machine}" สำหรับ Model ${searchModel}?\n\n`
+            + 'ระบบจะไม่วางแผนงานของโมเดลนี้ลงเครื่องดังกล่าวอีก (ค่า Cycle/Setup/Jig ยังถูกเก็บไว้ '
+            + 'เปิดกลับได้ทุกเมื่อ) — ใช้กับกรณี "เครื่องนี้ทำโมเดลนี้ไม่ได้ถาวร" เท่านั้น '
+            + 'ถ้าเป็นเครื่องเสียชั่วคราว ให้ตั้งเวลาว่างเป็น 0 ที่หน้า Calendar แทน',
+          successMsg: 'ปิดใช้งานเครื่องแล้ว',
+          run: () => apiCall(`/machine_config/${mc.id}/active`, {
+            method: 'PUT',
+            body: JSON.stringify({ is_active: false }),
+          }),
+        });
+        return;
+      }
+      apiCall(`/machine_config/${mc.id}/active`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_active: true }),
+      })
+        .then(() => {
+          onSaved('เปิดใช้งานเครื่องแล้ว');
+          refresh();
+        })
+        .catch((err) => onError(err.message));
+    },
+    [searchModel, onSaved, onError, refresh]
+  );
+
+  // ===== บันทึกตารางแก้ในช่อง (PUT /routing_machine_config/bulk_edit) =====
+  const doBulkSave = useCallback(async () => {
+    setSaving(true);
+    try {
+      const payload = buildBulkPayload(searchModel, groups, orphanGroup, edits);
+      const res = await apiCall('/routing_machine_config/bulk_edit', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      // ล้างช่องที่ค้างก่อน refresh — ไม่งั้นค่าที่บันทึกไปแล้วยังขึ้นสีเหลืองอยู่
+      setEdits({});
+      onSaved(res.message || 'บันทึกแล้ว');
+      refresh();
+    } catch (err) {
+      // ไม่ล้าง edits เมื่อพัง — ผู้ใช้จะได้แก้ต่อจากที่ค้างไว้แทนที่จะพิมพ์ใหม่ทั้งหมด
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [searchModel, groups, orphanGroup, edits, onSaved, onError, refresh]);
+
+  // ถามยืนยันเมื่อการบันทึกจะเปลี่ยนเลขคณิตของแผน ไม่ใช่แค่ป้ายชื่อ:
+  //   - ปิดเครื่องจนบางขั้นไม่เหลือเครื่องเลย (backend ตอบ 400 อยู่แล้ว บอกก่อนกดจะดีกว่า)
+  //   - ผูก jig เดียวกันให้หลายแถว → getSmartSetupTime คิดเวลา setup แบบสั้นให้งานที่ติดกัน
+  const handleBulkSave = useCallback(() => {
+    const empty = stepsLeftWithNoMachine(groups, edits);
+    if (empty.length > 0) {
+      const list = empty
+        .map((g) => `${flowLabel(g.flowPos)} · ${stepLabel(g.stepPos)} (${g.stepName || 'ไม่มีชื่อ'})`)
+        .join('\n');
+      setAsk({
+        title: 'บันทึกไม่ได้',
+        body:
+          'ขั้นตอนต่อไปนี้จะไม่เหลือเครื่องที่ใช้งานได้เลย:\n\n' + list
+          + '\n\nแต่ละขั้นต้องมีเครื่องอย่างน้อย 1 เครื่อง — เปิดเครื่องคืนอย่างน้อยหนึ่งตัวก่อน',
+        confirmLabel: 'เข้าใจแล้ว',
+        variant: 'danger',
+        onConfirm: () => {},
+      });
+      return;
+    }
+
+    const shared = sharedJigWarnings(groups, orphanGroup, edits);
+    if (shared.length > 0) {
+      const list = shared
+        .map((s) => `จิ๊ก ${s.jigId} → ${s.machines.join(', ')}`)
+        .join('\n');
+      setAsk({
+        title: 'ยืนยันการบันทึก',
+        body:
+          'มีเครื่องที่กำลังจะใช้จิ๊กตัวเดียวกัน:\n\n' + list
+          + '\n\nงานที่ใช้จิ๊กเดียวกันและลงเครื่องเดียวกันติดกัน ระบบจะคิดเวลาตั้งเครื่องแบบสั้น '
+          + '(ค่า minor setup ในหน้าตั้งค่า) — เลือกแบบนี้เมื่อของจริงไม่ต้องเปลี่ยนจิ๊กเท่านั้น '
+          + 'ถ้าหน้างานยังต้องเปลี่ยนจิ๊กอยู่ แผนจะสั้นกว่าความจริง',
+        confirmLabel: 'บันทึกเลย',
+        variant: 'warning',
+        onConfirm: doBulkSave,
+      });
+      return;
+    }
+
+    doBulkSave();
+  }, [groups, orphanGroup, edits, doBulkSave]);
+
+  const discardEdits = useCallback(() => {
+    setAsk({
+      title: 'ยกเลิกการแก้ไข',
+      body: `ทิ้งการแก้ที่ยังไม่บันทึก ${editCount} รายการ?`,
+      confirmLabel: 'ทิ้งเลย',
+      variant: 'danger',
+      onConfirm: () => setEdits({}),
     });
+  }, [editCount]);
+
+  // สลับไปโหมดจัดการลำดับทั้งที่ยังมีของค้าง = ของหายเงียบ ๆ (โหมดนั้นยิง API ทันทีแล้ว refresh)
+  const switchMode = useCallback(
+    (next) => {
+      if (next === mode) return;
+      if (next === 'manage' && editCount > 0) {
+        setAsk({
+          title: 'ยังมีการแก้ที่ไม่ได้บันทึก',
+          body:
+            `มี ${editCount} รายการที่แก้ค้างไว้ — โหมดจัดการลำดับจะโหลดข้อมูลใหม่ทุกครั้งที่กดปุ่ม `
+            + 'การแก้ที่ค้างอยู่จะหายไป\n\nกดบันทึกก่อนสลับโหมด หรือยืนยันเพื่อทิ้ง',
+          confirmLabel: 'ทิ้งแล้วสลับ',
+          variant: 'danger',
+          onConfirm: () => {
+            setEdits({});
+            setMode(next);
+          },
+        });
+        return;
+      }
+      setMode(next);
+    },
+    [mode, editCount]
+  );
+
+  // ===== เลื่อนลำดับ (POST /routing_config/move) =====
+  const doMove = useCallback(
+    async (level, flowIndex, stepIndex, direction) => {
+      try {
+        const res = await apiCall('/routing_config/move', {
+          method: 'POST',
+          body: JSON.stringify({
+            model: searchModel,
+            level,
+            flow_index: flowIndex,
+            step_index: stepIndex,
+            direction,
+          }),
+        });
+        onSaved(res.message || 'เลื่อนลำดับแล้ว');
+        refresh();
+      } catch (err) {
+        onError(err.message);
+      }
+    },
+    [searchModel, onSaved, onError, refresh]
+  );
+
+  // batch ที่ตรึงตำแหน่ง WIP ไว้ด้วยเลข flow/step จะชี้ผิดขั้นหลังเลื่อน — ถามก่อน (ไม่บล็อก ไม่ cascade)
+  const guardedMove = useCallback(
+    (level, flowIndex, stepIndex, direction, label) => {
+      if (wipRefs > 0) {
+        setAsk({
+          title: 'ยืนยันการเลื่อนลำดับ',
+          body:
+            `Model นี้มี ${wipRefs} batch ที่ตรึงตำแหน่ง WIP ไว้ด้วยเลข Flow/Step\n` +
+            `การเลื่อน ${label} จะทำให้เลขที่ตรึงไว้ชี้คนละขั้นตอน (ระบบไม่ได้ตามไปแก้ให้)\n\n` +
+            'ยอดผลิตและการปิดจบงานผูกกับ "ชื่อ" Step ไม่ใช่เลข จึงไม่กระทบ',
+          confirmLabel: 'เลื่อนเลย',
+          variant: 'warning',
+          onConfirm: () => doMove(level, flowIndex, stepIndex, direction),
+        });
+        return;
+      }
+      doMove(level, flowIndex, stepIndex, direction);
+    },
+    [wipRefs, doMove]
+  );
+
+  const handleMoveStep = useCallback(
+    (step, direction) =>
+      guardedMove('step', step.flowIndex, step.stepIndex, direction, `Step "${step.stepName}"`),
+    [guardedMove]
+  );
+
+  const handleMoveFlow = useCallback(
+    (flowIndex, direction) => guardedMove('flow', flowIndex, 0, direction, `Flow ${flowIndex}`),
+    [guardedMove]
+  );
+
+  // ===== เปิด dialog จาก tree (พร้อมค่าตั้งต้นของ flow/step ที่กด) =====
+  const handleAddStep = useCallback(
+    (flow) => setDialog({ type: 'insertStep', defaults: insertStepDefaults(flow) }),
+    []
+  );
+  const handleAddAlt = useCallback(
+    (step) => setDialog({ type: 'insertAlt', step, primary: primaryMachineOf(step) }),
+    []
+  );
+  const handleEditStep = useCallback((step) => setDialog({ type: 'editRouting', row: step.row }), []);
+  const handleEditMachine = useCallback((mc) => setDialog({ type: 'editMachine', row: mc.row }), []);
+  const handleDeleteFlow = useCallback(
+    (flowIndex) => setDialog({ type: 'deleteFlow', flowIndex }),
+    []
+  );
 
   // ===== แจ้ง Engineer จากกระดานงานด่วน =====
   const notifyEngineer = async (modelName) => {
@@ -172,6 +523,8 @@ const RoutingConfigPage = () => {
       showToast(err.message, 'danger');
     }
   };
+
+  const showEmptySuggest = !searchInput.trim();
 
   return (
     <Container fluid className="pb-4">
@@ -194,24 +547,82 @@ const RoutingConfigPage = () => {
 
       {/* ===== toolbar ===== */}
       <Toolbar>
-        <InputGroup style={{ width: 320 }}>
-          <Form.Control
-            placeholder="ค้นหา Model เช่น KT16184-3..."
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && runSearch(searchInput)}
-          />
-          <Button className="btn-mse" onClick={() => runSearch(searchInput)}>
-            <i className="bi bi-search me-1" aria-hidden="true" />
-            ค้นหา
+        <div style={{ position: 'relative', width: 360 }}>
+          <InputGroup>
+            <Form.Control
+              placeholder="ค้นหา Model หรือ Description เช่น KT161..."
+              value={searchInput}
+              onChange={(e) => {
+                setSearchInput(e.target.value);
+                setShowSuggest(true);
+              }}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') runSearch(searchInput);
+                if (e.key === 'Escape') setShowSuggest(false);
+              }}
+              aria-label="ค้นหา Model"
+            />
+            <Button className="btn-mse" onClick={() => runSearch(searchInput)}>
+              <i className="bi bi-search me-1" aria-hidden="true" />
+              ค้นหา
+            </Button>
+          </InputGroup>
+
+          {showSuggest && (suggestList.length > 0 || (showEmptySuggest && recents.length > 0)) && (
+            <ListGroup
+              className="shadow-sm"
+              style={{ position: 'absolute', zIndex: 1050, width: '100%', maxHeight: 320, overflowY: 'auto' }}
+            >
+              {showEmptySuggest && recents.length > 0 && (
+                <>
+                  <ListGroup.Item disabled className="py-1 small text-muted">
+                    เปิดล่าสุด
+                  </ListGroup.Item>
+                  {recents.map((m) => (
+                    <ListGroup.Item action key={`recent-${m}`} onClick={() => pickSuggestion(m)}>
+                      <i className="bi bi-clock-history me-2 text-muted" aria-hidden="true" />
+                      {m}
+                    </ListGroup.Item>
+                  ))}
+                </>
+              )}
+              {suggestList.map((s) => (
+                <ListGroup.Item action key={s.model} onClick={() => pickSuggestion(s.model)}>
+                  <div className="d-flex justify-content-between align-items-center gap-2">
+                    <span>
+                      <span className="fw-bold">{s.model}</span>
+                      {s.description ? (
+                        <span className="text-muted small ms-2">{s.description}</span>
+                      ) : null}
+                    </span>
+                    {!s.hasRouting && <span className="chip chip-warn">ยังไม่มี Routing</span>}
+                  </div>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          )}
+        </div>
+
+        {canEdit && (
+          <Button variant="success" onClick={() => setShowWizard(true)}>
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" />
+            เพิ่ม Model ใหม่
           </Button>
-        </InputGroup>
-        <Button variant="success" onClick={() => setShowWizard(true)}>
-          <i className="bi bi-plus-lg me-1" aria-hidden="true" />
-          เพิ่ม Model ใหม่
-        </Button>
+        )}
         {searchModel && (
           <>
+            {canEdit && (
+              <>
+                <Button size="sm" variant="outline-primary" onClick={() => setDialog({ type: 'setup' })}>
+                  Setup Group
+                </Button>
+                <Button size="sm" variant="outline-success" onClick={() => setDialog({ type: 'addFlow' })}>
+                  <i className="bi bi-plus-lg me-1" aria-hidden="true" /> Flow
+                </Button>
+              </>
+            )}
             <Button variant="outline-secondary" onClick={clearSearch}>
               <i className="bi bi-x-lg me-1" aria-hidden="true" />
               ล้างค่า
@@ -280,148 +691,122 @@ const RoutingConfigPage = () => {
         <div className="empty-state">
           <i className="bi bi-search" aria-hidden="true" />
           <div className="fw-bold text-danger">ไม่พบ Model &quot;{searchModel}&quot; ในระบบ</div>
-          <div className="small">กดปุ่ม &quot;เพิ่ม Model ใหม่&quot; เพื่อสร้าง Routing</div>
+          {canEdit && (
+            <div className="small">กดปุ่ม &quot;เพิ่ม Model ใหม่&quot; เพื่อสร้าง Routing</div>
+          )}
         </div>
       )}
 
-      {hasSearched && (routing.length > 0 || machine.length > 0) && (
-        <Row className="g-3">
-          {/* Routing */}
-          <Col lg={5}>
-            <Card>
-              <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span className="fw-bold text-teal">1. Routing Config ({searchModel})</span>
-                <div className="d-flex gap-1 flex-wrap">
-                  <Button size="sm" variant="outline-primary" onClick={() => setDialog({ type: 'setup' })}>
-                    Setup Group
-                  </Button>
-                  <Button size="sm" variant="outline-success" onClick={() => setDialog({ type: 'insertStep' })}>
-                    <i className="bi bi-plus-lg me-1" aria-hidden="true" /> Step
-                  </Button>
-                  <Button size="sm" variant="outline-success" onClick={() => setDialog({ type: 'addFlow' })}>
-                    <i className="bi bi-plus-lg me-1" aria-hidden="true" /> Flow
-                  </Button>
-                  <Button size="sm" variant="outline-danger" onClick={() => setDialog({ type: 'deleteFlow' })}>
-                    <i className="bi bi-trash me-1" aria-hidden="true" /> Flow
-                  </Button>
-                </div>
-              </Card.Header>
-              <Card.Body className="p-0">
-                <Table size="sm" hover className="mb-0 align-middle">
-                  <thead className="table-light">
-                    <tr>
-                      <th>Flow</th>
-                      <th>Step</th>
-                      <th>Step Name</th>
-                      <th>Setup Group</th>
-                      <th className="text-end">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {routing.map((r) => (
-                      <tr key={r.id}>
-                        <td className="num">{r.flow_index}</td>
-                        <td className="num">{r.step_index}</td>
-                        <td>{r.step_name}</td>
-                        <td>{r.setup_group}</td>
-                        <td className="text-end text-nowrap">
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0 me-3 text-primary icon-btn"
-                            title="แก้ไข Step"
-                            aria-label={`แก้ไข Step ${r.step_name}`}
-                            onClick={() => setDialog({ type: 'editRouting', row: r })}
-                          >
-                            <i className="bi bi-pencil-square" aria-hidden="true" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0 text-danger icon-btn"
-                            title="ลบ Step"
-                            aria-label={`ลบ Step ${r.step_name}`}
-                            onClick={() => askDeleteRouting(r)}
-                          >
-                            <i className="bi bi-trash" aria-hidden="true" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </Card.Body>
-            </Card>
-          </Col>
+      {hasSearched && !loading && (routing.length > 0 || machine.length > 0) && (
+        <>
+          <div className="d-flex align-items-center gap-2 mb-2 flex-wrap">
+            <span className="fw-bold text-mse" style={{ fontSize: '1.05rem' }}>
+              {searchModel}
+            </span>
+            <span className="chip chip-muted">
+              {tree.flows.length} สายการผลิต · {groups.length} ขั้นตอน
+            </span>
+            {!canEdit && <span className="chip chip-info">ดูอย่างเดียว</span>}
 
-          {/* Machine */}
-          <Col lg={7}>
-            <Card>
-              <Card.Header className="fw-bold">2. Machine Config ({searchModel})</Card.Header>
-              <Card.Body className="p-0">
-                <Table size="sm" hover className="mb-0 align-middle">
-                  <thead className="table-light">
-                    <tr>
-                      <th>Flow</th>
-                      <th>Step</th>
-                      <th>Alt</th>
-                      <th>Machine</th>
-                      <th>Cycle</th>
-                      <th>Setup</th>
-                      <th>Jig</th>
-                      <th className="text-end">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {machine.map((m) => (
-                      <tr key={m.id}>
-                        <td className="num">{m.flow_index}</td>
-                        <td className="num">{m.step_index}</td>
-                        <td className="num">{m.alternative_index}</td>
-                        <td className="fw-semibold">{m.machine}</td>
-                        <td className="num">{m.cycle_time}</td>
-                        <td className="num">{m.setup_time}</td>
-                        <td>{m.jig_id}</td>
-                        <td className="text-end text-nowrap">
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0 me-3 text-success icon-btn"
-                            title="เพิ่มเครื่องสำรอง (Alt)"
-                            aria-label={`เพิ่มเครื่องสำรองของ ${m.machine}`}
-                            onClick={() => setDialog({ type: 'insertAlt', step: m })}
-                          >
-                            <i className="bi bi-plus-lg" aria-hidden="true" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0 me-3 text-primary icon-btn"
-                            title="แก้ไขเครื่องจักร"
-                            aria-label={`แก้ไข ${m.machine}`}
-                            onClick={() => setDialog({ type: 'editMachine', row: m })}
-                          >
-                            <i className="bi bi-pencil-square" aria-hidden="true" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0 text-danger icon-btn"
-                            title="ลบเครื่องจักร"
-                            aria-label={`ลบ ${m.machine}`}
-                            onClick={() => askDeleteMachine(m)}
-                          >
-                            <i className="bi bi-trash" aria-hidden="true" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
+            {/* สองโหมด: แก้ค่าหลายแถวพร้อมกัน กับ จัดการลำดับทีละรายการ */}
+            <ButtonGroup size="sm" className="ms-auto">
+              <Button
+                variant={mode === 'edit' ? 'primary' : 'outline-secondary'}
+                onClick={() => switchMode('edit')}
+              >
+                <i className="bi bi-pencil-square me-1" aria-hidden="true" />
+                แก้ค่า
+              </Button>
+              <Button
+                variant={mode === 'manage' ? 'primary' : 'outline-secondary'}
+                onClick={() => switchMode('manage')}
+              >
+                <i className="bi bi-list-ol me-1" aria-hidden="true" />
+                จัดการลำดับ
+                {editCount > 0 && (
+                  <Badge bg="warning" text="dark" pill className="ms-1">{editCount}</Badge>
+                )}
+              </Button>
+            </ButtonGroup>
+          </div>
+
+          {mode === 'edit' ? (
+            <>
+              {/* แถบบันทึกติดบนสุด — ต้องเห็นตัวนับได้ตลอดโดยไม่ต้องเลื่อนกลับขึ้นมา */}
+              {canEdit && (
+                <div
+                  className="d-flex align-items-center gap-2 flex-wrap mb-2 py-2 px-2 bg-body border rounded"
+                  style={{ position: 'sticky', top: 0, zIndex: 3 }}
+                >
+                  <span className="small text-muted">
+                    แก้ค่าในช่องได้เลย ช่องที่แก้จะขึ้นสีเหลืองจนกว่าจะกดบันทึก
+                  </span>
+                  <div className="ms-auto d-flex align-items-center gap-2">
+                    {hasProblems(problems) && (
+                      <span className="chip chip-ng">มีช่องที่กรอกไม่ถูกต้อง</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      disabled={editCount === 0 || saving}
+                      onClick={discardEdits}
+                    >
+                      ยกเลิกการแก้ไข
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="btn-mse"
+                      disabled={editCount === 0 || saving || hasProblems(problems)}
+                      onClick={handleBulkSave}
+                    >
+                      {saving ? (
+                        <Spinner animation="border" size="sm" className="me-1" />
+                      ) : (
+                        <i className="bi bi-save me-1" aria-hidden="true" />
+                      )}
+                      บันทึก {editCount > 0 ? `${editCount} รายการที่แก้` : ''}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <RoutingEditTable
+                groups={groups}
+                orphanGroup={orphanGroup}
+                edits={edits}
+                problems={problems}
+                machines={machines}
+                jigs={jigs}
+                canEdit={canEdit}
+                onEdit={handleCellEdit}
+              />
+
+              {canEdit && (
+                <p className="small text-muted">
+                  ต้องการเพิ่ม / ลบ / สลับลำดับขั้นตอน หรือแก้เลขกำกับของแถวที่ยังไม่ผูกขั้นตอน?
+                  กด <strong>จัดการลำดับ</strong> ด้านบน
+                </p>
+              )}
+            </>
+          ) : (
+            <RoutingTreeView
+              tree={tree}
+              model={searchModel}
+              canEdit={canEdit}
+              wipRefs={wipRefs}
+              onMoveStep={handleMoveStep}
+              onMoveFlow={handleMoveFlow}
+              onAddStep={handleAddStep}
+              onDeleteFlow={handleDeleteFlow}
+              onEditStep={handleEditStep}
+              onDeleteStep={askDeleteRouting}
+              onAddAlt={handleAddAlt}
+              onEditMachine={handleEditMachine}
+              onDeleteMachine={askDeleteMachine}
+              onToggleActive={handleToggleActive}
+            />
+          )}
+        </>
       )}
 
       {/* ===== dialogs ===== */}
@@ -436,6 +821,7 @@ const RoutingConfigPage = () => {
         show={dialog?.type === 'editMachine'}
         row={dialog?.row}
         machines={machines}
+        jigs={jigs}
         onHide={closeDialog}
         onSaved={afterMutation}
         onError={onError}
@@ -443,8 +829,9 @@ const RoutingConfigPage = () => {
       <InsertStepDialog
         show={dialog?.type === 'insertStep'}
         model={searchModel}
-        flows={flows}
+        defaults={dialog?.defaults}
         machines={machines}
+        jigs={jigs}
         onHide={closeDialog}
         onSaved={afterMutation}
         onError={onError}
@@ -453,7 +840,9 @@ const RoutingConfigPage = () => {
         show={dialog?.type === 'insertAlt'}
         model={searchModel}
         step={dialog?.step}
+        primary={dialog?.primary}
         machines={machines}
+        jigs={jigs}
         onHide={closeDialog}
         onSaved={afterMutation}
         onError={onError}
@@ -470,6 +859,7 @@ const RoutingConfigPage = () => {
         show={dialog?.type === 'deleteFlow'}
         model={searchModel}
         flows={flows}
+        defaultFlowIndex={dialog?.flowIndex}
         onHide={closeDialog}
         onSaved={afterMutation}
         onError={onError}
@@ -489,6 +879,7 @@ const RoutingConfigPage = () => {
         onHide={() => setConfirm(null)}
         onConfirm={runConfirm}
       />
+      <ConfirmModal confirm={ask} onHide={() => setAsk(null)} />
 
       <NewModelWizardDialog
         show={showWizard}

@@ -46,6 +46,7 @@ const {
   getElapsedMinutes,
 } = require('../utils/dates');
 const { isDayUnitMachine } = require('./dayUnit');
+const { isBlockedOn, isAnyJigBlocked } = require('./jigBlocks');
 const { pyInt, pyFloat, sortedNumericKeys } = require('./pyUtils');
 
 // clean_text (L426/L676): upper + ตัด space - _ –
@@ -106,6 +107,9 @@ class SchedulerEngine {
     this.actuals = {};
     this.actualMachines = {};
     this.closedStatuses = {};
+    // jig ที่ใช้ไม่ได้เป็นช่วงวัน (พัง/ส่งซ่อม) — {} = ไม่มีอะไรถูกบล็อก = พฤติกรรมเดิมทุกบิต
+    // parity fixtures ไม่มี jig_master จึงไม่ต้อง rebaseline (กติกาเดียวกับ material_arrived)
+    this.jigBlocks = {};
 
     const s = settings || {};
     this.ENABLE_HEAT_DEEP_PLAN = s.enable_heat_deep_plan != null ? Boolean(s.enable_heat_deep_plan) : ENABLE_HEAT_DEEP_PLAN;
@@ -117,11 +121,31 @@ class SchedulerEngine {
     this.DAY_UNIT_KEYWORDS = DAY_UNIT_KEYWORDS;
 
     this.decisionLog = [];
+    // ขั้นตอนที่วางไม่ลง — เก็บไว้ตอบ "หลุดแผนเพราะอะไร / ขั้นตอนไหน" (planBuilder.buildUnplannedReport)
+    //
+    // ⚠️ ที่ต้องเป็น log แยกแทนการเติมฟิลด์ในแถว NO_CAPACITY/OVERDUE ของ mainPlan:
+    // deepCompare ของ parity เทียบ **union ของ key** แถวที่มี key เกินจาก fixture จะ fail ทันที
+    // (ตอนนี้ยังไม่ fail เพราะไม่มี fixture ไหนสร้างแถวพวกนั้นเลย = โชค ไม่ใช่ความปลอดภัย)
+    // ตัวนี้ปลอดภัยโดยโครงสร้าง เพราะ parity.test.js รับแค่ { mainPlan, totalPlanMap }
+    // — แพตเทิร์นเดียวกับ decisionLog ที่อยู่บรรทัดบน
+    this.failedSteps = [];
   }
 
   // is_day_unit_machine (L286-292) — delegate ไป pure helper (scheduler/dayUnit.js)
   isDayUnitMachine(machineName) {
     return isDayUnitMachine(machineName, this.DAY_UNIT_KEYWORDS);
+  }
+
+  // jig ตัวนี้ถูกบล็อกในวันนั้นไหม — delegate ไป pure helper (scheduler/jigBlocks.js)
+  // ไม่มี jig_master / ไม่มีตัวไหนพัง → false เสมอ → ไม่กระทบการคำนวณเดิม
+  isJigBlocked(jig, dateStr) {
+    return isBlockedOn(this.jigBlocks, jig, dateStr);
+  }
+
+  // ชุดจิ๊กของแถวถูกบล็อกไหม — **AND**: ตัวใดตัวหนึ่งใช้ไม่ได้ = ทั้งแถวใช้ไม่ได้
+  // ชุดที่มีจิ๊กตัวเดียวให้ผลเท่า isJigBlocked เดิมทุกกรณี (ไม่กระทบ parity)
+  isJigSetBlocked(jigs, dateStr) {
+    return isAnyJigBlocked(this.jigBlocks, jigs, dateStr);
   }
 
   // get_smart_setup_time (L294-299)
@@ -343,9 +367,11 @@ class SchedulerEngine {
         const rawS = j < sOpts.length ? sOpts[j] : sOpts.length ? sOpts[0] : 0;
         let s = 0;
         let jig = '-';
+        let jigs = [];
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
+          jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
@@ -683,9 +709,11 @@ class SchedulerEngine {
         const rawS = j < sOpts.length ? sOpts[j] : sOpts[0];
         let s = 0;
         let jig = '-';
+        let jigs = [];
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
+          jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
@@ -758,6 +786,10 @@ class SchedulerEngine {
           }
 
           let av = targetCalendar[m][d];
+          // jig พัง/ส่งซ่อมในวันนี้ → วันนี้ทำงานชิ้นนี้ไม่ได้ (งานอื่นบนเครื่องเดียวกันยังเดินได้)
+          // แถวที่ต้องใช้หลายจิ๊กเป็น AND — ตัวใดตัวหนึ่งพังก็พอ (jigBlocks.isAnyJigBlocked)
+          // ใช้ทางเดิมของ "วันที่ไม่มี capacity" ทั้งหมด ไม่ต้องมี branch ใหม่
+          if (this.isJigSetBlocked(jigs.length ? jigs : jig, d)) av = 0;
           if (av < this.MIN_FRAGMENT_TIME) av = 0;
 
           if (av > 0) {
@@ -843,6 +875,12 @@ class SchedulerEngine {
             batch,
             step,
             error: 'No Capacity',
+          });
+          // แถวข้างบนถูก DROP_DATES ตัดทิ้งก่อนถึงผู้ใช้เสมอ — บันทึกซ้ำที่นี่เพื่อบอกเหตุผลได้
+          // (flowIndex/stepIndex ต้องมี: ชื่อ step ซ้ำข้าม flow ได้จริง จะ join กลับด้วยชื่ออย่างเดียวไม่ได้)
+          this.failedSteps.push({
+            batch, model, flowIndex: flowIdx, stepIndex: i, step,
+            qty: stepQtyRem, kind: 'no-capacity',
           });
         }
         stepFailed = true;
@@ -934,15 +972,22 @@ class SchedulerEngine {
     actualMachines = null,
     closedStatuses = null,
     currentTime = null,
+    jigBlocks = null,
   ) {
     // FIX: Python fallback เป็น datetime.now() — เวอร์ชันนี้บังคับ inject เสมอ
     if (!currentTime) throw new Error('SchedulerEngine.run: currentTime is required');
 
     if (!existingPlan) existingPlan = [];
 
+    // ต่างจาก decisionLog (สะสมข้ามการเรียกโดยตั้งใจ — ดูหมายเหตุข้อ 13 หัวไฟล์):
+    // failedSteps ต้องเป็นของรอบนี้เท่านั้น ไม่งั้นเรียก run() ซ้ำบน instance เดิมจะรายงานงานที่หลุดไปแล้วซ้ำ
+    this.failedSteps = [];
+
     this.actuals = actuals || {};
     this.actualMachines = actualMachines || {};
     this.closedStatuses = closedStatuses || {};
+    // ไม่ส่งมา = ไม่มี jig ตัวไหนถูกบล็อก (parity fixtures เข้าทางนี้)
+    this.jigBlocks = jigBlocks || {};
 
     const factoryToday = getFactoryDate(currentTime);
     const elapsedMins = getElapsedMinutes(currentTime);
@@ -1127,6 +1172,12 @@ class SchedulerEngine {
       } else {
         totalPlanMap.set(batch, { Batch: batch, StatusLOT: 'Backward Failed' });
         mainPlan.push({ date: 'OVERDUE', machine: 'N/A', batch, error: 'Backward Full' });
+        // backward วางย้อนจาก due ไม่ทัน — คนละเหตุผลกับ 'no-capacity' และไม่รู้ว่าตันที่ step ไหน
+        // (ล้มทั้ง flow ไม่ใช่ step เดียว) จึงปล่อย step/index เป็น null ตามความจริง
+        this.failedSteps.push({
+          batch, model: order.Model, flowIndex: null, stepIndex: null, step: null,
+          qty: order.qty ?? 0, kind: 'backward-full',
+        });
       }
     }
 
@@ -1276,7 +1327,8 @@ class SchedulerEngine {
       if (res.failed) order.StatusLOT = 'Failed';
     }
 
-    return { mainPlan, totalPlanMap };
+    // key ที่สามเพิ่มมาได้โดยไม่กระทบ parity — parity.test.js destructure แค่ { mainPlan, totalPlanMap }
+    return { mainPlan, totalPlanMap, failedSteps: this.failedSteps };
   }
 }
 

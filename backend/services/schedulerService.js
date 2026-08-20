@@ -4,9 +4,12 @@
 'use strict';
 
 const { query, transaction } = require('../db/pool');
+const { bulkInsert } = require('../db/bulk');
 const { processRouting, processUnifiedMachineConfig } = require('../scheduler/configProcessor');
 const { OrderManager } = require('../scheduler/orderManager');
 const { SchedulerEngine } = require('../scheduler/engine');
+const { buildJigBlockMap, mergeJigOverrides } = require('../scheduler/jigBlocks');
+const { filterActiveMachines } = require('../scheduler/machineFilter');
 const { ENABLE_PACKING } = require('../config/constants');
 const pb = require('../scheduler/planBuilder');
 const timestamps = require('../state/timestamps');
@@ -17,10 +20,40 @@ async function loadInputs(isReplan) {
   const routingRows = await query(
     'SELECT model, flow_index, step_index, step_name, setup_group FROM routing_config ORDER BY id',
   );
+  // is_active อ่านแบบ defensive เหมือน orders.material_arrived — คอลัมน์เพิ่มด้วย DDL รันมือ
+  // ไม่มีคอลัมน์ = ถือว่าเปิดใช้งานทุกแถว = พฤติกรรมเดิมทุกประการ
+  const hasActiveCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
   const machineRows = await query(
-    `SELECT model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
+    `SELECT id, model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
+            ${hasActiveCol ? ', is_active' : ''}
      FROM machine_config ORDER BY id`,
   );
+
+  // จิ๊กเสริม (แถวที่ต้องใช้หลายจิ๊กพร้อมกัน) — ตารางสร้างด้วย DDL รันมือ
+  // ไม่มีตาราง = ไม่มีแถวไหนใช้จิ๊กเสริม = พฤติกรรมเดิมทุกบิต (กติกาเดียวกับ jig_master)
+  // ⚠️ ผูกด้วย machine_config.id ไม่ใช่ตำแหน่งในอาเรย์ — filterActiveMachines เรียง
+  // alternative_index ใหม่ทีหลัง ถ้าผูกด้วยตำแหน่งจิ๊กเสริมจะไปโผล่ผิดเครื่อง
+  const hasExtraJigTable =
+    (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
+  const extraJigRows = hasExtraJigTable
+    ? await query('SELECT machine_config_id, jig_id FROM machine_config_jig')
+    : [];
+  const extraJigsById = new Map();
+  for (const r of extraJigRows) {
+    const list = extraJigsById.get(r.machine_config_id) ?? [];
+    list.push(r.jig_id);
+    extraJigsById.set(r.machine_config_id, list);
+  }
+  for (const m of machineRows) m.extra_jigs = extraJigsById.get(m.id) ?? [];
+  // jig_master เป็นตารางที่สร้างด้วย DDL รันมือ — ไม่มีตาราง = ไม่มี jig ตัวไหนถูกบล็อก
+  // (กติกาเดียวกับ activity_log / order_date_log: ขาดแล้วต้อง degrade เงียบ ๆ ไม่ใช่พัง)
+  const hasJigTable = (await query("SELECT OBJECT_ID('jig_master') AS id"))[0].id != null;
+  const jigRows = hasJigTable
+    ? await query(
+        `SELECT jig_id, status, unavailable_from, unavailable_to FROM jig_master
+         WHERE status IS NOT NULL AND status <> 'AVAILABLE'`,
+      )
+    : [];
   const calendarRows = await query(
     'SELECT machine, date, available_time FROM calendar_config ORDER BY id',
   );
@@ -61,29 +94,32 @@ async function loadInputs(isReplan) {
   const settings = settingsRows[0] || null;
 
   return {
-    routingRows, machineRows, calendarRows, orderRows,
+    routingRows, machineRows, jigRows, calendarRows, orderRows,
     productMasterRows, productionRecords, statusRows, scheduleRows, settings,
   };
 }
 
 // logic.py L254-436 (delete + insert schedule_results):
 // ของเก่า delete 2 รอบ (L254 + L408) เพราะไม่มี transaction — รอบเดียวใน transaction พอ
+//
+// นี่คือการเขียนที่ใหญ่ที่สุดในระบบ (แผนหนึ่งรอบระดับพันแถว) เดิม INSERT ทีละแถวใน loop
+// = round-trip เท่าจำนวนแถว ขณะถือ lock ตาราง schedule_results ไว้ทั้งชุด
+// เปลี่ยนมาใช้ bulkInsert (db/bulk.js) ที่ทุก route ใช้กันอยู่แล้ว — มันหั่น chunk ให้เองไม่ให้
+// เกินเพดาน ~2100 พารามิเตอร์ของ SQL Server · ลำดับแถวยังเป็นลำดับเดิม ผลลัพธ์ต้องเท่าเดิมเป๊ะ
+const SCHEDULE_RESULT_COLUMNS = [
+  'batch', 'sub_batches', 'model', 'step', 'step_index', 'machine',
+  'date_plan', 'time_used_min', 'qty_plan', 'is_setup', 'is_force_closed',
+];
+
 async function persist(scheduleResultRows) {
+  // is_force_closed เดิมเป็น literal 0 ใน SQL — ตอนนี้ต้องใส่เป็นค่าของทุกแถวแทน
+  const rows = scheduleResultRows.map((r) => [
+    r.batch, r.sub_batches, r.model, r.step, r.step_index, r.machine,
+    r.date_plan, r.time_used_min, r.qty_plan, r.is_setup ? 1 : 0, 0,
+  ]);
   await transaction(async (t) => {
     await t.query('DELETE FROM schedule_results');
-    for (const r of scheduleResultRows) {
-      await t.query(
-        `INSERT INTO schedule_results
-           (batch, sub_batches, model, step, step_index, machine, date_plan, time_used_min, qty_plan, is_setup, is_force_closed)
-         VALUES (@batch, @sub_batches, @model, @step, @step_index, @machine, @date_plan, @time_used_min, @qty_plan, @is_setup, 0)`,
-        {
-          batch: r.batch, sub_batches: r.sub_batches, model: r.model,
-          step: r.step, step_index: r.step_index, machine: r.machine,
-          date_plan: r.date_plan, time_used_min: r.time_used_min,
-          qty_plan: r.qty_plan, is_setup: r.is_setup ? 1 : 0,
-        },
-      );
-    }
+    await bulkInsert(t, 'schedule_results', SCHEDULE_RESULT_COLUMNS, rows);
   });
 }
 
@@ -104,9 +140,16 @@ async function persistOrderDates(updates) {
 // SchedulerService.run (logic.py L13-499) — คืน response shape เดิมเป๊ะ
 // options.isSimulation: ไม่บันทึกอะไรเลย (schedule_results / lastPlan / order dates) — แค่คืนแผนให้ดู
 // options.priorityOverrides: { batch: priority } สวมรอยตอน simulation
+// options.jigOverrides: [{ jig_id, status, unavailable_from, unavailable_to }] สวมรอย jig_master
+//   ตอน simulation — ใช้ทำพรีวิว "ถ้า jig ตัวนี้พังจะเป็นยังไง" โดยยังไม่เขียนอะไรลง DB
 // options.planModeOverrides: { batch: 'FIXED'|'NEW' } สวมรอย plan_mode ตอน simulation (lock/unlock)
 async function run(isReplan = false, options = {}) {
-  const { isSimulation = false, priorityOverrides = {}, planModeOverrides = {} } = options;
+  const {
+    isSimulation = false,
+    priorityOverrides = {},
+    planModeOverrides = {},
+    jigOverrides = [],
+  } = options;
   const inputs = await loadInputs(isReplan);
 
   // ---- config (L15-23) ----
@@ -114,10 +157,15 @@ async function run(isReplan = false, options = {}) {
     Model: r.model, FlowIndex: r.flow_index, StepIndex: r.step_index,
     StepName: r.step_name, SetupGroup: r.setup_group,
   }));
-  const flatMachine = inputs.machineRows.map((m) => ({
+  // เครื่องที่ถูกปิดใช้งาน (is_active = 0 = "เครื่องนี้ทำโมเดลนี้ไม่ได้") ต้องหลุดออกก่อนเข้า
+  // configProcessor และต้อง **เรียง alternative_index ใหม่ให้ต่อเนื่อง** ไม่งั้นเครื่องจะจับคู่
+  // กับ cycle time ของเครื่องอื่น (รายละเอียดอยู่ในหัว scheduler/machineFilter.js)
+  const { rows: activeMachineRows } = filterActiveMachines(inputs.machineRows);
+  const flatMachine = activeMachineRows.map((m) => ({
     Model: m.model, FlowIndex: m.flow_index, StepIndex: m.step_index,
     AlternativeIndex: m.alternative_index, Machine: m.machine,
     CycleTime: m.cycle_time, SetupTime: m.setup_time, JigID: m.jig_id,
+    ExtraJigs: m.extra_jigs ?? [],
   }));
   const routing = processRouting(flatRouting);
   const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(flatMachine);
@@ -170,16 +218,64 @@ async function run(isReplan = false, options = {}) {
   const actualsDict = pb.buildFakeActuals(rawOrders, routing, flatRouting, actualsRaw);
   const closedDict = pb.buildClosedDict(inputs.statusRows);
 
+  // ---- jig ที่ใช้ไม่ได้เป็นช่วงวัน ----
+  // jigOverrides ใช้เฉพาะตอน simulation (พรีวิว "ถ้า jig ตัวนี้พังจะเป็นยังไง" โดยไม่แตะ DB)
+  // run จริงยึด jig_master ในฐานข้อมูลเท่านั้น — กติกาเดียวกับ priority/plan_mode overrides
+  //
+  // ⚠️ ต้อง **merge ทับรายตัว** ไม่ใช่แทนที่ทั้งก้อน: ถ้าเอา overrides ไปแทน jig_master ทั้งชุด
+  // jig ที่พังอยู่จริงจะหายไปจาก simulation งานที่ติด jig พังจริงจะจบเร็วกว่าแผนที่บันทึกไว้
+  // แล้ว buildPlanDiff จะทาเป็น fg-earlier ปลอม ๆ — พังตรงกลางฟลว์ "ดูผลกระทบก่อนกดจริง" พอดี
+  // ผลพลอยได้: override ที่ส่ง status='AVAILABLE' = "ถ้า jig ตัวนี้กลับมาเร็วกว่ากำหนดจะเป็นยังไง"
+  // (buildJigBlockMap ทิ้งสถานะที่ไม่บล็อกอยู่แล้ว จึงลบตัวที่พังจริงออกจาก map ให้เอง)
+  const effectiveJigRows = mergeJigOverrides(inputs.jigRows, isSimulation ? jigOverrides : []);
+  const jigBlockMap = buildJigBlockMap(effectiveJigRows, todayStr);
+
+  // วันสุดท้ายของปฏิทิน — ใช้ทั้ง pre-flight ของ jig และ capacity warning ตอนท้าย
+  let lastCalendarDate = '';
+  for (const row of inputs.calendarRows) {
+    if (row.date > lastCalendarDate) lastCalendarDate = row.date;
+  }
+
+  // pre-flight: step ที่ทุกทางเลือกใช้ไม่ได้ตลอดช่วงที่วางแผน — ต้องบอกเหตุผลจริง
+  // ไม่งั้น engine จะลง 'No Capacity' ซึ่งแปลว่า "เครื่องไม่พอ" ทั้งที่สาเหตุคือ jig พัง
+  const blockedSteps = pb.findBlockedSteps(activeMachineRows, jigBlockMap, lastCalendarDate);
+
   // ---- engine (L215-225) ----
   const engine = new SchedulerEngine(calendar, routing, fixedMachine, cycleTime, setupConfig, inputs.settings);
-  const { mainPlan, totalPlanMap } = engine.run(
-    safeOrders, existingPlan, actualsDict, actualMachines, closedDict, currentTime,
+  const { mainPlan, totalPlanMap, failedSteps } = engine.run(
+    safeOrders, existingPlan, actualsDict, actualMachines, closedDict, currentTime, jigBlockMap,
   );
 
   // ---- post: sort + display + persist + report (L227-499) ----
   pb.sortMainPlanForDb(mainPlan, totalPlanMap);
   const displayRows = pb.buildDisplayRows(mainPlan, totalPlanMap, actualsDict);
   const scheduleResultRows = pb.toScheduleResultRows(displayRows, totalPlanMap);
+
+  // "หลุดแผนเพราะอะไร ขั้นตอนไหน เครื่องอะไรเป็นทางเลือก" — ของที่ engine รู้อยู่แล้วแต่ไม่เคยส่งออกมา
+  // engine.workingCalendar หลังรันจบ = เวลาว่างที่ยังเหลือจริงต่อเครื่อง-วัน (ใช้แยก capacity-full
+  // ออกจาก calendar-short) · ไม่มี query ใหม่ ทุก input มาจากของที่โหลดไว้แล้ว
+  const dueByBatch = {};
+  const modelByBatch = {};
+  for (const r of inputs.orderRows) {
+    dueByBatch[r.batch] = r.due_date;
+    modelByBatch[r.batch] = r.model;
+  }
+  const unplanned = pb.buildUnplannedReport({
+    failedSteps,
+    statusMap: totalPlanMap,
+    dueByBatch,
+    modelByBatch,
+    machineRows: activeMachineRows,
+    blockedSteps,
+    jigBlockMap,
+    remainingCalendar: engine.workingCalendar,
+    lastCalendarDate,
+    // งาน missing-routing ถูกคัดออกก่อนถึง engine — ถ้าไม่ส่งเข้าไปด้วย จอจะโชว์ "หลุดแผน" โดยไม่มีเหตุผล
+    missingRoutingMap,
+  });
+
+  // สรุปความต่างของแผนที่ยืนยันจริง — ตั้งค่าเฉพาะตอน !isSimulation (ดูในบล็อกข้างล่าง)
+  let planChange = null;
 
   // Simulation: ห้ามบันทึกอะไรลง DB (schedule_results / lastPlan / order dates) — แค่คืนแผน (logic.py L293-300, L455-458)
   if (!isSimulation) {
@@ -200,6 +296,10 @@ async function run(isReplan = false, options = {}) {
     for (const r of orderStateRows) orderStateMap[r.batch] = r;
     const dateUpdates = pb.buildOrderDateUpdates(mainPlan, totalPlanMap, safeOrders, orderStateMap);
     await persistOrderDates(dateUpdates);
+
+    // สรุปว่าแผนที่เพิ่งเขียนลง DB ต่างจากของเดิมยังไง — route เอาไปแปะ activity_log
+    // ต้องคำนวณตรงนี้ เพราะ orderStateMap คือ "ค่าก่อนเขียนทับ" ที่มีอยู่แค่ในบล็อกนี้
+    planChange = pb.buildPlanChangeSummary({ dateUpdates, orderStateMap, dueByBatch, unplanned });
   }
 
   const cleanedData = pb.cleanDisplayData(displayRows, calendar);
@@ -207,16 +307,14 @@ async function run(isReplan = false, options = {}) {
 
   // เตือน "ปฏิทินไม่พอ": ถ้ามี safe order ที่วางไม่ลง (FinishDate เป็น sentinel)
   // → บอกวันสุดท้ายของปฏิทิน + จำนวนงาน ให้ผู้ใช้ไปสร้างปฏิทินเพิ่ม (คืนทั้ง run/replan/sim)
-  let lastCalendarDate = '';
-  for (const row of inputs.calendarRows) {
-    if (row.date > lastCalendarDate) lastCalendarDate = row.date;
-  }
+  // (lastCalendarDate คำนวณไว้ก่อนเรียก engine แล้ว เพราะ pre-flight ของ jig ต้องใช้ด้วย)
   const capacityWarning = pb.buildCapacityWarning(shipmentReport, lastCalendarDate);
 
   let message = '✅ จัดแผนสำเร็จ (Hybrid Pro Backend)';
   if (rejectedOrders.length > 0) {
     message += ` (⚠️ ข้าม ${rejectedOrders.length} รายการที่ Model ไม่ถูกต้อง)`;
   }
+  message += pb.blockedStepsMessage(blockedSteps, lastCalendarDate);
 
   // shape เดิม: total_plan_map = บัญชี missing routing เท่านั้น (logic.py L498)
   return {
@@ -226,6 +324,10 @@ async function run(isReplan = false, options = {}) {
     report: shipmentReport,
     total_plan_map: missingRoutingMap,
     capacity_warning: capacityWarning,
+    blocked_steps: blockedSteps,
+    unplanned,
+    // null ตอน simulation (ไม่ได้เขียนอะไร) — route เอาไปแปะ activity_log ตอนรันจริง
+    plan_change: planChange,
   };
 }
 

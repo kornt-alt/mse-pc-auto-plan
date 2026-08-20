@@ -9,6 +9,7 @@ const multer = require('multer');
 const env = require('../config/env');
 const { query, execute, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError, AppError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../utils/dates');
 const { computeProgramNote } = require('../scheduler/planBuilder');
@@ -43,17 +44,19 @@ const cleanNote = (raw) => {
 };
 
 // เขียนไฟล์ลงดิสก์ คืน stored_name (uuid+ext) — โยน error status 500 ถ้ายังไม่ตั้ง ORDER_ATTACHMENTS_DIR
-const writeAttachment = (file) => {
+// ใช้ AppError เพราะข้อความนี้ **ตั้งใจให้ผู้ใช้เห็น** (บอกว่าต้องไปตั้ง .env) — error ทั่วไปที่ไม่ใช่
+// AppError จะถูก sendError กลืนเป็นข้อความกลาง ๆ ดู middleware/errorHandler.js
+// async: เพดานไฟล์แนบคือ 25 MB — เขียนแบบ sync ขนาดนั้น **บล็อก event loop ทั้ง process**
+// ระหว่างนั้น request อื่นค้างหมด รวมถึงคนหน้าไลน์ที่กำลังกดบันทึกยอด (ของจริงในโฟลเดอร์มีไฟล์ 16 MB อยู่แล้ว)
+const writeAttachment = async (file) => {
   const dir = env.ORDER_ATTACHMENTS_DIR;
   if (!dir) {
-    const e = new Error('ระบบยังไม่ได้ตั้งค่าโฟลเดอร์ไฟล์แนบ (ORDER_ATTACHMENTS_DIR)');
-    e.status = 500;
-    throw e;
+    throw new AppError('ระบบยังไม่ได้ตั้งค่าโฟลเดอร์ไฟล์แนบ (ORDER_ATTACHMENTS_DIR)', 500);
   }
-  fs.mkdirSync(dir, { recursive: true });
+  await fs.promises.mkdir(dir, { recursive: true });
   const ext = path.extname(file.originalname).toLowerCase();
   const storedName = crypto.randomUUID() + ext;
-  fs.writeFileSync(path.join(dir, storedName), file.buffer);
+  await fs.promises.writeFile(path.join(dir, storedName), file.buffer);
   return storedName;
 };
 
@@ -270,8 +273,7 @@ router.put('/reorder', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: 'Reordered' });
   } catch (err) {
-    console.error('Error reordering orders:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -300,8 +302,7 @@ router.post('/bulk/restore', verifyToken, writeRoles, async (req, res) => {
     });
     res.json({ message: 'Restored' });
   } catch (err) {
-    console.error('Error restoring orders:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -356,8 +357,7 @@ router.put('/bulk/mode', verifyToken, writeRoles, async (req, res) => {
     // FIX: ของเดิมคืน null — คืนจำนวนที่อัปเดตแทน
     res.json({ message: `เปลี่ยนสถานะเป็น ${targetMode} สำเร็จ`, updated_count: updatedCount });
   } catch (err) {
-    console.error('Error bulk updating mode:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -670,8 +670,7 @@ router.put('/:batchId/close', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: `ปิดจ๊อบ ${batchId} เรียบร้อยแล้ว (สถานะ: COMPLETED)` });
   } catch (err) {
-    console.error('Error closing order:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -696,8 +695,7 @@ router.get('/attachments/:id/download', verifyToken, readRoles, async (req, res)
       else if (err) console.warn('attachment download aborted:', err.message);
     });
   } catch (err) {
-    console.error('Error downloading attachment:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -729,8 +727,7 @@ router.get('/:batch/date-log', verifyToken, readRoles, async (req, res) => {
     );
     res.json(rows.map((r) => ({ ...r, has_file: Boolean(r.file_name) })));
   } catch (err) {
-    console.error('Error fetching date log:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -764,7 +761,7 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
     if (req.file) {
       const v = validateAttachment(req.file);
       if (!v.ok) return res.status(400).json({ message: v.message });
-      storedName = writeAttachment(req.file);
+      storedName = await writeAttachment(req.file);
       req.file._storedName = storedName;
     }
 
@@ -784,8 +781,7 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
     res.json({ batch, material_ready_date: materialDate, program_notes: programNotes, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
-    console.error('Error updating material date:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -849,8 +845,7 @@ router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res)
       log_entry: logEntry,
     });
   } catch (err) {
-    console.error('Error updating material arrived:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -877,7 +872,7 @@ router.put('/:batch/confirm-date', verifyToken, writeRoles, uploadSingle, async 
       return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
     }
     if (req.file) {
-      storedName = writeAttachment(req.file);
+      storedName = await writeAttachment(req.file);
       req.file._storedName = storedName;
     }
     const logEntry = await logDateEdit({
@@ -888,8 +883,7 @@ router.put('/:batch/confirm-date', verifyToken, writeRoles, uploadSingle, async 
     res.json({ batch, confirm_reply_date: confirmDate, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
-    console.error('Error updating confirm date:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -915,7 +909,7 @@ router.put('/:batch/release-date', verifyToken, writeRoles, uploadSingle, async 
       return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
     }
     if (req.file) {
-      storedName = writeAttachment(req.file);
+      storedName = await writeAttachment(req.file);
       req.file._storedName = storedName;
     }
     const logEntry = await logDateEdit({
@@ -926,8 +920,7 @@ router.put('/:batch/release-date', verifyToken, writeRoles, uploadSingle, async 
     res.json({ batch, release_date: releaseDate, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
-    console.error('Error updating release date:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 
@@ -1065,11 +1058,43 @@ router.get('/:batchId/tracking', verifyToken, readRoles, async (req, res) => {
       }
     }
 
+    // machine_config.comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ — ไม่มีก็ต้องไม่พัง
+    // (house style เดียวกับ orders.material_arrived / machine_config.is_active)
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+
+    // คำแนะนำการทำงานต่อ step — แถวของหน้านี้คือ "หนึ่ง step" ไม่ใช่ "หนึ่งเครื่อง"
+    // (ต่างจาก /production/tracking ที่แถวเป็นเครื่องที่วางแผนไว้ จับคู่ step_index|machine ได้ตรง ๆ)
+    // ช่อง machine ตรงนี้เป็นเครื่องที่ "ผลิตจริง" ซึ่งเป็น '-' ตอนยังไม่เริ่ม จึงรวม comment ของ
+    // ทุกเครื่องทางเลือกใน step นั้นมาต่อกัน — step ที่ยังไม่เริ่มก็ยังอ่านคำแนะนำได้
+    const commentsByStep = new Map(); // STEP_NAME (upper) -> [comment, ...]
+    if (hasComments) {
+      const commentRows = await query(
+        `SELECT r.step_name, m.comments
+           FROM routing_config r
+           JOIN machine_config m
+             ON m.model = r.model AND m.flow_index = r.flow_index AND m.step_index = r.step_index
+          WHERE r.model = @model AND r.flow_index = 0
+            AND m.comments IS NOT NULL AND LTRIM(RTRIM(m.comments)) <> ''
+          ORDER BY m.step_index, m.alternative_index`,
+        { model: modelStr }
+      );
+      for (const c of commentRows) {
+        // คีย์ต้อง upper ให้ตรงกับ uniqueSteps ไม่งั้นไม่มีวัน match
+        const key = String(c.step_name).trim().toUpperCase();
+        const text = String(c.comments).trim();
+        const list = commentsByStep.get(key) ?? [];
+        if (!list.includes(text)) list.push(text); // หลายเครื่องเขียนเหมือนกัน = โชว์ครั้งเดียว
+        commentsByStep.set(key, list);
+      }
+    }
+
     const stepsData = uniqueSteps.map((stepName) => {
       const rec = recMap[stepName];
       return {
         step_name: stepName,
         machine: rec ? rec.machine : '-',
+        comments: (commentsByStep.get(stepName) ?? []).join(' / '),
         qty_ok: rec ? rec.qty_ok : 0.0,
         qty_ng: rec ? rec.qty_ng : 0.0,
         last_record: rec ? formatThaiTimestamp(rec._lastTime) : '-',

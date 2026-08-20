@@ -140,6 +140,7 @@ const TrackingDialog = ({ show, onHide, batchId }) => {
                   <tr>
                     <th>Process Step</th>
                     <th>Machine</th>
+                    <th>Comments</th>
                     <th>Qty OK</th>
                     <th>Qty NG</th>
                     <th>Last Record</th>
@@ -151,6 +152,7 @@ const TrackingDialog = ({ show, onHide, batchId }) => {
                     <tr key={s.step_name} style={i % 2 === 1 ? { backgroundColor: '#e8f5e9' } : {}}>
                       <td className="fw-bold">{s.step_name}</td>
                       <td className="text-muted">{s.machine}</td>
+                      <td>{s.comments || '-'}</td>
                       <td className="text-success fw-bold">{s.qty_ok}</td>
                       <td className="text-danger fw-bold">{s.qty_ng}</td>
                       <td>{s.last_record}</td>

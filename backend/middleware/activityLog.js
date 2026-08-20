@@ -27,11 +27,15 @@ const sanitizeBody = (body) => {
   return out;
 };
 
-const toDetail = (body) => {
+// outcome = res.locals.auditDetail — "ผลลัพธ์" ที่ handler อยากบันทึกเพิ่มจาก request body
+// (เช่น Replan สรุปว่าแผนเปลี่ยนอะไรบ้าง) · body อย่างเดียวตอบไม่ได้ว่าเกิดอะไรขึ้นจริง
+// ไม่ส่ง outcome มา = พฤติกรรมเดิมทุกประการ (แค่ body ที่ปกปิดความลับแล้ว)
+const toDetail = (body, outcome) => {
   try {
     const clean = sanitizeBody(body);
-    if (clean == null) return null;
-    const s = typeof clean === 'string' ? clean : JSON.stringify(clean);
+    if (outcome == null && clean == null) return null;
+    const payload = outcome == null ? clean : { request: clean, result: outcome };
+    const s = typeof payload === 'string' ? payload : JSON.stringify(payload);
     return s.length > DETAIL_MAX ? `${s.slice(0, DETAIL_MAX)}…` : s;
   } catch {
     return null;
@@ -57,7 +61,8 @@ const activityLogger = (req, res, next) => {
       path: String(req.originalUrl || req.url).slice(0, 500),
       status_code: res.statusCode,
       target: req.params && Object.keys(req.params).length ? JSON.stringify(req.params).slice(0, 200) : null,
-      detail: toDetail(req.body),
+      // res.locals.auditDetail: handler แนบผลลัพธ์มาได้ (ตอนนี้มีแค่ /schedule/run|replan)
+      detail: toDetail(req.body, res.locals ? res.locals.auditDetail : undefined),
       ip_address: String(req.ip || '').slice(0, 50) || null,
     };
 

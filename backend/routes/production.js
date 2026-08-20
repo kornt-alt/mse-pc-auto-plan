@@ -8,15 +8,58 @@
 // quirk ที่คงไว้: ngDetails ส่ง "" เสมอ, past steps โชว์ machine "Finished",
 //   PUT ไม่แตะ timestamp, POST ยอด 0 ทั้งคู่ → skip, ไม่ markEdit ทุก endpoint
 const express = require('express');
+const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { buildMachineQueue, expandSubs } = require('../services/machineQueue');
 const { formatThaiTimestamp, nowBangkokString } = require('../utils/dates');
+const {
+  buildIdentities,
+  canEditRecord,
+  resolveEmployee,
+  parseQty,
+} = require('../utils/recordAccess');
 
 const router = express.Router();
 const allRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'OPERATOR');
 // เฉพาะตัวช่วยสร้าง template หน้า Import (ADMIN/PLANNER only) — ไม่ขยาย reach ของ OPERATOR/guest
 const planRoles = requireRole('ADMIN', 'PLANNER');
+
+const BAD_EMP_MSG = 'รหัสพนักงานต้องเป็นตัวอักษร/ตัวเลขภาษาอังกฤษ 3-10 ตัว';
+const BAD_QTY_MSG = 'จำนวนต้องเป็นตัวเลขและติดลบไม่ได้';
+const NOT_OWNER_MSG = 'แก้ไข/ลบได้เฉพาะรายการที่บันทึกด้วยรหัสพนักงานของตัวเองเท่านั้น';
+
+// resolveEmployee/parseQty อยู่ใน utils/recordAccess.js (pure, เทสแล้ว)
+// **ไม่บังคับให้ employee เท่ากับ session** เพราะแท็บเล็ตเครื่องเดียวรองรับให้คนอื่นสแกนรหัสตัวเองลงยอดได้
+
+// ตัวตนทั้งหมดของ session (username + employee_code) — JWT มีแค่ {id, username, role}
+// ผู้ใช้จริงจึงต้องอ่าน employee_code จาก users เพิ่ม; guest (id=0) ไม่มีแถวใน users
+// username ของมันคือรหัสที่กรอกเข้ามาอยู่แล้ว
+const sessionIdentities = async (user) => {
+  const values = [user?.username];
+  if (Number.isInteger(user?.id) && user.id > 0) {
+    const rows = await query('SELECT username, employee_code FROM users WHERE id = @id', {
+      id: user.id,
+    });
+    if (rows[0]) values.push(rows[0].username, rows[0].employee_code);
+  }
+  return buildIdentities(...values);
+};
+
+// ด่านตรวจก่อน PUT/DELETE record — คืน null ถ้าผ่าน, หรือ { status, message } ถ้าไม่ผ่าน
+// ไม่เจอแถว = 404 (พฤติกรรมเดิม), เจอแต่ไม่ใช่ของตัวเอง = 403
+const checkRecordOwner = async (req, recordId) => {
+  const rows = await query('SELECT employee FROM production_records WHERE id = @id', { id: recordId });
+  if (rows.length === 0) return { status: 404, message: 'Record not found' };
+  const allowed = canEditRecord({
+    role: req.user?.role,
+    identities: await sessionIdentities(req.user),
+    recordEmployee: rows[0].employee,
+    strict: env.STRICT_RECORD_OWNERSHIP,
+  });
+  return allowed ? null : { status: 403, message: NOT_OWNER_MSG };
+};
 
 // สร้าง IN (@p0,@p1,...) พร้อมเติมค่าเข้า params
 const inClause = (items, prefix, params) =>
@@ -38,7 +81,7 @@ router.get('/machines', verifyToken, allRoles, async (req, res) => {
       .sort();
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -54,7 +97,7 @@ router.get('/planned-batches', verifyToken, planRoles, async (req, res) => {
     const data = rows.map((r) => String(r.batch ?? '').trim()).filter((b) => b);
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -94,7 +137,7 @@ router.get('/plan-steps', verifyToken, planRoles, async (req, res) => {
     }
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -113,8 +156,15 @@ router.post('/record', verifyToken, allRoles, async (req, res) => {
       working_shift,
     } = req.body || {};
 
+    // validate ก่อนด่านสกัดเดิม — ค่าขยะต้องได้ 400 ไม่ใช่หลุดไปพังที่ DB เป็น 500
+    const emp = resolveEmployee(employee, req.user?.username);
+    if (!emp.ok) return res.status(400).json({ message: BAD_EMP_MSG });
+    const okQty = parseQty(qty_ok);
+    const ngQty = parseQty(qty_ng);
+    if (okQty === null || ngQty === null) return res.status(400).json({ message: BAD_QTY_MSG });
+
     // ด่านสกัดเดิม: ไม่มียอดทั้ง OK และ NG → ไม่เซฟ
-    if (Number(qty_ok) <= 0 && Number(qty_ng) <= 0) {
+    if (okQty <= 0 && ngQty <= 0) {
       return res.json({ message: 'Skipped empty record (No actual qty)' });
     }
 
@@ -125,12 +175,12 @@ router.post('/record', verifyToken, allRoles, async (req, res) => {
        VALUES (@employee, @batch, @process_step, @machine, @qty_ok, @qty_ng, @mode_ng,
                @working_date, @working_shift, CONVERT(DATETIME, @ts, 120))`,
       {
-        employee,
+        employee: emp.value,
         batch,
         process_step,
         machine,
-        qty_ok: Number(qty_ok),
-        qty_ng: Number(qty_ng),
+        qty_ok: okQty,
+        qty_ng: ngQty,
         mode_ng,
         working_date,
         working_shift,
@@ -139,7 +189,7 @@ router.post('/record', verifyToken, allRoles, async (req, res) => {
     );
     res.json({ message: 'Success' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -147,13 +197,18 @@ router.post('/record', verifyToken, allRoles, async (req, res) => {
 router.post('/force-close', verifyToken, allRoles, async (req, res) => {
   try {
     const { batch, step, reason = null, employee = null } = req.body || {};
+    // closed_by ลงตารางเหมือน employee — ตรวจด้วยเกณฑ์เดียวกัน
+    // (ไม่ส่งมาก็ได้ → ตกไปใช้ตัวตนจาก session เหมือน POST /record)
+    const closedByResult = resolveEmployee(employee, req.user?.username);
+    if (!closedByResult.ok) return res.status(400).json({ message: BAD_EMP_MSG });
+    const closedBy = closedByResult.value;
     // FIX: บันทึก reason/closed_by/updated_at ด้วย — เดิมรับ machine+reason มาแล้วทิ้ง
     // (คอลัมน์มีในตารางแต่ไม่เคยถูกเขียน) / machine ยังรับแต่ไม่ใช้ตามเดิม
     const existing = await query(
       'SELECT TOP 1 id FROM batch_step_status WHERE batch = @batch AND step = @step ORDER BY id',
       { batch, step }
     );
-    const params = { batch, step, reason, closedBy: employee, updatedAt: nowBangkokString() };
+    const params = { batch, step, reason, closedBy, updatedAt: nowBangkokString() };
     if (existing.length > 0) {
       await execute(
         `UPDATE batch_step_status
@@ -172,7 +227,7 @@ router.post('/force-close', verifyToken, allRoles, async (req, res) => {
     }
     res.json({ message: 'Closed' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -225,6 +280,28 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       });
     }
 
+    // คำแนะนำการทำงานต่อเครื่อง — machine_config.comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ
+    // ไม่มีก็ต้องไม่พัง (house style เดียวกับ orders.material_arrived / machine_config.is_active)
+    // แถวของหน้านี้เป็น "เครื่องที่วางแผนไว้" จึงจับคู่ตรง ๆ ด้วย step_index|machine ได้
+    // ⚠️ กรอง flow_index ไม่ได้ เพราะ plannedSteps มาจาก schedule_results ซึ่งไม่มีคอลัมน์นั้น
+    //    (ดู SCHEDULE_RESULT_COLUMNS ใน services/schedulerService.js) — โมเดลที่มีหลาย flow
+    //    และ step_index+machine ซ้ำกันข้าม flow จะชนกันใน Map (ตัวหลังทับ) เป็นข้อจำกัดเดิม
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+
+    const commentsMap = new Map();
+    if (hasComments) {
+      const configRows = await query(
+        'SELECT step_index, machine, comments FROM machine_config WHERE model = @model',
+        { model: orderModelName }
+      );
+      for (const c of configRows) {
+        if (c.comments) {
+          commentsMap.set(`${c.step_index}|${c.machine}`, String(c.comments).trim());
+        }
+      }
+    }
+
     // Map เพื่อคง insertion order เหมือน dict เดิม (past_steps ไล่ตามลำดับที่เจอ)
     const actualDict = new Map();
     for (const rec of actualRecords) {
@@ -270,6 +347,7 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       resultData.push({
         processStep: step,
         machine: 'Finished',
+        comments: '',
         qtyOK: act.qtyOK,
         qtyNG: act.qtyNG,
         lastRecord: formatThaiTimestamp(act.lastRecord),
@@ -281,9 +359,11 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
 
     for (const p of plannedSteps) {
       const act = actualDict.get(p.step);
+      const stepComments = commentsMap.get(`${p.step_index}|${p.machine}`) || '';
       resultData.push({
         processStep: p.step,
         machine: p.machine,
+        comments: stepComments,
         qtyOK: act ? act.qtyOK : null,
         qtyNG: act ? act.qtyNG : null,
         lastRecord: act && act.lastRecord ? formatThaiTimestamp(act.lastRecord) : '-',
@@ -306,7 +386,7 @@ router.get('/tracking/:batchId', verifyToken, allRoles, async (req, res) => {
       data: resultData,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -378,7 +458,7 @@ router.get('/machine-queue/:machineName', verifyToken, allRoles, async (req, res
     });
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -386,34 +466,54 @@ router.get('/machine-queue/:machineName', verifyToken, allRoles, async (req, res
 router.put('/record/:recordId', verifyToken, allRoles, async (req, res) => {
   try {
     const { qty_ok, qty_ng, mode_ng = null } = req.body || {};
+    const recordId = Number(req.params.recordId);
+    if (!Number.isInteger(recordId)) {
+      return res.status(404).json({ message: 'Record not found' });
+    }
+    const okQty = parseQty(qty_ok);
+    const ngQty = parseQty(qty_ng);
+    if (okQty === null || ngQty === null) return res.status(400).json({ message: BAD_QTY_MSG });
+
+    // FIX: เช็คเจ้าของก่อน — เดิมยิง UPDATE ตรง ๆ ด้วย id ทำให้ใครก็แก้ของใครก็ได้
+    const denied = await checkRecordOwner(req, recordId);
+    if (denied) return res.status(denied.status).json({ message: denied.message });
+
     // FIX: 404 จริง — เดิม HTTPException(404) โดน except ครอบกลายเป็น 500
     const updated = await execute(
       // quirk เดิม: ไม่อัปเดต timestamp
       'UPDATE production_records SET qty_ok = @ok, qty_ng = @ng, mode_ng = @mode WHERE id = @id',
-      { ok: Number(qty_ok), ng: Number(qty_ng), mode: mode_ng, id: Number(req.params.recordId) }
+      { ok: okQty, ng: ngQty, mode: mode_ng, id: recordId }
     );
     if (updated === 0) {
       return res.status(404).json({ message: 'Record not found' });
     }
     res.json({ message: 'Updated successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== DELETE /api/production/record/:recordId (L860-874) ==========
 router.delete('/record/:recordId', verifyToken, allRoles, async (req, res) => {
   try {
+    const recordId = Number(req.params.recordId);
+    if (!Number.isInteger(recordId)) {
+      return res.status(404).json({ message: 'Record not found' });
+    }
+    // FIX: เช็คเจ้าของก่อนลบ — ตารางนี้ไม่มี soft delete ลบผิดแล้วกู้ไม่ได้
+    const denied = await checkRecordOwner(req, recordId);
+    if (denied) return res.status(denied.status).json({ message: denied.message });
+
     // FIX: 404 จริง — เหมือน PUT ข้างบน
     const deleted = await execute('DELETE FROM production_records WHERE id = @id', {
-      id: Number(req.params.recordId),
+      id: recordId,
     });
     if (deleted === 0) {
       return res.status(404).json({ message: 'Record not found' });
     }
     res.json({ message: 'Deleted successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

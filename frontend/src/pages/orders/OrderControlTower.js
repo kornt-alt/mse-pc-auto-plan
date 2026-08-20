@@ -22,6 +22,7 @@ import HistoryDialog from './HistoryDialog';
 import DateEditDialog from './DateEditDialog';
 import SettingsDialog from './SettingsDialog';
 import PlanPreviewDialog from './PlanPreviewDialog';
+import CalendarHorizonAlert from '../../components/shared/CalendarHorizonAlert';
 import { buildPlanDiff, computeSortByDueDate } from './planDiff';
 import { buildPlanDetail, buildMachineSchedule } from './planDetail';
 import OrderFilterPanel from './OrderFilterPanel';
@@ -276,6 +277,7 @@ const OrderControlTower = () => {
   const [dateFilters, setDateFilters] = useState(EMPTY_FILTERS); // ตัวกรองช่วงวันที่ 6 คอลัมน์
   const [showFilters, setShowFilters] = useState(false); // เปิด/ปิดแผงตัวกรอง
   const [timestamps, setTimestamps] = useState({ last_plan: '-', last_edit: '-' });
+  const [horizon, setHorizon] = useState(null);
   const [settings, setSettings] = useState(null); // system_settings — ใช้ทำ legend ใน preview
 
   // snapshot สำหรับ Undo — เก็บก่อนยืนยัน Replan/เรียง/บันทึกลำดับ
@@ -332,6 +334,16 @@ const OrderControlTower = () => {
     [showToast],
   );
 
+  // ปฏิทินเหลือถึงเมื่อไหร่ — เตือนก่อนงานจะเริ่มหลุด (capacity_warning เห็นตอนหลุดไปแล้ว)
+  // เงียบถ้าดึงไม่ได้: เป็นคำเตือนเสริม ไม่ควรทำให้หน้าใช้ไม่ได้
+  const fetchHorizon = useCallback(async () => {
+    try {
+      setHorizon(await apiCall('/system/calendar-horizon'));
+    } catch {
+      /* ไม่โชว์แถบเตือน */
+    }
+  }, []);
+
   const fetchTimestamps = useCallback(async () => {
     try {
       const data = await apiCall('/system/timestamps');
@@ -359,9 +371,10 @@ const OrderControlTower = () => {
   useEffect(() => {
     fetchOrders();
     fetchTimestamps();
+    fetchHorizon();
     // settings สำหรับ legend — เงียบถ้าดึงไม่ได้ (legend ใช้ค่า default แทน)
     apiCall('/system/settings').then(setSettings).catch(() => {});
-  }, [fetchOrders, fetchTimestamps]);
+  }, [fetchOrders, fetchTimestamps, fetchHorizon]);
 
   const filteredOrders = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -518,7 +531,18 @@ const OrderControlTower = () => {
       // มุมกลับ: เครื่องไหนรัน batch ไหนบ้าง (แท็บ "เครื่องจักร")
       const machineSchedule = buildMachineSchedule(decoded.data ?? []);
       setPreview((p) => (p && p.mode === mode
-        ? { ...p, loading: false, diff, detail, machineSchedule, capacityWarning: decoded.capacity_warning }
+        ? {
+          ...p,
+          loading: false,
+          diff,
+          detail,
+          machineSchedule,
+          capacityWarning: decoded.capacity_warning,
+          // step ที่ทุกเครื่องติด jig ที่ใช้ไม่ได้ — ให้ PlanPreviewDialog อธิบายแทนคำว่า No Capacity
+          blockedSteps: decoded.blocked_steps ?? [],
+          // งานที่วางไม่ลง พร้อมเหตุผล/เครื่องทางเลือก — แท็บ "ทางเลือก" ในไดอะล็อก
+          unplanned: decoded.unplanned ?? [],
+        }
         : p));
     } catch (err) {
       setPreview(null);
@@ -536,6 +560,7 @@ const OrderControlTower = () => {
       baselineRef.current = null;
       await fetchOrders();
       await fetchTimestamps();
+      await fetchHorizon(); // แผนใหม่กินปฏิทินไปอีก — เช็คว่ายังเหลือพอไหม
       setPreview(null);
       const cw = decoded.capacity_warning;
       if (cw) {
@@ -553,7 +578,7 @@ const OrderControlTower = () => {
     } finally {
       setIsPlanning(false);
     }
-  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, showToast, planErrorToast]);
+  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, fetchHorizon, showToast, planErrorToast]);
 
   const handleReplan = useCallback(() => {
     openPreview({ mode: 'replan', beforeRows: orders, onConfirm: doReplan });
@@ -751,6 +776,9 @@ const OrderControlTower = () => {
           </>
         }
       />
+
+      {/* เตือนก่อนงานจะเริ่มหลุด — capacity_warning เห็นก็ต่อเมื่อหลุดไปแล้ว */}
+      <CalendarHorizonAlert horizon={horizon} onGoToCalendar={() => navigate('/calendar')} />
 
       {/* ===== toolbar ===== */}
       <Toolbar>
@@ -962,6 +990,8 @@ const OrderControlTower = () => {
         detail={preview ? preview.detail : null}
         machineSchedule={preview ? preview.machineSchedule : null}
         capacityWarning={preview ? preview.capacityWarning : null}
+        blockedSteps={preview ? preview.blockedSteps ?? [] : []}
+        unplanned={preview ? preview.unplanned ?? [] : []}
         loading={preview ? preview.loading : false}
         settings={settings}
         todayStr={today}

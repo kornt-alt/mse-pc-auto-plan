@@ -4,6 +4,7 @@
 const express = require('express');
 const { query } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { buildWipData, buildWipSummary } = require('../services/wipCalc');
 
 const router = express.Router();
@@ -36,7 +37,7 @@ router.get('/wip/options', verifyToken, readRoles, async (req, res) => {
       models: models.map((r) => r.model).filter((v) => v !== null),
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -54,7 +55,7 @@ router.get('/wip-summary/suggestions', verifyToken, readRoles, async (req, res) 
         .map((r) => ({ batch: r.batch || '', description: r.description || '' }))
     );
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -111,7 +112,7 @@ router.get('/wip-summary', verifyToken, readRoles, async (req, res) => {
     });
     res.json({ status: 'success', data, has_next: hasNext, sorted_steps });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -151,7 +152,7 @@ router.get('/wip', verifyToken, readRoles, async (req, res) => {
 
     res.json({ status: 'success', data: buildWipData({ orders, plans, actualRows }) });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

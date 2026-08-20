@@ -114,3 +114,38 @@ describe('buildOrderRules — คืนเฉพาะกฎที่มีผ�
     expect(buildOrderRules(undefined, {}).length).toBeGreaterThan(0);
   });
 });
+
+// ---- กฎ jig (แทนคำว่า No Capacity) ----
+
+test('blocked_steps ของรุ่นนี้ → ขึ้นกฎ Jig ระบุชื่อ jig และบอกว่าไม่ใช่ "เครื่องไม่พอ"', () => {
+  const rules = buildOrderRules(
+    {},
+    {
+      todayStr: '2026-08-17',
+      model: 'KT1',
+      blockedSteps: [
+        { model: 'KT1', flowIndex: 0, stepIndex: 1, jigs: ['JIG-B', 'JIG-A'] },
+        { model: 'OTHER', flowIndex: 0, stepIndex: 0, jigs: ['JIG-Z'] },
+      ],
+    },
+  );
+  const jig = rules.find((x) => x.id === 'jig');
+  expect(jig).toBeTruthy();
+  expect(jig.tone).toBe('ng');
+  expect(jig.value).toBe('JIG-A, JIG-B'); // เรียงแล้ว ไม่ปนของรุ่นอื่น
+  expect(jig.detail).toMatch(/ไม่ใช่/);
+});
+
+test('ไม่มี blocked_steps → ไม่มีกฎ jig เลย (ของเดิมไม่เปลี่ยน)', () => {
+  expect(buildOrderRules({}, { todayStr: '2026-08-17', model: 'KT1' }).find((x) => x.id === 'jig'))
+    .toBeUndefined();
+});
+
+test('blocked_steps เป็นของรุ่นอื่นล้วน → ไม่ขึ้นกฎกับรุ่นนี้', () => {
+  const rules = buildOrderRules({}, {
+    todayStr: '2026-08-17',
+    model: 'KT1',
+    blockedSteps: [{ model: 'OTHER', jigs: ['JIG-Z'] }],
+  });
+  expect(rules.find((x) => x.id === 'jig')).toBeUndefined();
+});

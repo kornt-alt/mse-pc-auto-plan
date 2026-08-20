@@ -40,6 +40,11 @@ module.exports = {
   ENABLE_PACKING: process.env.SCHED_ENABLE_PACKING !== 'false',
   PACK_WINDOW_DAYS: num('SCHED_PACK_WINDOW_DAYS', 30),
 
+  // เตือนล่วงหน้าว่าปฏิทินใกล้หมด (วัน) — ถ้าไม่มีใคร generate เพิ่ม งานจะเริ่มวางไม่ลงเงียบ ๆ
+  // และ capacity_warning เห็นก็ต่อเมื่อหลุดไปแล้ว (utils/calendarHorizon.js)
+  CALENDAR_WARN_DAYS: num('SCHED_CALENDAR_WARN_DAYS', 30),
+  CALENDAR_CRITICAL_DAYS: num('SCHED_CALENDAR_CRITICAL_DAYS', 7),
+
   // Sentinels
   SENTINEL_FAR_DATE: '9999-12-31',
   SENTINEL_DEFAULT_DUE: '2099-12-31',

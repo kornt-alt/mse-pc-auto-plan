@@ -4,7 +4,8 @@ const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { isUniqueViolation, duplicateMessage } = require('../db/errors');
-const { verifyToken, requireRole } = require('../middleware/auth');
+const { verifyToken } = require('../middleware/auth');
+const { rateLimit } = require('../middleware/rateLimit');
 const { sendMail } = require('../services/mailer');
 const {
   cleanText,
@@ -18,6 +19,22 @@ const router = express.Router();
 const SALT_ROUNDS = 10;
 const MIN_PASSWORD_LENGTH = 4; // เกณฑ์เดียวกับ /change-password เดิม
 
+// ===== rate limit ของ endpoint ที่ไม่ต้อง login =====
+// ทั้งสองตัวนี้เป็นด่านเดียวที่กันการยิงรัวจากทุกเครื่องในเครือข่าย (ดู middleware/rateLimit.js)
+// register หลวมกว่าไม่ได้เพราะ 1 ครั้ง = ส่งเมลหา ADMIN ทุกคน; login เผื่อคนพิมพ์รหัสผิดหลายรอบไว้แล้ว
+const registerLimiter = rateLimit({
+  name: 'register',
+  limit: 5,
+  windowMs: 60 * 60 * 1000, // 5 ครั้ง / ชั่วโมง / IP
+  message: 'สมัครใช้งานถี่เกินไป กรุณารอสักครู่แล้วลองใหม่',
+});
+const loginLimiter = rateLimit({
+  name: 'login',
+  limit: 20,
+  windowMs: 15 * 60 * 1000, // 20 ครั้ง / 15 นาที / IP
+  message: 'พยายามเข้าสู่ระบบถี่เกินไป กรุณารอสักครู่แล้วลองใหม่',
+});
+
 // role ที่ได้ "session เต็มของบัญชีตัวเอง" โดยไม่ต้องใส่รหัสผ่าน — แตะบัตร RFID หรือกรอกรหัสพนักงาน
 // บัตร RFID ก๊อปได้ และรหัสพนักงานเป็นเลขที่คนอื่นเดา/เห็นได้ จึงเปิดเฉพาะ role ที่แก้ข้อมูลหลักไม่ได้
 // (role อื่นที่กรอกรหัสพนักงานจะตกไปเป็น guest = OPERATOR แทน ดู /login-scan)
@@ -29,6 +46,9 @@ const PASSWORDLESS_LOGIN_ROLES = [
   // 'PLANNER',
 ];
 
+// ⚠️ ทั้ง signToken และ guestSession อาศัย default ของ jwt.sign ซึ่งคือ HS256
+// middleware/auth.js pin ไว้เป็น algorithms:['HS256'] — ถ้าจะใส่ algorithm ตรงนี้ต้องแก้ทั้งสองที่พร้อมกัน
+// ไม่งั้น token ที่เซ็นใหม่จะ verify ไม่ผ่านทันที (ทุกคนหลุดจากระบบพร้อมกัน)
 const signToken = (user) =>
   jwt.sign(
     { id: user.id, username: user.username, role: user.role },
@@ -78,7 +98,7 @@ const accountBlockedMessage = (user) => {
 };
 
 // Login ด้วย username/password
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -113,7 +133,7 @@ router.post('/login', async (req, res) => {
 });
 
 // Login ด้วยการกรอก/สแกนรหัสพนักงาน (หน้าไลน์ผลิต — ไม่ต้องใส่รหัสผ่าน)
-router.post('/login-scan', async (req, res) => {
+router.post('/login-scan', loginLimiter, async (req, res) => {
   try {
     const { code } = req.body;
     const empCode = cleanText(code);
@@ -177,7 +197,7 @@ router.post('/login-scan', async (req, res) => {
 });
 
 // Login ด้วยการแตะบัตร RFID — เครื่องอ่านทำตัวเป็นคีย์บอร์ด ส่งค่า UID มาเป็น string
-router.post('/login-card', async (req, res) => {
+router.post('/login-card', loginLimiter, async (req, res) => {
   try {
     const uid = cleanCardUid(req.body?.card_uid);
 
@@ -221,7 +241,7 @@ router.post('/login-card', async (req, res) => {
 // **endpoint เดียวในระบบที่ไม่ต้อง login** (ตั้งใจ) บัญชีที่ได้จะเข้าใช้งานไม่ได้
 // จนกว่า ADMIN จะอนุมัติ: role=OPERATOR, is_active=0, status='PENDING'
 // ================================================================
-router.post('/register', async (req, res) => {
+router.post('/register', registerLimiter, async (req, res) => {
   try {
     const username = cleanText(req.body?.username);
     const employeeCode = cleanText(req.body?.employee_code);
@@ -351,41 +371,14 @@ Auto-Notification from MSE Auto Plan`,
   }
 });
 
-// สร้าง user เริ่มต้น (ADMIN เท่านั้น) — รายชื่อจาก .env DEFAULT_USER_SEED=user:pass:ROLE,...
-router.post('/create-default-users', verifyToken, requireRole('ADMIN'), async (req, res) => {
-  try {
-    const seedRaw = process.env.DEFAULT_USER_SEED || '';
-    const seeds = seedRaw
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .map((entry) => {
-        const [username, password, role] = entry.split(':');
-        return { username, password, role };
-      })
-      .filter((u) => u.username && u.password && u.role);
-
-    if (seeds.length === 0) {
-      return res.status(400).json({ message: 'ไม่ได้ตั้งค่า DEFAULT_USER_SEED ใน .env' });
-    }
-
-    await execute('DELETE FROM users');
-
-    for (const u of seeds) {
-      const hash = await bcrypt.hash(u.password, SALT_ROUNDS);
-      await execute(
-        `INSERT INTO users (username, password_hash, role, is_active, status, employee_code)
-         VALUES (@username, @hash, @role, 1, 'ACTIVE', @username)`,
-        { username: u.username, hash, role: u.role }
-      );
-    }
-
-    res.json({ message: `สร้างผู้ใช้งานเริ่มต้นสำเร็จ ${seeds.length} คน` });
-  } catch (err) {
-    console.error('Create default users error:', err);
-    res.status(500).json({ message: 'Failed to create default users' });
-  }
-});
+// ลบทิ้งแล้ว (2026-08-15): POST /create-default-users
+// มันทำ `DELETE FROM users` ทั้งตาราง (นอก transaction ด้วย) แล้ว seed ใหม่จาก DEFAULT_USER_SEED
+// = ปุ่มลบทุกบัญชี + card_uid + employee_code ที่ enroll มาทั้งหมด ในคำสั่งเดียว กู้ไม่ได้
+// เหตุผลที่ลบทิ้งแทนที่จะทำให้ปลอดภัย:
+//   - ไม่มีใครเรียกเลย ทั้งฝั่งเว็บและฝั่ง backend (มีมาตั้งแต่ Phase 0 ไม่เคยถูกแตะ)
+//   - **ใช้ bootstrap ไม่ได้อยู่แล้ว** เพราะติด verifyToken + requireRole('ADMIN') คือต้องมี ADMIN
+//     อยู่ก่อนถึงจะเรียกได้ — admin คนแรกบน DB เปล่าต้อง INSERT ด้วย SQL อยู่ดี
+// สรุปคือมันทำได้อย่างเดียวคือสิ่งที่เราไม่อยากให้ทำได้ · DEFAULT_USER_SEED จึงเป็นตัวแปรตายไปด้วย
 
 // เปลี่ยนรหัสผ่านตัวเอง
 router.post('/change-password', verifyToken, async (req, res) => {

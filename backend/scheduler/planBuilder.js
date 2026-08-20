@@ -6,6 +6,7 @@
 
 const { DROP_DATES } = require('../config/constants');
 const { pyRound, pyInt } = require('./pyUtils');
+const { isBlockedThroughHorizon, normalizeJigList } = require('./jigBlocks');
 
 const isDict = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -104,6 +105,71 @@ function rejectMissingRouting(finalOrders, routing) {
     }
   }
   return { safeOrders, rejectedOrders, missingRoutingMap };
+}
+
+// findBlockedSteps(machineRows, jigBlockMap, lastCalendarDate) → [{ model, flowIndex, stepIndex, jigs }]
+//
+// step ที่ **ทุก** ทางเลือกใช้ไม่ได้ตลอดช่วงที่วางแผนได้ → ต้องบอกเหตุผลจริงกับผู้ใช้
+// ไม่งั้น engine จะลง error 'No Capacity' (engine.js:836-849) ซึ่งแปลว่า "เครื่องไม่พอ"
+// ทั้งที่สาเหตุจริงคือ jig พัง — วินิจฉัยผิดทาง เสียเวลาไล่หาเหตุ
+//
+// ⚠️ machineRows ที่ส่งเข้ามาต้องเป็นแถวที่ **ผ่านการกรอง is_active แล้ว** (ทำที่ schedulerService)
+// step ที่ไม่เหลือแถวเลยจึงนับเป็น blocked ด้วย โดยไม่ต้องรู้เรื่อง is_active ที่นี่
+function findBlockedSteps(machineRows, jigBlockMap, lastCalendarDate) {
+  if (!jigBlockMap || Object.keys(jigBlockMap).length === 0) return [];
+
+  // จัดกลุ่มตาม model|flow|step แล้วดูว่าเหลือทางเลือกที่ใช้ได้ไหม
+  const groups = new Map();
+  for (const r of machineRows || []) {
+    const key = `${r.model}|${pyInt(r.flow_index ?? 0)}|${pyInt(r.step_index ?? 0)}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        model: r.model,
+        flowIndex: pyInt(r.flow_index ?? 0),
+        stepIndex: pyInt(r.step_index ?? 0),
+        usable: 0,
+        jigs: new Set(),
+      });
+    }
+    const g = groups.get(key);
+    // แถวที่ต้องใช้หลายจิ๊กเป็น AND — ตัวใดตัวหนึ่งตันยาวถึงปลายปฏิทิน ทางเลือกนี้ก็ใช้ไม่ได้
+    // (รายงานชื่อจิ๊กที่ตันจริง ๆ ทุกตัว ไม่ใช่แค่จิ๊กหลัก ไม่งั้นผู้ใช้ไปแก้ผิดตัว)
+    const required = normalizeJigList([r.jig_id, ...(Array.isArray(r.extra_jigs) ? r.extra_jigs : [])]);
+    const blockedHere = required.filter((j) => isBlockedThroughHorizon(jigBlockMap, j, lastCalendarDate));
+    if (blockedHere.length > 0) {
+      for (const j of blockedHere) g.jigs.add(j);
+    } else {
+      g.usable += 1;
+    }
+  }
+
+  const blocked = [];
+  for (const g of groups.values()) {
+    if (g.usable === 0 && g.jigs.size > 0) {
+      blocked.push({
+        model: g.model,
+        flowIndex: g.flowIndex,
+        stepIndex: g.stepIndex,
+        jigs: [...g.jigs].sort(),
+      });
+    }
+  }
+  return blocked;
+}
+
+// blockedStepsMessage(blockedSteps, lastCalendarDate) → ข้อความไทย (หรือ '' ถ้าไม่มี)
+// บอกทั้งชื่อ jig **และ** ว่าปฏิทินหมดก่อน jig กลับมา พร้อมทางแก้ — เพราะสองเคสนี้
+// ผู้ใช้แก้คนละวิธี (รอซ่อม vs gen ปฏิทินเพิ่มแล้ว replan)
+function blockedStepsMessage(blockedSteps, lastCalendarDate) {
+  if (!blockedSteps || blockedSteps.length === 0) return '';
+  const jigs = [...new Set(blockedSteps.flatMap((b) => b.jigs))].sort();
+  const models = [...new Set(blockedSteps.map((b) => b.model))];
+  const modelText = models.slice(0, 3).join(', ') + (models.length > 3 ? ` และอีก ${models.length - 3} model` : '');
+  return (
+    ` (⚠️ ${blockedSteps.length} ขั้นตอนของ ${modelText} ไม่มีเครื่องที่ใช้ได้เลย` +
+    ` เพราะ jig ${jigs.join(', ')} ใช้ไม่ได้ตลอดช่วงที่วางแผน` +
+    `${lastCalendarDate ? ` — ปฏิทินมีถึง ${lastCalendarDate} เท่านั้น ถ้า jig กลับมาหลังจากนั้นให้สร้างปฏิทินเพิ่มแล้ว Replan` : ''})`
+  );
 }
 
 // logic.py L117-126: schedule_results -> existing_plan (replan เท่านั้น)
@@ -502,6 +568,275 @@ function buildCapacityWarning(shipmentReport, lastCalendarDate) {
     : null;
 }
 
+// ---------------------------------------------------------------------------
+// buildUnplannedReport — "หลุดแผนเพราะอะไร ขั้นตอนไหน เครื่องอะไรเป็นทางเลือก"
+//
+// engine เขียนแถว NO_CAPACITY / OVERDUE ลง mainPlan ก็จริง แต่ DROP_DATES ตัดทิ้งทั้งคู่
+// ที่ buildDisplayRows/cleanDisplayData ข้อมูลจึงไม่เคยออกจาก backend — ผู้ใช้เห็นแค่
+// FinishDate '-' แล้วแปลเป็น "หลุดออกจากแผน" ลอย ๆ · ตัวนี้อ่านจาก engine.failedSteps แทน
+//
+// กติกาที่พลาดแล้วเงียบ:
+//  1. ⚠️ ขยาย PACK ก่อนเสมอ — engine วางเป็นกลุ่ม batch จึงเป็นชื่อ 'PACK-…' ได้
+//     ใช้ statusMap.original_batches แบบเดียวกับ buildShipmentReport ไม่งั้นชื่อ PACK หลุดถึงผู้ใช้
+//  2. ⚠️ daysPastDueAtHorizon เป็น **ค่าต่ำสุดที่รู้** ไม่ใช่ความล่าช้าจริง — งานที่หลุดไม่มีวันจบ
+//     คำนวณความล่าช้าจริงไม่ได้ · ไม่มี due หรือไม่มีปฏิทิน → null ห้ามเดาเป็น 0
+//  3. ⚠️ ตอบ "เครื่องไหน" เป็น **ชุดทางเลือก** เสมอ — machine:'N/A' คือความหมายที่ engine ตั้งใจ
+//     ("ไม่มีเครื่องไหนรับได้") ไม่ใช่ข้อมูลหาย · ห้ามชี้เครื่องเดียว
+//  4. reason คือผลลัพธ์หลัก ตัวเลขเป็นของแถม — แต่ละเหตุผลนำไปสู่คนละการกระทำ
+//
+// pure ล้วน: remainingCalendar (= engine.workingCalendar หลังรัน) ส่งเข้ามาเป็น argument
+// ---------------------------------------------------------------------------
+
+const UNPLANNED_SENTINELS = new Set(['', 'none', 'null', 'nat', '9999-12-31']);
+
+// 'YYYY-MM-DD' → จำนวนวัน (UTC ทั้งคู่ ผลจึงเป็นวันเต็มเสมอ ไม่มีปัญหา timezone)
+function dayNumber(dateStr) {
+  const s = String(dateStr ?? '').trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || UNPLANNED_SENTINELS.has(s)) return null;
+  const t = Date.parse(`${s}T00:00:00Z`);
+  return Number.isNaN(t) ? null : Math.round(t / 86400000);
+}
+
+function diffDaysStr(from, to) {
+  const a = dayNumber(from);
+  const b = dayNumber(to);
+  return a == null || b == null ? null : b - a;
+}
+
+// รวมเวลาว่างที่เหลือของเครื่องหนึ่งตลอดปฏิทิน (run() ล้าง capacity ของวันที่ผ่านมาเป็น 0 แล้ว)
+function freeMinutesOf(remainingCalendar, machine) {
+  const days = remainingCalendar ? remainingCalendar[machine] : null;
+  if (!days) return 0;
+  let sum = 0;
+  for (const v of Object.values(days)) sum += Number(v) || 0;
+  return Math.round(sum * 10) / 10;
+}
+
+function buildUnplannedReport({
+  failedSteps = [],
+  statusMap = new Map(),
+  dueByBatch = {},
+  // model ของ sub-batch — ใช้กับแถว missing-routing ที่ missingRoutingMap ไม่ได้เก็บชื่อ model ไว้
+  // (ห้ามเติม Model ลง missingRoutingMap เอง — parity เทียบ missing_routing_map ตรง ๆ)
+  modelByBatch = {},
+  machineRows = [],
+  blockedSteps = [],
+  jigBlockMap = {},
+  remainingCalendar = {},
+  lastCalendarDate = '',
+  // ⚠️ งาน missing-routing ถูก rejectMissingRouting คัดออก **ก่อน** เข้า engine จึงไม่มีทางโผล่ใน
+  // failedSteps — แต่มันก็ไม่อยู่ใน shipmentReport เหมือนกัน ฝั่ง UI จึงเห็นเป็น "หลุดออกจากแผน"
+  // ถ้าไม่รวมไว้ที่นี่ด้วย replan ที่หลุดเพราะ routing อย่างเดียวจะโชว์ "หลุดแผน N" โดยไม่มีเหตุผล
+  // = สภาพเดิมเป๊ะที่ฟีเจอร์นี้ตั้งใจกำจัด
+  missingRoutingMap = {},
+} = {}) {
+  const missingEntries = Object.values(missingRoutingMap || {});
+  if ((!failedSteps || failedSteps.length === 0) && missingEntries.length === 0) return [];
+
+  // machine_config จัดกลุ่มไว้ล่วงหน้า: ทางเลือกของ step หนึ่ง + flow ทั้งหมดของ model หนึ่ง
+  const byStep = new Map();   // model|flow|step -> rows
+  const flowsByModel = new Map(); // model -> Map<flow, { steps:Set, machines:Set }>
+  for (const r of machineRows) {
+    const model = r.model;
+    const flow = pyInt(r.flow_index ?? 0);
+    const step = pyInt(r.step_index ?? 0);
+    const sKey = `${model}|${flow}|${step}`;
+    if (!byStep.has(sKey)) byStep.set(sKey, []);
+    byStep.get(sKey).push(r);
+
+    if (!flowsByModel.has(model)) flowsByModel.set(model, new Map());
+    const flows = flowsByModel.get(model);
+    if (!flows.has(flow)) flows.set(flow, { steps: new Set(), machines: new Set() });
+    flows.get(flow).steps.add(step);
+    if (r.machine) flows.get(flow).machines.add(r.machine);
+  }
+
+  const blockedKeys = new Set(
+    (blockedSteps || []).map((b) => `${b.model}|${pyInt(b.flowIndex ?? 0)}|${pyInt(b.stepIndex ?? 0)}`),
+  );
+
+  const candidatesOf = (model, flow, step) => (byStep.get(`${model}|${flow}|${step}`) || []).map((r) => {
+    const jigs = normalizeJigList([r.jig_id, ...(Array.isArray(r.extra_jigs) ? r.extra_jigs : [])]);
+    return {
+      machine: r.machine,
+      cycleTime: Number(r.cycle_time) || 0,
+      setupTime: Number(r.setup_time) || 0,
+      jigs,
+      blockedJigs: jigs.filter((j) => isBlockedThroughHorizon(jigBlockMap, j, lastCalendarDate)),
+      freeMinutes: freeMinutesOf(remainingCalendar, r.machine),
+    };
+  });
+
+  const altFlowsOf = (model, failedFlow) => {
+    const flows = flowsByModel.get(model);
+    if (!flows) return [];
+    const out = [];
+    for (const [flowIndex, info] of flows) {
+      if (flowIndex === failedFlow) continue;
+      out.push({
+        flowIndex,
+        stepCount: info.steps.size,
+        machines: [...info.machines].sort(),
+      });
+    }
+    return out.sort((a, b) => a.flowIndex - b.flowIndex);
+  };
+
+  // เวลาที่ขั้นตอนนี้ต้องใช้ (ประมาณจากทางเลือกที่เร็วที่สุด + setup ของมัน)
+  const neededMinutesOf = (qty, candidates) => {
+    if (candidates.length === 0) return null;
+    let best = null;
+    for (const c of candidates) {
+      const need = (Number(qty) || 0) * c.cycleTime + c.setupTime;
+      if (best === null || need < best) best = need;
+    }
+    return Math.round(best * 10) / 10;
+  };
+
+  const classify = (fs, candidates, needed) => {
+    if (fs.kind === 'backward-full') return 'backward-full';
+    if (candidates.length === 0) return 'no-machine';
+    const key = `${fs.model}|${pyInt(fs.flowIndex ?? 0)}|${pyInt(fs.stepIndex ?? 0)}`;
+    if (blockedKeys.has(key) || candidates.every((c) => c.blockedJigs.length > 0)) return 'jig-blocked';
+    const totalFree = candidates.reduce((s, c) => s + c.freeMinutes, 0);
+    if (needed != null && totalFree < needed) return 'capacity-full';
+    return 'calendar-short';
+  };
+
+  // batch ของ engine -> sub-batch จริง (PACK) — กติกาเดียวกับ buildShipmentReport
+  const expand = (batchId) => {
+    const info = statusMap instanceof Map ? statusMap.get(batchId) : (statusMap || {})[batchId];
+    const subs = (info && info.original_batches) || [];
+    if (subs.length === 0) return [batchId];
+    return subs.map((s) => (isDict(s) ? s.batch : s));
+  };
+
+  // รวมเป็นแถวละ sub-batch (หนึ่งงานตันได้หลายขั้นตอนใน flow เดียว — ขั้นหลังตันตามขั้นแรก)
+  const rowsByBatch = new Map();
+  const newRow = (sub, model, reason, kind, altFlows) => {
+    const raw = dueByBatch[sub];
+    const dueDate = dayNumber(raw) != null ? String(raw).slice(0, 10) : null;
+    return {
+      batch: sub,
+      model,
+      dueDate,
+      // + = ปฏิทินหมดหลัง Due ไปแล้วเท่านี้วัน (อย่างน้อย) · − = ปฏิทินยังไม่ถึง Due ด้วยซ้ำ
+      daysPastDueAtHorizon: diffDaysStr(dueDate, lastCalendarDate),
+      // ติดไปกับแถวเลย เพราะ capacity_warning เป็น null ได้ทั้งที่มีงานหลุด (เช่นหลุดเพราะ routing)
+      lastCalendarDate: lastCalendarDate || null,
+      kind,
+      reason,
+      steps: [],
+      altFlows,
+    };
+  };
+
+  // งานที่ไม่มี routing — ไม่เคยเข้า engine จึงไม่มีขั้นตอนที่ตันให้ชี้ แต่ต้องมีเหตุผลติดไปด้วย
+  for (const info of missingEntries) {
+    const subs = (info.original_batches || []).map((s) => (isDict(s) ? s.batch : s));
+    for (const sub of (subs.length > 0 ? subs : [info.Batch])) {
+      if (!rowsByBatch.has(sub)) {
+        rowsByBatch.set(sub, newRow(sub, modelByBatch[sub] ?? null, 'missing-routing', 'missing-routing', []));
+      }
+    }
+  }
+
+  for (const fs of failedSteps) {
+    const candidates = fs.kind === 'backward-full'
+      ? []
+      : candidatesOf(fs.model, pyInt(fs.flowIndex ?? 0), pyInt(fs.stepIndex ?? 0));
+    const needed = neededMinutesOf(fs.qty, candidates);
+    const reason = classify(fs, candidates, needed);
+
+    for (const sub of expand(fs.batch)) {
+      if (!rowsByBatch.has(sub)) {
+        rowsByBatch.set(
+          sub,
+          newRow(sub, fs.model, reason, fs.kind, altFlowsOf(fs.model, pyInt(fs.flowIndex ?? 0))),
+        );
+      }
+      rowsByBatch.get(sub).steps.push({
+        step: fs.step,
+        flowIndex: fs.flowIndex,
+        stepIndex: fs.stepIndex,
+        qty: Number(fs.qty) || 0,
+        neededMinutes: needed,
+        reason,
+        candidates,
+      });
+    }
+  }
+
+  const out = [...rowsByBatch.values()];
+  for (const row of out) {
+    // ขั้นตอนแรกที่ตันคือต้นเหตุ ขั้นหลังตันตามกันมา → ใช้เป็น reason ของทั้งงาน
+    row.steps.sort((a, b) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0));
+    if (row.steps[0]) row.reason = row.steps[0].reason;
+  }
+  // งานที่เลย Due มากที่สุดขึ้นก่อน (ไม่มี due ไปท้าย)
+  return out.sort((a, b) => {
+    const da = a.daysPastDueAtHorizon;
+    const db = b.daysPastDueAtHorizon;
+    if (da == null && db == null) return String(a.batch) < String(b.batch) ? -1 : 1;
+    if (da == null) return 1;
+    if (db == null) return -1;
+    return db - da || (String(a.batch) < String(b.batch) ? -1 : 1);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// buildPlanChangeSummary — "แผนที่เพิ่งยืนยันไป ต่างจากของเดิมยังไง"
+//
+// ก่อนหน้านี้ diff เห็นได้เฉพาะตอนกดยืนยันใน PlanPreviewDialog เท่านั้น หัวหน้าไลน์ที่ไม่ได้
+// อยู่ตรงนั้นจึงเจอแผนใหม่โดยไม่มีอะไรอธิบาย · ตัวนี้สรุปจากสิ่งที่ **เขียนลง DB จริง**
+// (ไม่ใช่จากผลจำลองที่ client ส่งมา — คนละการรัน และ client แต่งค่าได้)
+//
+// เทียบ orders.fg_date ค่าเดิม (orderStateMap อ่านมาแล้วก่อน writeback) กับค่าใหม่ของ
+// buildOrderDateUpdates · ไปโผล่ใน activity_log ผ่าน res.locals.auditDetail
+//
+// ⚠️ "หลุดแผน" ต้องนับจาก unplanned ไม่ใช่จาก fg_date — buildOrderDateUpdates ตั้งใจ
+// คงค่า fg_date เดิมไว้เมื่อ actual finish เป็น '-' (พอร์ตมาจาก logic.py) งานที่หลุดจึง
+// "ไม่เปลี่ยน" เมื่อมองจากคอลัมน์นั้น
+//
+// samples จำกัดจำนวนเพราะ activity_log.detail ตัดที่ 4000 ตัวอักษร
+const CHANGE_SAMPLE_LIMIT = 5;
+
+function buildPlanChangeSummary({
+  dateUpdates = [], orderStateMap = {}, dueByBatch = {}, unplanned = [],
+} = {}) {
+  const summary = {
+    total: dateUpdates.length,
+    fg_later: 0, fg_earlier: 0, newly_planned: 0, unchanged: 0,
+    unplanned: unplanned.length,
+    late_before: 0, late_after: 0,
+    makespan: null,
+    samples: {},
+  };
+  const push = (key, batch) => {
+    if (!summary.samples[key]) summary.samples[key] = [];
+    if (summary.samples[key].length < CHANGE_SAMPLE_LIMIT) summary.samples[key].push(batch);
+  };
+
+  for (const u of dateUpdates) {
+    const before = dayNumber((orderStateMap[u.batch] || {}).fg_date) != null
+      ? String((orderStateMap[u.batch] || {}).fg_date).slice(0, 10) : null;
+    const after = dayNumber(u.fgDate) != null ? String(u.fgDate).slice(0, 10) : null;
+    const due = dayNumber(dueByBatch[u.batch]) != null ? String(dueByBatch[u.batch]).slice(0, 10) : null;
+
+    if (after && (summary.makespan == null || after > summary.makespan)) summary.makespan = after;
+    if (due && before && before > due) summary.late_before += 1;
+    if (due && after && after > due) { summary.late_after += 1; }
+
+    if (!before && after) { summary.newly_planned += 1; push('newly_planned', u.batch); }
+    else if (before && after && after > before) { summary.fg_later += 1; push('fg_later', u.batch); }
+    else if (before && after && after < before) { summary.fg_earlier += 1; push('fg_earlier', u.batch); }
+    else summary.unchanged += 1;
+  }
+  for (const r of unplanned) push('unplanned', r.batch);
+
+  return summary;
+}
+
 module.exports = {
   buildRawOrders,
   rejectMissingRouting,
@@ -515,6 +850,10 @@ module.exports = {
   cleanDisplayData,
   buildShipmentReport,
   buildCapacityWarning,
+  buildUnplannedReport,
+  buildPlanChangeSummary,
+  findBlockedSteps,
+  blockedStepsMessage,
   safeDateFormat,
   computeProgramNote,
   buildOrderDateUpdates,

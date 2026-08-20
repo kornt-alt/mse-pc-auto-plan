@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } f
 import { Navbar, Nav, NavDropdown, Container } from 'react-bootstrap';
 
 import ProtectedRoute from './auth/ProtectedRoute';
+import ErrorBoundary from './components/shared/ErrorBoundary';
 import { isAuthenticated, getCurrentUser, apiCall } from './api/client';
 import { PlanDataProvider } from './context/PlanDataContext';
 
@@ -19,10 +20,12 @@ import DailyResultPage from './pages/dailyResult/DailyResultPage';
 import WipPage from './pages/wip/WipPage';
 import PlanActualPage from './pages/planActual/PlanActualPage';
 import RoutingConfigPage from './pages/routingConfig/RoutingConfigPage';
+import JigMasterPage from './pages/jig/JigMasterPage';
 import AlertSettingsPage from './pages/alertSettings/AlertSettingsPage';
 
 // เมนูตาม role (ตาม AppDrawer ของระบบเดิม)
-// ADMIN/PLANNER: ทุกเมนู / MFG: ไม่มี Orders, Calendar, Import / OPERATOR: Shop Floor เท่านั้น
+// ADMIN/PLANNER: ทุกเมนู / MFG: ไม่มี Orders, Import (Calendar เข้าได้แต่ดูอย่างเดียว) /
+// OPERATOR: Shop Floor เท่านั้น
 // รายการเดี่ยว = { path, ... } / กลุ่ม dropdown = { label, items: [...] }
 const MENU = [
   {
@@ -46,8 +49,10 @@ const MENU = [
     label: 'ตั้งค่า',
     icon: 'bi-gear',
     items: [
-      { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER'] },
+      // MFG ดูปฏิทินได้ (GET /calendar เปิดให้อยู่แล้ว) แต่แก้ไม่ได้ — หน้าเพจซ่อนปุ่มแก้เอง
+      { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/routing-config', label: 'Routing Config', icon: 'bi-signpost-split', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+      { path: '/jig', label: 'Jig Master', icon: 'bi-tools', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
       { path: '/settings', label: 'Import Data', icon: 'bi-database-up', roles: ['ADMIN', 'PLANNER'] },
       { divider: true },
@@ -218,6 +223,9 @@ const App = () => (
   <Router basename="/MSE-PC-AUTO-PLAN">
     <PlanDataProvider>
     <ConditionalNavbar />
+    {/* ครอบเฉพาะ <Routes> ไม่ครอบ navbar — หน้าพังแล้วเมนูยังอยู่ ผู้ใช้กดไปหน้าอื่นต่อได้
+        ไม่งั้นจอขาวทั้งแอป (กระทบหนักสุดที่ Shop Floor) ดู components/shared/ErrorBoundary.js */}
+    <ErrorBoundary>
     <Routes>
       <Route path="/" element={<HomeRedirect />} />
       <Route path="/login" element={<Login />} />
@@ -275,7 +283,7 @@ const App = () => (
       <Route
         path="/calendar"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
             <CalendarPage />
           </ProtectedRoute>
         }
@@ -285,6 +293,14 @@ const App = () => (
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
             <RoutingConfigPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/jig"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+            <JigMasterPage />
           </ProtectedRoute>
         }
       />
@@ -315,6 +331,7 @@ const App = () => (
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </ErrorBoundary>
     </PlanDataProvider>
   </Router>
 );

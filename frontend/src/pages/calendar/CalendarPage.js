@@ -1,14 +1,18 @@
-// Calendar — port จาก OLD_BACKUP/frontend/lib/screens/calendar_screen.dart
-// ตารางไม่โหลดอัตโนมัติ (ค้นหาก่อน), แก้เวลารายแถว/แบบกลุ่ม, สร้างปฏิทินทั้งเดือน,
-// จัดการ Master Holiday, ปุ่ม Replan เปิดเมื่อ hasChanges
+// Calendar — grid เครื่อง × วัน ของทั้งเดือน (เดิมเป็น list แบน 3 คอลัมน์ที่ต้องค้นทีละเครื่อง)
+// port ตั้งต้นมาจาก OLD_BACKUP/frontend/lib/screens/calendar_screen.dart
 // FIX ที่จงใจแก้:
 //   - ปุ่ม Replan มี confirm dialog ก่อนรัน (user เลือก 2026-07-17 — เดิมรันทันที)
 //   - bulk update ตั้ง hasChanges ด้วย (เดิมลืม — แก้เวลาแบบกลุ่มแล้วปุ่ม Replan ไม่เปิด)
-import React, { useState, useCallback } from 'react';
+//   - โหลดเดือนปัจจุบันทันทีที่เปิดหน้า (เดิมต้องพิมพ์ชื่อเครื่องแล้วกดค้นหาก่อนถึงจะเห็นอะไร)
+//   - ช่อง Machine กลายเป็นตัวกรองฝั่ง client ไม่ยิง API ใหม่และไม่ล้างตารางทิ้ง
+//   - ไดอะล็อก "ตั้งค่าแบบกลุ่ม" สร้างแถวที่ยังไม่มีได้ + ข้ามวันหยุดให้โดยดีฟอลต์
+//
+// การเขียนค่าใช้ PUT /calendar/cells (upsert) ทุกทาง — ทั้งแก้ช่องเดียว ลากเลือกหลายช่อง และ
+// ไดอะล็อกตั้งค่าแบบกลุ่ม เพราะเป็นทางเดียวที่แก้ช่องซึ่ง "ยังไม่มีแถวใน calendar_config" ได้
+// (PUT /calendar/:id ต้องมี id อยู่ก่อน, PUT /calendar/bulk_update เป็น UPDATE อย่างเดียว)
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Container, Button, Form, Table, Spinner, Modal, InputGroup,
-} from 'react-bootstrap';
+import { Container, Button, Form, Spinner, InputGroup } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import { usePlanData } from '../../context/PlanDataContext';
 import PageHeader from '../../components/shared/PageHeader';
@@ -18,6 +22,16 @@ import ConfirmModal from '../../components/shared/ConfirmModal';
 import BulkEditDialog from './BulkEditDialog';
 import GenerateCalendarDialog from './GenerateCalendarDialog';
 import HolidayManagerDialog from './HolidayManagerDialog';
+import CalendarGrid from './CalendarGrid';
+import {
+  buildMonthDays,
+  buildMatrix,
+  filterMachines,
+  summarizeSelection,
+  toCellsPayload,
+  holidayDateSet,
+} from './calendarMatrix';
+import './calendar.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const currentYear = () => String(new Date().getFullYear());
@@ -37,13 +51,16 @@ const CalendarPage = () => {
   const [searchMachine, setSearchMachine] = useState('');
   const [selectedYear, setSelectedYear] = useState(currentYear());
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
-  const [tableData, setTableData] = useState([]);
+
+  const [calendarRows, setCalendarRows] = useState([]);
+  const [machineList, setMachineList] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [isReplanning, setIsReplanning] = useState(false);
 
-  const [editRow, setEditRow] = useState(null); // {id, machine, date} — modal แก้เวลารายแถว
-  const [editTime, setEditTime] = useState('');
+  const [selection, setSelection] = useState([]);
+  const [bulkValue, setBulkValue] = useState('');
   const [showBulk, setShowBulk] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
   const [showHoliday, setShowHoliday] = useState(false);
@@ -55,13 +72,28 @@ const CalendarPage = () => {
   const { toast, showToast, hideToast } = useToast();
   const showErrorToast = useCallback((msg) => showToast(msg, 'danger'), [showToast]);
 
-  const fetchCalendarData = useCallback(
-    async (machine, year, month) => {
+  const currentUser = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
+  }, []);
+  // MFG เข้าหน้านี้ได้แต่ดูอย่างเดียว (backend กัน write ไว้ที่ ADMIN/PLANNER อยู่แล้ว = ด่านจริง)
+  const canEdit = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
+
+  // ===== โหลดข้อมูล =====
+  // ⚠️ month ต้อง zero-pad เสมอ — GET /calendar ทำ `date LIKE 'YYYY-MM-%'` กับสตริง 'YYYY-MM-DD'
+  //    ส่ง month=8 จะได้ 0 แถวแบบเงียบ ๆ (ค่าจาก <Form.Select> เป็น '08' อยู่แล้ว)
+  const loadAll = useCallback(
+    async (year, month) => {
       setIsLoading(true);
       try {
-        const params = new URLSearchParams({ machine, year, month });
-        const data = await apiCall(`/calendar?${params.toString()}`);
-        setTableData(data);
+        const params = new URLSearchParams({ year, month });
+        const [cal, machines, holi] = await Promise.all([
+          apiCall(`/calendar?${params.toString()}`),
+          apiCall('/production/machines'),
+          apiCall('/holiday'),
+        ]);
+        setCalendarRows(Array.isArray(cal) ? cal : []);
+        setMachineList(Array.isArray(machines?.data) ? machines.data : []);
+        setHolidays(Array.isArray(holi) ? holi : []);
       } catch (err) {
         showToast(err.message, 'danger');
       } finally {
@@ -72,23 +104,41 @@ const CalendarPage = () => {
   );
 
   const refresh = useCallback(
-    () => fetchCalendarData(searchMachine, selectedYear, selectedMonth),
-    [fetchCalendarData, searchMachine, selectedYear, selectedMonth]
+    () => loadAll(selectedYear, selectedMonth),
+    [loadAll, selectedYear, selectedMonth]
   );
 
-  // เปลี่ยนเงื่อนไขค้นหา = เคลียร์ตาราง (เหมือนเดิม — บังคับกดค้นหาใหม่)
-  const handleMachineChange = (value) => {
-    setSearchMachine(value);
-    setTableData([]);
-  };
-  const handleMonthChange = (value) => {
-    setSelectedMonth(value);
-    setTableData([]);
-  };
-  const handleYearChange = (value) => {
-    setSelectedYear(value);
-    setTableData([]);
-  };
+  // โหลดทันทีที่เปิดหน้า และทุกครั้งที่เปลี่ยนเดือน/ปี
+  useEffect(() => {
+    loadAll(selectedYear, selectedMonth);
+  }, [loadAll, selectedYear, selectedMonth]);
+
+  // เปลี่ยนเดือน/ปี/ตัวกรอง = ล้างสิ่งที่เลือกค้างไว้
+  // (anchor/focus เป็น index ของชุดที่แสดงอยู่ ถ้าไม่ล้างจะชี้ไปยังลิสต์ที่ไม่มีอยู่แล้ว)
+  useEffect(() => {
+    setSelection([]);
+  }, [searchMachine, selectedYear, selectedMonth]);
+
+  // ===== ข้อมูลที่ derive จาก state (ตรรกะอยู่ใน calendarMatrix.js ทั้งหมด) =====
+  const days = useMemo(
+    () => buildMonthDays(selectedYear, selectedMonth, holidays),
+    [selectedYear, selectedMonth, holidays]
+  );
+  const { machines: allMachines, cellByKey } = useMemo(
+    () => buildMatrix(calendarRows, machineList),
+    [calendarRows, machineList]
+  );
+  const machines = useMemo(
+    () => filterMachines(allMachines, searchMachine),
+    [allMachines, searchMachine]
+  );
+  const selectionInfo = useMemo(
+    () => summarizeSelection(selection, cellByKey),
+    [selection, cellByKey]
+  );
+  // วันหยุดทุกปี (GET /holiday ไม่กรองปี) — ไดอะล็อกตั้งค่าแบบกลุ่มเลือกช่วงข้ามเดือนได้จึงต้องใช้ชุดเต็ม
+  // ไม่ใช่ `days` ที่กรองเฉพาะเดือนที่แสดงอยู่
+  const holidayDates = useMemo(() => holidayDateSet(holidays), [holidays]);
 
   const filtersDirty =
     searchMachine !== '' || selectedMonth !== currentMonth() || selectedYear !== currentYear();
@@ -97,52 +147,75 @@ const CalendarPage = () => {
     setSearchMachine('');
     setSelectedYear(currentYear());
     setSelectedMonth(currentMonth());
-    fetchCalendarData('', currentYear(), currentMonth());
   };
 
-  // ===== แก้เวลารายแถว (PUT /calendar/:id) =====
-  const openEditDialog = (row) => {
-    setEditRow(row);
-    setEditTime(String(row.available_time ?? '0'));
-  };
-
-  const saveEditTime = async () => {
-    const newTime = parseFloat(editTime);
-    const row = editRow;
-    setEditRow(null);
-    if (!row || Number.isNaN(newTime)) return;
-    setIsLoading(true);
-    try {
-      await apiCall(`/calendar/${row.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ available_time: newTime }),
-      });
-      await refresh();
-      setHasChanges(true);
-      showToast('อัปเดตเวลาแล้ว กดปุ่ม Replan เพื่อคำนวณแผนใหม่', 'warning');
-    } catch (err) {
-      showToast(err.message, 'danger');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // ===== แก้เวลาแบบกลุ่ม (PUT /calendar/bulk_update) =====
-  const handleBulkUpdate = useCallback(
-    async (payload) => {
+  // ===== เขียนค่า (PUT /calendar/cells — upsert) =====
+  const saveCells = useCallback(
+    async (cells, successMsg) => {
       setIsLoading(true);
       try {
-        await apiCall('/calendar/bulk_update', { method: 'PUT', body: JSON.stringify(payload) });
+        const data = await apiCall('/calendar/cells', {
+          method: 'PUT',
+          body: JSON.stringify({ cells }),
+        });
         await refresh();
-        setHasChanges(true); // FIX: เดิมไม่ set — bulk ก็เปลี่ยน capacity เหมือนแก้รายแถว
-        showToast('อัปเดตเวลาแบบกลุ่มแล้ว');
+        setHasChanges(true);
+        const created = data?.inserted ? ` (สร้างใหม่ ${data.inserted} ช่อง)` : '';
+        showToast(`${successMsg}${created} — กดปุ่ม Replan เพื่อคำนวณแผนใหม่`, 'warning');
+        return true;
       } catch (err) {
         showToast(err.message, 'danger');
+        return false;
       } finally {
         setIsLoading(false);
       }
     },
     [refresh, showToast]
+  );
+
+  const handleCommitCell = useCallback(
+    (machine, date, value) =>
+      saveCells([{ machine, date, available_time: value }], `อัปเดต ${machine} วันที่ ${date} แล้ว`),
+    [saveCells]
+  );
+
+  const handleApplySelection = async () => {
+    const value = parseFloat(bulkValue);
+    if (Number.isNaN(value) || value < 0) {
+      showToast('ใส่เวลาเป็นตัวเลขไม่ติดลบก่อน', 'warning');
+      return;
+    }
+    const ok = await saveCells(
+      toCellsPayload(selection, value),
+      `ตั้งค่า ${selection.length} ช่องเป็น ${value} นาทีแล้ว`
+    );
+    if (ok) {
+      setSelection([]);
+      setBulkValue('');
+    }
+  };
+
+  // ===== ตั้งค่าเวลาแบบกลุ่ม — ไดอะล็อกกาง (เครื่อง × วัน) มาแล้ว ที่นี่แค่ยืนยันแล้วเขียน =====
+  // ใช้ saveCells ตัวเดียวกับกริด (PUT /calendar/cells) ทางเขียนจึงมีทางเดียวจริง ๆ
+  const handleBulkApply = useCallback(
+    (cells) => {
+      const write = () =>
+        saveCells(cells, `ตั้งค่าเวลาแบบกลุ่ม ${cells.length} ช่องแล้ว`);
+
+      // ช่วงกว้าง ๆ ยืนยันอีกชั้น — ดีฟอลต์ของไดอะล็อกคือ 0 นาที เผลอกดทีเดียวได้ทั้งไตรมาส
+      if (cells.length > 500) {
+        setConfirm({
+          title: 'ยืนยันการตั้งค่าแบบกลุ่ม',
+          body: `จะเขียนทับเวลาที่ใช้ได้ ${cells.length} ช่อง (ช่องที่ยังไม่มีในปฏิทินจะถูกสร้างให้)\n\nต้องการดำเนินการต่อหรือไม่?`,
+          confirmLabel: 'ยืนยัน',
+          variant: 'warning',
+          onConfirm: write,
+        });
+        return;
+      }
+      write();
+    },
+    [saveCells]
   );
 
   // ===== สร้างปฏิทินทั้งเดือน (POST /calendar/generate) =====
@@ -164,6 +237,12 @@ const CalendarPage = () => {
     },
     [refresh, showToast]
   );
+
+  // ปิดหน้าต่างวันหยุดแล้วโหลดใหม่ — วันหยุดมีผลกับการไฮไลต์คอลัมน์ในตาราง
+  const closeHoliday = useCallback(() => {
+    setShowHoliday(false);
+    refresh();
+  }, [refresh]);
 
   // ===== Replan (POST /schedule/replan) — สำเร็จแล้วพุ่งไปหน้า Planning เหมือนเดิม =====
   const runReplan = async () => {
@@ -207,21 +286,23 @@ const CalendarPage = () => {
                 แก้ไขแล้วยังไม่ได้คำนวณแผนใหม่
               </span>
             )}
-            <Button
-              variant={hasChanges ? 'warning' : 'secondary'}
-              disabled={!hasChanges || isReplanning}
-              onClick={handleReplan}
-            >
-              {isReplanning ? (
-                <>
-                  <Spinner size="sm" animation="border" className="me-1" /> กำลังประมวลผล...
-                </>
-              ) : (
-                <>
-                  <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" /> Replan
-                </>
-              )}
-            </Button>
+            {canEdit && (
+              <Button
+                variant={hasChanges ? 'warning' : 'secondary'}
+                disabled={!hasChanges || isReplanning}
+                onClick={handleReplan}
+              >
+                {isReplanning ? (
+                  <>
+                    <Spinner size="sm" animation="border" className="me-1" /> กำลังประมวลผล...
+                  </>
+                ) : (
+                  <>
+                    <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" /> Replan
+                  </>
+                )}
+              </Button>
+            )}
           </>
         }
       />
@@ -232,10 +313,9 @@ const CalendarPage = () => {
         <InputGroup style={{ maxWidth: 180 }}>
           <Form.Control
             size="sm"
-            placeholder="เช่น NL9..."
+            placeholder="กรองชื่อเครื่อง..."
             value={searchMachine}
-            onChange={(e) => handleMachineChange(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && refresh()}
+            onChange={(e) => setSearchMachine(e.target.value)}
           />
         </InputGroup>
 
@@ -244,7 +324,7 @@ const CalendarPage = () => {
           size="sm"
           style={{ maxWidth: 100 }}
           value={selectedMonth}
-          onChange={(e) => handleMonthChange(e.target.value)}
+          onChange={(e) => setSelectedMonth(e.target.value)}
         >
           {MONTHS.map((m) => (
             <option key={m.val} value={m.val}>
@@ -258,7 +338,7 @@ const CalendarPage = () => {
           size="sm"
           style={{ maxWidth: 100 }}
           value={selectedYear}
-          onChange={(e) => handleYearChange(e.target.value)}
+          onChange={(e) => setSelectedYear(e.target.value)}
         >
           {YEARS.map((y) => (
             <option key={y} value={y}>
@@ -267,69 +347,138 @@ const CalendarPage = () => {
           ))}
         </Form.Select>
 
-        <Button size="sm" className="btn-mse" onClick={refresh}>
-          <i className="bi bi-search me-1" aria-hidden="true" />
-          ค้นหา
+        <Button size="sm" className="btn-mse" onClick={refresh} title="โหลดข้อมูลใหม่">
+          <i className="bi bi-arrow-repeat me-1" aria-hidden="true" />
+          รีเฟรช
         </Button>
-        <Button size="sm" variant="info" className="text-white" onClick={() => setShowBulk(true)}>
-          <i className="bi bi-calendar-range me-1" aria-hidden="true" />
-          ตั้งค่าแบบกลุ่ม
-        </Button>
-        <Button size="sm" variant="success" onClick={() => setShowGenerate(true)}>
-          <i className="bi bi-calendar-plus me-1" aria-hidden="true" />
-          สร้างปฏิทิน
-        </Button>
-        <Button size="sm" variant="warning" onClick={() => setShowHoliday(true)}>
-          <i className="bi bi-calendar-event me-1" aria-hidden="true" />
-          วันหยุดประจำปี
-        </Button>
+        {canEdit && (
+          <>
+            {/* กันเปิดตอนยังโหลดไม่เสร็จ — machineList ยังว่าง ดรอปดาวน์จะขึ้น "ทุกเครื่อง (0 เครื่อง)"
+                แล้วเด้งข้อความว่าไม่มีข้อมูลเครื่องจักร ซึ่งไม่จริง */}
+            <Button
+              size="sm"
+              variant="info"
+              className="text-white"
+              disabled={isLoading}
+              onClick={() => setShowBulk(true)}
+            >
+              <i className="bi bi-calendar-range me-1" aria-hidden="true" />
+              ตั้งค่าแบบกลุ่ม
+            </Button>
+            <Button size="sm" variant="success" onClick={() => setShowGenerate(true)}>
+              <i className="bi bi-calendar-plus me-1" aria-hidden="true" />
+              สร้างปฏิทิน
+            </Button>
+            <Button size="sm" variant="warning" onClick={() => setShowHoliday(true)}>
+              <i className="bi bi-calendar-event me-1" aria-hidden="true" />
+              วันหยุดประจำปี
+            </Button>
+          </>
+        )}
         {filtersDirty && (
           <Button size="sm" variant="outline-secondary" onClick={handleClear}>
             ล้างค่า
           </Button>
         )}
+        <Toolbar.End>
+          <span className="text-secondary" style={{ fontSize: 'var(--fs-meta)' }}>
+            {machines.length} เครื่อง · {days.length} วัน
+          </span>
+        </Toolbar.End>
       </Toolbar>
+
+      {/* ===== แถบเลือกหลายช่อง ===== */}
+      {selection.length > 0 && (
+        <div className="cal-selection-bar">
+          <span className="fw-bold">
+            <i className="bi bi-check2-square me-1" aria-hidden="true" />
+            เลือกอยู่ {selectionInfo.count} ช่อง
+          </span>
+          {selectionInfo.missing > 0 && (
+            <span className="chip chip-warn">
+              ยังไม่มีในปฏิทิน {selectionInfo.missing} ช่อง (จะถูกสร้างให้)
+            </span>
+          )}
+          <InputGroup size="sm" style={{ maxWidth: 200 }}>
+            <Form.Control
+              type="number"
+              min="0"
+              // ทุกช่องที่เลือกมีค่าเท่ากันอยู่แล้ว → โชว์ค่านั้นเป็น placeholder ให้รู้ว่ากำลังแก้จากอะไร
+              placeholder={
+                selectionInfo.sameValue === null
+                  ? 'เวลา [นาที]'
+                  : `เดิม ${selectionInfo.sameValue} นาที`
+              }
+              aria-label="เวลาที่ใช้ได้ของช่องที่เลือก"
+              value={bulkValue}
+              onChange={(e) => setBulkValue(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleApplySelection()}
+            />
+            <Button className="btn-mse" onClick={handleApplySelection}>
+              ตั้งค่า
+            </Button>
+          </InputGroup>
+          <Button size="sm" variant="outline-secondary" onClick={() => setSelection([])}>
+            ยกเลิกการเลือก
+          </Button>
+        </div>
+      )}
 
       {/* ===== ตาราง ===== */}
       <div style={{ position: 'relative' }}>
-        {tableData.length === 0 && !isLoading ? (
+        {machines.length === 0 && !isLoading ? (
           <div className="empty-state">
             <i className="bi bi-calendar-x" aria-hidden="true" />
-            <div>พิมพ์ชื่อเครื่องจักรแล้วกดค้นหา</div>
-            <div className="small">ถ้าค้นแล้วไม่พบข้อมูล แปลว่ายังไม่ได้สร้างปฏิทินของเดือนนั้น</div>
+            <div>
+              {allMachines.length === 0
+                ? 'ยังไม่มีข้อมูลเครื่องจักร'
+                : 'ไม่พบเครื่องที่ตรงกับตัวกรอง'}
+            </div>
+            <div className="small">
+              {allMachines.length === 0
+                ? 'ตรวจว่าอัปโหลด machine_config แล้วหรือยัง'
+                : 'ลองล้างช่องกรองชื่อเครื่อง'}
+            </div>
           </div>
         ) : (
-          <Table bordered hover size="sm" style={{ maxWidth: 720 }}>
-            <thead className="table-light">
-              <tr>
-                <th>Machine</th>
-                <th>Date</th>
-                <th>AvailableTime [min]</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tableData.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.machine ?? '-'}</td>
-                  <td className="num">{row.date ?? '-'}</td>
-                  <td
-                    role="button"
-                    onClick={() => row.id && openEditDialog(row)}
-                    title="คลิกเพื่อแก้ไข"
-                  >
-                    <span className="fw-bold text-mse num">{row.available_time ?? 0}</span>{' '}
-                    <i className="bi bi-pencil-square text-secondary ms-1" aria-hidden="true" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+          <>
+            {calendarRows.length === 0 && !isLoading && (
+              <div className="chip chip-warn mb-2">
+                <i className="bi bi-exclamation-triangle-fill" aria-hidden="true" />
+                เดือนนี้ยังไม่มีปฏิทิน — กด &quot;สร้างปฏิทิน&quot; หรือใส่เลขในช่องที่ต้องการได้เลย
+              </div>
+            )}
+            <CalendarGrid
+              days={days}
+              machines={machines}
+              cellByKey={cellByKey}
+              canEdit={canEdit}
+              selection={selection}
+              onSelectionChange={setSelection}
+              onCommitCell={handleCommitCell}
+            />
+            <div className="text-secondary mt-2" style={{ fontSize: 'var(--fs-meta)' }}>
+              {canEdit ? (
+                <>
+                  <i className="bi bi-info-circle me-1" aria-hidden="true" />
+                  คลิกช่องเพื่อแก้เลข · ลากคลุมเพื่อเลือกหลายช่อง · คลิกหัวคอลัมน์ = ทั้งวัน ·
+                  คลิกชื่อเครื่อง = ทั้งเดือน · Esc = ยกเลิก · &quot;—&quot; คือวันที่ยังไม่มีในปฏิทิน
+                </>
+              ) : (
+                <>
+                  <i className="bi bi-eye me-1" aria-hidden="true" />
+                  สิทธิ์ของคุณดูได้อย่างเดียว
+                </>
+              )}
+            </div>
+          </>
         )}
         {isLoading && (
           <div
             className="d-flex align-items-center justify-content-center"
             style={{
               position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.6)', minHeight: 120,
+              zIndex: 5,
             }}
           >
             <Spinner animation="border" className="text-mse" />
@@ -337,48 +486,21 @@ const CalendarPage = () => {
         )}
       </div>
 
-      {/* ===== dialog แก้เวลารายแถว ===== */}
-      <Modal show={!!editRow} onHide={() => setEditRow(null)} centered>
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: '1.1rem' }}>
-            แก้ไขเวลา: {editRow?.machine}
-          </Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <div className="mb-2">วันที่: {editRow?.date}</div>
-          <Form.Group>
-            <Form.Label>Available Time [min]</Form.Label>
-            <Form.Control
-              type="number"
-              value={editTime}
-              autoFocus
-              onChange={(e) => setEditTime(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && saveEditTime()}
-            />
-          </Form.Group>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setEditRow(null)}>
-            ยกเลิก
-          </Button>
-          <Button className="btn-mse" onClick={saveEditTime}>
-            บันทึก
-          </Button>
-        </Modal.Footer>
-      </Modal>
-
       {/* ===== dialogs ===== */}
-      <BulkEditDialog show={showBulk} onHide={() => setShowBulk(false)} onSubmit={handleBulkUpdate} />
+      <BulkEditDialog
+        show={showBulk}
+        onHide={() => setShowBulk(false)}
+        onSubmit={handleBulkApply}
+        machines={allMachines}
+        activeMachines={machineList}
+        holidayDates={holidayDates}
+      />
       <GenerateCalendarDialog
         show={showGenerate}
         onHide={() => setShowGenerate(false)}
         onSubmit={handleGenerate}
       />
-      <HolidayManagerDialog
-        show={showHoliday}
-        onHide={() => setShowHoliday(false)}
-        onError={showErrorToast}
-      />
+      <HolidayManagerDialog show={showHoliday} onHide={closeHoliday} onError={showErrorToast} />
 
       <ConfirmModal confirm={confirm} onHide={() => setConfirm(null)} />
       <ToastHost toast={toast} onClose={hideToast} />

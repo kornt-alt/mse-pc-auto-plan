@@ -7,6 +7,7 @@
 const express = require('express');
 const { query } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const { addDays, pad2 } = require('../utils/dates');
 
 const router = express.Router();
@@ -23,7 +24,7 @@ router.get('/machines', verifyToken, readRoles, async (req, res) => {
       .sort();
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -74,7 +75,7 @@ router.get('/summary', verifyToken, readRoles, async (req, res) => {
     const data = Object.values(dailyMap).sort((a, b) => a.day - b.day);
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -121,7 +122,7 @@ router.get('/dialogue1', verifyToken, readRoles, async (req, res) => {
     }));
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -159,7 +160,7 @@ router.get('/dialogue2', verifyToken, readRoles, async (req, res) => {
     }));
     res.json({ status: 'success', data });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

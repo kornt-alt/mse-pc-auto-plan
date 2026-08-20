@@ -3,11 +3,14 @@ import {
   Modal, Button, Spinner, Table, Form, Tabs, Tab,
 } from 'react-bootstrap';
 import { buildOrderRules } from './planRules';
+import { buildPlanOptions, horizonWords } from './planOptions';
 
-// PlanPreviewDialog — ตอบ 4 คำถามก่อนยืนยันแผน (Replan / เรียง Due Date / Drag)
+// PlanPreviewDialog — ตอบ 5 คำถามก่อนยืนยันแผน (Replan / เรียง Due Date / Drag)
 //   สรุป        : ความเสี่ยงที่ต้องรู้ก่อนกด (หลุดแผน / ล่าช้า / ปฏิทินไม่พอ / เครื่องคอขวด)
 //   ความต่าง    : diff ก่อน→หลัง รายออเดอร์ + เจาะดูเครื่อง/เวลา/คนที่แย่งเครื่อง
-//   เครื่องจักร : เครื่องไหนรัน batch ไหนบ้าง กี่นาที และวันไหนหนาสุด
+//   ทางเลือก    : งานที่วางไม่ลง — เพราะอะไร ขั้นตอนไหน เครื่องทางเลือก/flow ทางเลือกมีอะไร
+//                 (โผล่เฉพาะตอนมีงานหลุด · ดู planOptions.js สำหรับขอบเขตที่ตอบได้)
+//   เครื่องจักร : คิวของแต่ละเครื่อง เรียงตามวันที่เข้าเครื่อง (เก่า → ใหม่) และวันไหนหนาสุด
 //   กฎการคำนวณ : กฎที่ engine ใช้กับออเดอร์นี้จริง ๆ พร้อมค่าที่ป้อนเข้ากฎ
 //
 // props: show, mode('replan'|'sort'|'drag'|'lock'|'unlock'), diff({rows,summary}),
@@ -39,6 +42,7 @@ const MODE_META = {
   drag: { title: 'ตรวจผลก่อนบันทึกลำดับ', icon: 'bi-grip-vertical', confirmLabel: 'บันทึกลำดับ', confirmVariant: 'primary' },
   lock: { title: 'ตรวจผลกระทบก่อนล็อกทั้งหมด (FIXED)', icon: 'bi-lock-fill', confirmLabel: 'ยืนยันล็อกทั้งหมด', confirmVariant: 'warning', note: 'FG ด้านล่างคือผลที่ Replan จะได้เมื่อทุกออเดอร์เป็น FIXED — การยืนยันจะเปลี่ยนแค่สถานะล็อก ยังไม่บันทึกแผน (กด Replan เองอีกที)' },
   unlock: { title: 'ตรวจผลกระทบก่อนปลดล็อกทั้งหมด (NEW)', icon: 'bi-unlock', confirmLabel: 'ยืนยันปลดล็อกทั้งหมด', confirmVariant: 'success', note: 'FG ด้านล่างคือผลที่ Replan จะได้เมื่อปลดล็อกทุกออเดอร์ — การยืนยันจะเปลี่ยนแค่สถานะล็อก ยังไม่บันทึกแผน (กด Replan เองอีกที)' },
+  jig: { title: 'ตรวจผลกระทบก่อนบันทึกสถานะ Jig', icon: 'bi-tools', confirmLabel: 'ยืนยันบันทึกสถานะ', confirmVariant: 'warning', note: 'FG ด้านล่างคือผลที่ Replan จะได้ถ้า jig อยู่ในสถานะนี้ — การยืนยันจะบันทึกแค่สถานะ jig ยังไม่บันทึกแผน (กด Replan ที่หน้า Orders อีกที)' },
 };
 
 // tone จาก planRules → คลาส chip ใน theme.css (map ที่เดียว)
@@ -223,7 +227,7 @@ const RiskLine = ({ tone, icon, label, children }) => (
   </div>
 );
 
-const SummaryTab = ({ diff, machineSchedule, capacityWarning, onGoTo }) => {
+const SummaryTab = ({ diff, machineSchedule, capacityWarning, options, onGoTo }) => {
   const rows = diff.rows;
   const fellOut = rows.filter((r) => r.changeType === 'fell-out');
   const nowLate = rows.filter((r) => r.changeType === 'now-late');
@@ -249,6 +253,25 @@ const SummaryTab = ({ diff, machineSchedule, capacityWarning, onGoTo }) => {
           <RiskLine tone="ng" icon="bi-x-octagon-fill" label={`หลุดแผน ${fellOut.length}`}>
             <span className="num">{list(fellOut)}</span>
             <div className="text-muted">วางไม่ลงในปฏิทินที่มี — ยืนยันแล้วงานเหล่านี้จะไม่มีวัน FG</div>
+          </RiskLine>
+        )}
+
+        {/* ⚠️ แยกจาก fell-out โดยตั้งใจ: สองชุดนี้ไม่เท่ากันทั้งสองทาง
+            งานใหม่ที่ยังไม่เคยมี fg_date แล้ววางไม่ลง → planDiff จัดเป็น unchanged แต่ engine รายงานว่าหลุด
+            (ถ้าผูกไว้กับ fellOut เหตุผลจะไม่ขึ้นเลย) */}
+        {options && options.rows.length > 0 && (
+          <RiskLine tone="ng" icon="bi-signpost-split" label={`วางไม่ลง ${options.rows.length}`}>
+            <div className="d-flex flex-wrap align-items-center gap-2">
+              {options.groups.map((g) => (
+                <span key={g.reason} className={`chip ${TONE_CHIP[g.meta.tone] || ''}`}>
+                  <i className={`bi ${g.meta.icon}`} aria-hidden="true" /> {g.meta.label} {g.rows.length}
+                </span>
+              ))}
+              <Button variant="link" size="sm" className="p-0 text-decoration-none" onClick={() => onGoTo('options')}>
+                ดูทางเลือกที่ทำได้
+              </Button>
+            </div>
+            <div className="text-muted">เหตุผลคือสิ่งที่ตัดสินว่าต้องไปแก้อะไร — แต่ละแบบแก้คนละที่</div>
           </RiskLine>
         )}
 
@@ -344,7 +367,7 @@ const MachineTab = ({ machineSchedule, modelByBatch }) => {
   return (
     <div className="pt-3">
       <div className="small text-muted mb-2">
-        เรียงตาม % การใช้งาน — กดที่เครื่องเพื่อดูว่ารัน batch ไหนบ้าง
+        เรียงตาม % การใช้งาน — กดที่เครื่องเพื่อดูคิวของเครื่องนั้น เรียงตามวันที่เข้าเครื่อง (เก่า → ใหม่)
       </div>
       <div className="matrix-scroll">
         <Table hover size="sm" className="align-middle bg-white mb-0">
@@ -404,6 +427,7 @@ const MachineTab = ({ machineSchedule, modelByBatch }) => {
                         <Table size="sm" borderless className="mb-1 align-middle bg-transparent">
                           <thead>
                             <tr className="small text-muted">
+                              <th className="text-end" style={{ width: 34 }}>คิว</th>
                               <th>Batch</th><th>Model</th>
                               <th className="text-end">เวลา</th>
                               <th className="text-end">%เครื่อง</th>
@@ -412,8 +436,13 @@ const MachineTab = ({ machineSchedule, modelByBatch }) => {
                             </tr>
                           </thead>
                           <tbody>
-                            {m.batches.map((b) => (
+                            {m.batches.map((b, bi) => {
+                              // ทับกับคิวก่อนหน้า = สองงานอยู่บนเครื่องเดียวกันในวันเดียวกัน (แบ่งเวลากันในวัน)
+                              const prev = bi > 0 ? m.batches[bi - 1] : null;
+                              const overlap = !!(prev && prev.lastDate && b.firstDate && b.firstDate <= prev.lastDate);
+                              return (
                               <tr key={b.batch}>
+                                <td className="num text-end text-muted small">{bi + 1}</td>
                                 <td className="num fw-bold">{b.batch}</td>
                                 <td className="small">{modelByBatch.get(b.batch) || '-'}</td>
                                 <td className="num text-end">
@@ -427,13 +456,22 @@ const MachineTab = ({ machineSchedule, modelByBatch }) => {
                                   {b.firstDate === b.lastDate
                                     ? dash(b.firstDate)
                                     : `${dash(b.firstDate)} → ${dash(b.lastDate)}`}
+                                  {overlap && (
+                                    <span
+                                      className="chip chip-warn ms-2"
+                                      title="ช่วงวันทับกับงานคิวก่อนหน้า — เครื่องเดียวกันถูกแบ่งเวลาในวันเดียวกัน"
+                                    >
+                                      <i className="bi bi-layers-half" aria-hidden="true" /> ทับคิวก่อน
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="small text-muted">
                                   {b.steps.slice(0, 3).map((s) => s.step).join(', ')}
                                   {b.steps.length > 3 ? ` +${b.steps.length - 3}` : ''}
                                 </td>
                               </tr>
-                            ))}
+                              );
+                            })}
                           </tbody>
                         </Table>
                         {m.peakDay && m.peakDay.batches.length > 1 && (
@@ -525,8 +563,136 @@ const RulesTab = ({ rows, rulesByBatch, settings }) => {
   );
 };
 
+// ---- แท็บ "ทางเลือก": งานที่วางไม่ลง เพราะอะไร และหน้างานทำอะไรได้ ----
+// ⚠️ บอกได้แค่ว่าทางเลือกนั้น "ทำได้" — ห้ามบอกว่าจะเร็วขึ้นกี่วัน (ต้อง Replan ใหม่ถึงจะรู้)
+const OptionsTab = ({ options, lastCalendarDate }) => {
+  if (!options || options.rows.length === 0) {
+    return (
+      <div className="empty-state">
+        <i className="bi bi-check2-circle" aria-hidden="true" />
+        <div>ไม่มีงานที่วางไม่ลงในแผนนี้</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pt-3">
+      <div className="small text-muted mb-3">
+        <i className="bi bi-info-circle me-1" aria-hidden="true" />
+        รายการข้างล่างคือ <strong>ทางเลือกที่มีอยู่จริงในระบบ</strong> ให้หน้างานเอาไปตัดสินใจ —
+        ระบบไม่ได้บอกว่าทำแล้วจะเร็วขึ้นกี่วัน หรือรับประกันว่าทางเลือกนั้นจะวางลง
+        ต้องแก้แล้วกด Replan อีกครั้งถึงจะได้วันจริง
+      </div>
+
+      {options.groups.map((g) => (
+        <div key={g.reason} className="mb-4">
+          <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
+            <span className={`chip ${TONE_CHIP[g.meta.tone] || ''}`}>
+              <i className={`bi ${g.meta.icon}`} aria-hidden="true" /> {g.meta.label}
+            </span>
+            <span className="fw-bold num">{g.rows.length} งาน</span>
+            <span className="text-muted small">{g.meta.detail}</span>
+          </div>
+
+          {g.meta.actions.length > 0 && (
+            <ul className="small text-muted mb-2 ps-4">
+              {g.meta.actions.map((a) => <li key={a}>{a}</li>)}
+            </ul>
+          )}
+
+          <div className="matrix-scroll">
+            <Table hover size="sm" className="align-middle bg-white mb-0">
+              <thead>
+                <tr className="small text-muted">
+                  <th>Batch</th><th>Model</th>
+                  <th>ตันที่ขั้นตอน</th>
+                  <th>กำหนดส่ง</th>
+                  <th>เครื่องทางเลือกของขั้นตอนนั้น</th>
+                  <th title="flow อื่นที่โมเดลนี้มีอยู่ในระบบ — มีให้เลือก ไม่ได้แปลว่าวางลงแน่">flow อื่นของโมเดลนี้</th>
+                </tr>
+              </thead>
+              <tbody>
+                {g.rows.map((r) => {
+                  const first = r.steps && r.steps[0];
+                  // วันสุดท้ายของปฏิทินมากับแถวเอง — capacity_warning เป็น null ได้ทั้งที่มีงานหลุด
+                  const words = horizonWords(r.daysPastDueAtHorizon, r.lastCalendarDate || lastCalendarDate);
+                  return (
+                    <tr key={r.batch}>
+                      <td className="num fw-bold">{r.batch}</td>
+                      <td className="small">{dash(r.model)}</td>
+                      <td className="small">
+                        {first && first.step ? (
+                          <>
+                            <span className="fw-bold">{first.step}</span>
+                            {r.steps.length > 1 && (
+                              <span className="text-muted"> +อีก {r.steps.length - 1} ขั้น</span>
+                            )}
+                          </>
+                        ) : <span className="text-muted">ทั้งเส้นทาง</span>}
+                      </td>
+                      <td className="small">
+                        <div className="num">{dash(r.dueDate)}</div>
+                        {words && <div className={r.daysPastDueAtHorizon > 0 ? 'text-danger' : 'text-muted'}>{words}</div>}
+                      </td>
+                      <td className="small">
+                        {first && first.candidates.length > 0 ? (
+                          <div className="d-flex flex-column gap-1">
+                            <div className={r.usableCandidates.length > 0 ? 'text-success' : 'text-danger'}>
+                              {r.usableCandidates.length > 0
+                                ? `${r.usableCandidates.length} เครื่องที่ยังหยิบได้`
+                                : 'ไม่มีเครื่องไหนหยิบได้เลยตอนนี้'}
+                            </div>
+                            {first.candidates.map((c) => (
+                              <div key={c.machine} className="d-flex flex-wrap align-items-center gap-2">
+                                <span className="num fw-bold">{c.machine}</span>
+                                {c.blockedJigs.length > 0 ? (
+                                  <span className="chip chip-ng">
+                                    <i className="bi bi-tools" aria-hidden="true" /> จิ๊ก {c.blockedJigs.join(', ')} ใช้ไม่ได้
+                                  </span>
+                                ) : (
+                                  <span className={`num ${c.freeMinutes > 0 ? 'text-success' : 'text-danger'}`}>
+                                    ว่างเหลือ {fmtMin(c.freeMinutes)}
+                                  </span>
+                                )}
+                                {first.neededMinutes != null && (
+                                  <span className="text-muted">ต้องใช้ ~{fmtMin(first.neededMinutes)}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : <span className="text-muted">ไม่มีเครื่องรองรับขั้นตอนนี้</span>}
+                      </td>
+                      <td className="small">
+                        {r.altFlows.length > 0 ? (
+                          r.altFlows.map((f) => (
+                            <div key={f.flowIndex} className="text-muted">
+                              <span className="num">flow {f.flowIndex}</span> · {f.stepCount} ขั้น ·{' '}
+                              {f.machines.slice(0, 3).join(', ')}
+                              {f.machines.length > 3 ? ` +${f.machines.length - 3}` : ''}
+                            </div>
+                          ))
+                        ) : <span className="text-muted">ไม่มี</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const PlanPreviewDialog = ({
   show, mode = 'replan', diff, detail, machineSchedule, capacityWarning,
+  // unplanned = decoded.unplanned — งานที่ engine วางไม่ลง พร้อมเหตุผล/เครื่องทางเลือก
+  // ไม่ส่งมา = ไม่มีงานหลุด (หน้าที่เรียกก่อนฟีเจอร์นี้ยังทำงานเหมือนเดิม)
+  unplanned = [],
+  // blockedSteps = decoded.blocked_steps — step ที่ทุกเครื่องติด jig ที่ใช้ไม่ได้
+  // ไม่ส่งมา = ไม่มีอะไรถูกบล็อก (หน้าที่เรียกก่อนฟีเจอร์ jig ยังทำงานเหมือนเดิม)
+  blockedSteps = [],
   settings, todayStr, loading, onConfirm, onHide,
 }) => {
   const [tab, setTab] = useState('summary');
@@ -545,6 +711,10 @@ const PlanPreviewDialog = ({
 
   const rows = useMemo(() => (diff ? diff.rows : []), [diff]);
   const sched = useMemo(() => machineSchedule || [], [machineSchedule]);
+  const options = useMemo(
+    () => buildPlanOptions({ unplanned, diffRows: rows }),
+    [unplanned, rows],
+  );
 
   // decoded.data ไม่มี model (cleanDisplayData ตัดคีย์ _ ทิ้ง) → join จาก diff.rows ที่นี่
   const modelByBatch = useMemo(
@@ -555,9 +725,13 @@ const PlanPreviewDialog = ({
   // กฎรายออเดอร์ — คำนวณครั้งเดียวต่อชุด diff (pure, ไม่มี side effect)
   const rulesByBatch = useMemo(() => {
     const m = new Map();
-    for (const r of rows) m.set(r.batch, buildOrderRules(r.inputs, { todayStr, settings }));
+    for (const r of rows) {
+      m.set(r.batch, buildOrderRules(r.inputs, {
+        todayStr, settings, model: r.model, blockedSteps,
+      }));
+    }
     return m;
-  }, [rows, todayStr, settings]);
+  }, [rows, todayStr, settings, blockedSteps]);
 
   const meta = MODE_META[mode] || MODE_META.replan;
   const visibleRows = onlyChanged ? rows.filter((r) => r.changeType !== 'unchanged') : rows;
@@ -629,6 +803,7 @@ const PlanPreviewDialog = ({
                   diff={diff}
                   machineSchedule={sched}
                   capacityWarning={capacityWarning}
+                  options={options}
                   onGoTo={setTab}
                 />
               </Tab>
@@ -762,6 +937,24 @@ const PlanPreviewDialog = ({
                   </div>
                 </div>
               </Tab>
+
+              {options.rows.length > 0 && (
+                <Tab
+                  eventKey="options"
+                  title={(
+                    <span>
+                      <i className="bi bi-signpost-split me-1" aria-hidden="true" />
+                      ทางเลือก
+                      <span className="badge bg-danger ms-1">{options.rows.length}</span>
+                    </span>
+                  )}
+                >
+                  <OptionsTab
+                    options={options}
+                    lastCalendarDate={capacityWarning ? capacityWarning.last_calendar_date : null}
+                  />
+                </Tab>
+              )}
 
               <Tab
                 eventKey="machines"

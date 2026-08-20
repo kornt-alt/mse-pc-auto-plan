@@ -9,7 +9,9 @@ const fs = require('fs');
 const path = require('path');
 const { query, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
+const { parseJigCell } = require('../utils/jigList');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { parseCsv } = require('../utils/csv');
 const { pyFloat } = require('../scheduler/pyUtils');
@@ -48,21 +50,47 @@ router.post('/machines', verifyToken, writeRoles, async (req, res) => {
         (r.Machine || '').trim(),
         floatOr0(r.CycleTime),
         floatOr0(r.SetupTime),
-        String(getOr(r, 'JigID', '-')).trim(),
+        // ช่อง JigID ใส่หลายตัวคั่นจุลภาคได้ (กติกาเดียวกับ /upload/machines)
+        ...(() => {
+          const { primary, extras } = parseJigCell(getOr(r, 'JigID', '-'));
+          return [primary, extras];
+        })(),
       ]);
+
+    // ตารางลูกสร้างด้วย DDL รันมือ — ไม่มีก็ข้ามจิ๊กเสริมไป (ไฟล์ seed คุมเองอยู่แล้ว)
+    const hasJigTable =
+      (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
+
     await transaction(async (t) => {
+      // ไม่มี FK — ต้องล้างตารางลูกเองก่อน ไม่งั้นเหลือแถวกำพร้าชี้ id ที่ถูกลบไปแล้ว
+      if (hasJigTable) await t.query('DELETE FROM machine_config_jig');
       await t.query('DELETE FROM machine_config');
+      const before = (await t.query("SELECT ISNULL(MAX(id), 0) AS m FROM machine_config"))[0].m;
       await bulkInsert(
         t,
         'machine_config',
         ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id'],
         rows
       );
+      if (!hasJigTable) return;
+      // ⚠️ จับคู่ด้วย **ลำดับที่แทรก** ไม่ใช่ natural key — machine_config ไม่มี unique index
+      // บน (model, flow, step, alt) และแถวซ้ำคือข้อมูลจริง จะผูกผิดแถวแบบเงียบ ๆ
+      const idRows = await t.query(
+        'SELECT id FROM machine_config WHERE id > @before ORDER BY id',
+        { before }
+      );
+      const pairs = [];
+      idRows.forEach((r2, i) => {
+        for (const jig of rows[i]?.[8] ?? []) pairs.push([r2.id, jig]);
+      });
+      if (pairs.length > 0) {
+        await bulkInsert(t, 'machine_config_jig', ['machine_config_id', 'jig_id'], pairs);
+      }
     });
     timestamps.markEdit();
     res.json({ message: '✅ Machine Config Updated' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -90,7 +118,7 @@ router.post('/routing', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: '✅ Routing Updated' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -107,7 +135,7 @@ router.post('/calendar', verifyToken, writeRoles, async (req, res) => {
     timestamps.markEdit();
     res.json({ message: '✅ Calendar Updated' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
@@ -116,7 +144,7 @@ router.post('/orders', verifyToken, writeRoles, async (req, res) => {
   try {
     await runSapScript();
   } catch (err) {
-    return res.status(500).json({ message: err.message });
+    return sendError(req, res, err);
   }
   try {
     const csvRows = readFixedCsv('orderNewWIP.csv');
@@ -184,7 +212,7 @@ router.post('/orders', verifyToken, writeRoles, async (req, res) => {
       message: `✅ Import Success: Added ${rows.length} new orders (Skipped existing batches)`,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 

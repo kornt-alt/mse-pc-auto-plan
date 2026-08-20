@@ -7,6 +7,7 @@
 const express = require('express');
 const { query, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const schedulerService = require('../services/schedulerService');
 const planLock = require('../state/planLock');
 const timestamps = require('../state/timestamps');
@@ -35,6 +36,31 @@ const cleanPlanModeOverrides = (raw) => {
   return out;
 };
 
+// jig_overrides (sim-only): สวมรอย jig_master เพื่อพรีวิว "ถ้า jig ตัวนี้พังจะเป็นยังไง"
+// กรองให้เหลือเฉพาะรูปแบบที่ buildJigBlockMap เข้าใจ — สถานะนอกลิสต์ / jig_id ว่างถูกทิ้ง
+// ('-' คือ sentinel "ไม่มี jig" ปล่อยผ่านไม่ได้ จะบล็อกทุก step ที่ไม่มี jig ทั้งระบบ)
+const JIG_STATUSES = new Set(['AVAILABLE', 'BROKEN', 'MAINTENANCE']);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const cleanJigOverrides = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw.slice(0, 200)) {
+    const jigId = String((item && item.jig_id) ?? '').trim();
+    if (!jigId || jigId === '-') continue;
+    const status = String((item && item.status) ?? '').trim().toUpperCase();
+    if (!JIG_STATUSES.has(status)) continue;
+    const from = String((item && item.unavailable_from) ?? '').trim();
+    const to = String((item && item.unavailable_to) ?? '').trim();
+    out.push({
+      jig_id: jigId,
+      status,
+      unavailable_from: DATE_RE.test(from) ? from : null,
+      unavailable_to: DATE_RE.test(to) ? to : null,
+    });
+  }
+  return out;
+};
+
 // ========== POST /api/schedule/run — Initial Plan ==========
 router.post('/run', verifyToken, writeRoles, async (req, res) => {
   if (!planLock.tryAcquire()) {
@@ -48,8 +74,9 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
     // run จริงต้องยึด orders.priority + orders.plan_mode ที่เก็บไว้เท่านั้น
     const priorityOverrides = isSimulation ? (req.body && req.body.priority_overrides) || {} : {};
     const planModeOverrides = isSimulation ? cleanPlanModeOverrides(req.body && req.body.plan_mode_overrides) : {};
+    const jigOverrides = isSimulation ? cleanJigOverrides(req.body && req.body.jig_overrides) : [];
 
-    const result = await schedulerService.run(false, { isSimulation, priorityOverrides, planModeOverrides });
+    const result = await schedulerService.run(false, { isSimulation, priorityOverrides, planModeOverrides, jigOverrides });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L333-347: ล้างป้าย ❓ เฉพาะ order ใหม่ -> ประทับตัวที่หา routing ไม่เจอ -> ปลดป้าย New
@@ -67,10 +94,14 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
       });
     }
 
+    // สรุปว่าแผนที่บันทึกไปเปลี่ยนอะไร → activity_log (middleware/activityLog อ่านจาก res.locals)
+    // diff เดิมเห็นได้เฉพาะตอนกดยืนยันในไดอะล็อก คนที่ไม่ได้อยู่ตรงนั้นไม่มีทางรู้ว่าแผนขยับเพราะอะไร
+    // ⚠️ ใช้ค่าที่ service คำนวณจากสิ่งที่ **เขียนลง DB จริง** ไม่ใช่สรุปที่ client ส่งมา (คนละการรัน + แต่งค่าได้)
+    if (result.plan_change) res.locals.auditDetail = { plan_change: result.plan_change };
+
     res.json(result);
   } catch (err) {
-    console.error('POST /schedule/run error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   } finally {
     planLock.release();
   }
@@ -89,10 +120,11 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
     // replan จริงต้องยึด orders.priority + orders.plan_mode ที่เก็บไว้เท่านั้น
     const priorityOverrides = isSimulation ? (req.body && req.body.priority_overrides) || {} : {};
     const planModeOverrides = isSimulation ? cleanPlanModeOverrides(req.body && req.body.plan_mode_overrides) : {};
+    const jigOverrides = isSimulation ? cleanJigOverrides(req.body && req.body.jig_overrides) : [];
 
     if (!isSimulation) timestamps.markEdit(); // = api.py L379 (GLOBAL_LAST_EDIT_TIME ก่อนรัน)
 
-    const result = await schedulerService.run(true, { isSimulation, priorityOverrides, planModeOverrides });
+    const result = await schedulerService.run(true, { isSimulation, priorityOverrides, planModeOverrides, jigOverrides });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L393-426: ล้างป้าย ❓ ทุก order (ไม่ลบ) -> ประทับใหม่ (PACK แตก original_batches) -> ปลดป้าย New
@@ -121,10 +153,14 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
       });
     }
 
+    // สรุปว่าแผนที่บันทึกไปเปลี่ยนอะไร → activity_log (middleware/activityLog อ่านจาก res.locals)
+    // diff เดิมเห็นได้เฉพาะตอนกดยืนยันในไดอะล็อก คนที่ไม่ได้อยู่ตรงนั้นไม่มีทางรู้ว่าแผนขยับเพราะอะไร
+    // ⚠️ ใช้ค่าที่ service คำนวณจากสิ่งที่ **เขียนลง DB จริง** ไม่ใช่สรุปที่ client ส่งมา (คนละการรัน + แต่งค่าได้)
+    if (result.plan_change) res.locals.auditDetail = { plan_change: result.plan_change };
+
     res.json(result);
   } catch (err) {
-    console.error('POST /schedule/replan error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   } finally {
     planLock.release();
   }
@@ -212,8 +248,7 @@ router.get('/latest', verifyToken, readRoles, async (req, res) => {
 
     res.json({ data: cleanedData, report: shipmentReport });
   } catch (err) {
-    console.error('GET /schedule/latest error:', err);
-    res.status(500).json({ message: String(err.message || err) });
+    sendError(req, res, err);
   }
 });
 

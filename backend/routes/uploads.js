@@ -13,15 +13,33 @@ const multer = require('multer');
 const { query, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { parseUpload, uploadHeaders } = require('../utils/csv');
 const { dedupeExact, rowKey } = require('../utils/dedupe');
+const { parseJigCell, hasExtras } = require('../utils/jigList');
 const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
+const { MAX_FILE_SIZE } = require('../utils/attachments');
 
 const router = express.Router();
 const writeRoles = requireRole('ADMIN', 'PLANNER');
-const upload = multer({ storage: multer.memoryStorage() });
+// memoryStorage: ไฟล์ทั้งก้อนเข้า RAM ของ process → **ต้องมี limits เสมอ**
+// ไม่มี limit = ไฟล์ยักษ์ (หรือ .xlsx ที่บานตอน parse) ทำ Node OOM แล้วทั้งระบบดับ ไม่ใช่แค่ request นี้พัง
+// ใช้เพดานเดียวกับไฟล์แนบ order (25 MB) — import มา ไม่ตั้งเลขซ้ำ
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_SIZE } });
+
+// ห่อ upload.single ให้แปลง MulterError เป็น 400 JSON ไทย — ไม่มี global error handler
+// (รูปเดียวกับ uploadSingle ใน routes/orders.js:28 — แก้ที่ไหนแก้ให้เหมือนกันทั้งสองที่)
+const uploadSingle = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกิน 25 MB' : 'อัปโหลดไฟล์ไม่สำเร็จ';
+      return res.status(400).json({ message: msg });
+    }
+    next();
+  });
+};
 
 const requireFile = (req, res) => {
   if (!req.file) {
@@ -54,7 +72,31 @@ const modelInClause = (models, params) =>
 // เขียน config table (machine_config / routing_config) — ใช้ร่วม machines/routing
 // mode: 'replace_all' (ล้างทั้งตาราง) | 'replace_models' (ลบเฉพาะ model ที่อยู่ในไฟล์แล้วใส่ใหม่)
 // table/columns เป็น literal ในโค้ด (ไม่ใช่ input ผู้ใช้) — ปลอดภัยที่จะ interpolate; model ผ่าน params
-const writeConfigTable = async (req, res, { table, columns, parsed, label }) => {
+// ids ของแถวที่เพิ่งแทรก เรียงตามลำดับที่แทรกจริง
+//
+// ⚠️ **ห้ามจับคู่ด้วย natural key (model|flow|step|alt)** — machine_config ไม่มี unique index
+// บนทูเพิลนั้น และแถวซ้ำคือข้อมูลจริง (dedupeExact ตัดเฉพาะแถวที่ซ้ำ *ทุกคอลัมน์*)
+// สองแถวที่ flow/step/alt เท่ากันแต่ cycle_time ต่างกัน import ได้ตามปกติ แล้วการ map
+// ด้วย natural key จะผูกจิ๊กเสริมเข้าแถวผิดตัวแบบเงียบ ๆ
+// IDENTITY เดินหน้าอย่างเดียว + bulkInsert คงลำดับแถว → ตัวที่ N ของผลลัพธ์คือแถวที่ N ที่ส่งไป
+const insertedIds = async (t, table, beforeMaxId) => {
+  const rows = await t.query(
+    `SELECT id FROM ${table} WHERE id > @before ORDER BY id`,
+    { before: beforeMaxId }
+  );
+  return rows.map((r) => r.id);
+};
+
+const maxIdOf = async (t, table) =>
+  (await t.query(`SELECT ISNULL(MAX(id), 0) AS m FROM ${table}`))[0].m;
+
+// hooks (ใช้เฉพาะ machine_config ที่มีตารางลูก machine_config_jig):
+//   beforeDelete(t, { mode, models }) — ล้างตารางลูกก่อน เพราะ replace_models ต้องหา id
+//                                        จาก machine_config ที่กำลังจะถูกลบ
+//   afterInsert(t, ids, rows)         — ids เรียงตามลำดับที่แทรก ตรงกับ rows ทีละตัว
+const writeConfigTable = async (req, res, {
+  table, columns, parsed, label, beforeDelete, afterInsert,
+}) => {
   const mode = getMode(req, 'replace_all');
   const { rows, removed } = dedupeExact(parsed);
 
@@ -80,12 +122,15 @@ const writeConfigTable = async (req, res, { table, columns, parsed, label }) => 
       });
     }
     await transaction(async (t) => {
+      if (beforeDelete) await beforeDelete(t, { mode: 'replace_models', models });
       for (let i = 0; i < models.length; i += 1000) {
         const p = {};
         const inc = modelInClause(models.slice(i, i + 1000), p);
         await t.query(`DELETE FROM ${table} WHERE model IN (${inc})`, p);
       }
+      const before = afterInsert ? await maxIdOf(t, table) : 0;
       await bulkInsert(t, table, columns, rows);
+      if (afterInsert) await afterInsert(t, await insertedIds(t, table, before), rows);
     });
     timestamps.markEdit();
     return res.json({ message: `✅ ${label} (เฉพาะ ${models.length} model): ${rows.length} records` });
@@ -105,15 +150,18 @@ const writeConfigTable = async (req, res, { table, columns, parsed, label }) => 
     });
   }
   await transaction(async (t) => {
+    if (beforeDelete) await beforeDelete(t, { mode: 'replace_all', models: null });
     await t.query(`DELETE FROM ${table}`);
+    const before = afterInsert ? await maxIdOf(t, table) : 0;
     await bulkInsert(t, table, columns, rows);
+    if (afterInsert) await afterInsert(t, await insertedIds(t, table, before), rows);
   });
   timestamps.markEdit();
   return res.json({ message: `✅ ${label} Updated: ${rows.length} records` });
 };
 
 // ========== POST /api/upload/orders (L1285) — append-only ==========
-router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'append'); // 'append' | 'replace'
@@ -242,12 +290,12 @@ router.post('/upload/orders', verifyToken, writeRoles, upload.single('file'), as
     const verb = isReplace ? 'แทนที่ทั้งตาราง' : 'เพิ่มออเดอร์ใหม่';
     res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/calendar (L1367) — delete-insert ==========
-router.post('/upload/calendar', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/calendar', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'replace'); // 'replace' | 'upsert'
@@ -319,39 +367,102 @@ router.post('/upload/calendar', verifyToken, writeRoles, upload.single('file'), 
     timestamps.markEdit();
     res.json({ message: `✅ Calendar Updated: ${rows.length} records` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
+// ---- ตารางลูก machine_config_jig (จิ๊กเสริมของแถวที่ใช้หลายจิ๊กพร้อมกัน) ----
+// ไม่มี FK ในสคีมานี้ ต้องล้างเองทุกครั้งที่ลบแถวแม่ ไม่งั้นเหลือแถวกำพร้าค้างสะสม
+const clearExtraJigs = async (t, { mode, models }) => {
+  if (mode === 'replace_all') {
+    await t.query('DELETE FROM machine_config_jig');
+    return;
+  }
+  // replace_models: ต้องลบ**ก่อน** machine_config เพราะต้องใช้ id ของแถวที่กำลังจะหายไป
+  for (let i = 0; i < models.length; i += 1000) {
+    const p = {};
+    const inc = modelInClause(models.slice(i, i + 1000), p);
+    await t.query(
+      `DELETE FROM machine_config_jig
+        WHERE machine_config_id IN (SELECT id FROM machine_config WHERE model IN (${inc}))`,
+      p
+    );
+  }
+};
+
+// ids เรียงตามลำดับที่แทรก ตรงกับ rows ทีละตัว (ดูหมายเหตุที่ insertedIds)
+const writeExtraJigs = async (t, ids, rows) => {
+  const pairs = [];
+  ids.forEach((id, i) => {
+    for (const jig of rows[i]?.[9] ?? []) pairs.push([id, jig]);
+  });
+  if (pairs.length > 0) {
+    await bulkInsert(t, 'machine_config_jig', ['machine_config_id', 'jig_id'], pairs);
+  }
+};
+
 // ========== POST /api/upload/machines (L1408) — delete-insert ==========
-router.post('/upload/machines', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const parsed = parseUpload(req.file)
       .filter((r) => (r.Model || '').trim() !== '')
-      .map((r) => [
-        (r.Model || '').trim(),
-        Math.trunc(floatOr0(r.FlowIndex)),
-        Math.trunc(floatOr0(r.StepIndex)),
-        Math.trunc(floatOr0(r.AlternativeIndex)),
-        (r.Machine || '').trim(),
-        floatOr0(r.CycleTime),
-        floatOr0(r.SetupTime),
-        String(r.JigID ?? '-').trim() || '-',
-      ]);
+      .map((r) => {
+        // ช่อง JigID ใส่หลายตัวคั่นจุลภาคได้ — ตัวแรกลง jig_id ที่เหลือลง machine_config_jig
+        const { primary, extras } = parseJigCell(r.JigID);
+        return [
+          (r.Model || '').trim(),
+          Math.trunc(floatOr0(r.FlowIndex)),
+          Math.trunc(floatOr0(r.StepIndex)),
+          Math.trunc(floatOr0(r.AlternativeIndex)),
+          (r.Machine || '').trim(),
+          floatOr0(r.CycleTime),
+          floatOr0(r.SetupTime),
+          primary,
+          // ⚠️ ตำแหน่งที่ 9 (index 8) = comments — เขียนจริงเฉพาะเมื่อคอลัมน์มีอยู่ (ดู hasComments
+          // ข้างล่าง) ไม่มีคอลัมน์ = columns เหลือ 8 ตัว bulkInsert จึงข้ามช่องนี้ไปเอง
+          (r.Comments || '').trim(),
+          // ⚠️ ตำแหน่งที่ 10 (index 9) เกินจำนวน columns เสมอ — bulkInsert อ่านแค่ columns.length
+          // แรก จึงไม่ถูกเขียน แต่ dedupeExact (JSON.stringify ทั้งแถว) ยังนับมันด้วย ซึ่งถูกต้อง:
+          // สองแถวที่ต่างกันแค่จิ๊กเสริมคือคนละแถวจริง ๆ ไม่ควรถูกยุบ
+          extras,
+        ];
+      });
+
+    const fileHasExtras = hasExtras(parsed.map((r) => r[9]));
+    const hasJigTable =
+      (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
+    // ไฟล์ใส่หลายจิ๊กมาแต่ยังไม่ได้สร้างตาราง = บอกไปตรง ๆ ดีกว่าเขียนครึ่งเดียวเงียบ ๆ
+    if (fileHasExtras && !hasJigTable) {
+      return res.status(503).json({
+        message: 'ไฟล์นี้มีแถวที่ใส่หลายจิ๊ก แต่ยังไม่ได้สร้างตาราง machine_config_jig ในฐานข้อมูล (คำสั่ง DDL อยู่ใน CHANGELOG.md)',
+      });
+    }
+
+    // comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ — ไม่มีก็แค่ไม่เขียนช่องนั้น ไฟล์ยัง import ได้ปกติ
+    // (ต่างจากจิ๊กเสริมข้างบนที่ต้องปฏิเสธ เพราะข้อมูลจะหายไปแบบเงียบ ๆ ถ้าเขียนครึ่งเดียว)
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+
     await writeConfigTable(req, res, {
       table: 'machine_config',
-      columns: ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id'],
+      columns: [
+        'model', 'flow_index', 'step_index', 'alternative_index',
+        'machine', 'cycle_time', 'setup_time', 'jig_id',
+        ...(hasComments ? ['comments'] : []),
+      ],
       parsed,
       label: 'Machine Config',
+      beforeDelete: hasJigTable ? clearExtraJigs : undefined,
+      afterInsert: hasJigTable ? writeExtraJigs : undefined,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/routing (L1442) — delete-insert ==========
-router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/routing', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const parsed = parseUpload(req.file)
@@ -370,12 +481,12 @@ router.post('/upload/routing', verifyToken, writeRoles, upload.single('file'), a
       label: 'Routing',
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/actual_result (L1515) — validate กับแผนก่อนบันทึก ==========
-router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'append'); // 'append' (กันซ้ำกับ DB) | 'append_all' (ไม่เช็คซ้ำ)
@@ -516,7 +627,7 @@ router.post('/upload/actual_result', verifyToken, writeRoles, upload.single('fil
 });
 
 // ========== POST /api/product-master/upload-csv (L3177) — upsert รายแถว ==========
-router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/product-master/upload-csv', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
 
@@ -582,12 +693,12 @@ router.post('/product-master/upload-csv', verifyToken, writeRoles, upload.single
     });
     res.json({ status: 'success', message: `อัปโหลดสำเร็จ จำนวน ${successCount} รายการ` });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendError(req, res, err);
   }
 });
 
 // ========== POST /api/upload/product_master (L3445) — delete-insert ทั้งตาราง ==========
-router.post('/upload/product_master', verifyToken, writeRoles, upload.single('file'), async (req, res) => {
+router.post('/upload/product_master', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
     const parsed = parseUpload(req.file)
