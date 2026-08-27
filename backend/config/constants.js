@@ -28,6 +28,8 @@ module.exports = {
     'HEAT-TREATMENT',
     'HEAT_JUTAWAN',
     'DEBURR-INSEPC',
+    'DEBURR-MARK-INSPEC',
+    'BLACKENING',
     'BLACKENING_CCS',
     'OQC',
     'ROUGH_TURNING_CCS',
