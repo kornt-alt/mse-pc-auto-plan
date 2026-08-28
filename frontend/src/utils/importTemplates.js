@@ -102,6 +102,25 @@ export const TEMPLATE_SPECS = {
       { name: 'product_code', format: 'ข้อความ', example: 'P123' },
     ],
   },
+  issue_date_master: {
+    id: 'issue_date_master',
+    title: 'Issue Date Master',
+    filename: 'template_issue_date_master.xlsx',
+    sheetName: 'issue_date_master',
+    note: 'แบบ upsert (เพิ่ม/อัปเดตตาม model) — โมเดลที่ไม่อยู่ในตารางใช้ค่า default 3 วันทำงาน',
+    columns: [
+      { name: 'model', required: true, format: 'ข้อความ', example: 'MDL-123' },
+      {
+        name: 'lead_days',
+        required: true,
+        format: 'จำนวนเต็ม 0-365 (วันทำงาน)',
+        default: '3',
+        example: '5',
+        note: 'นับเฉพาะวันทำงาน ข้ามเสาร์-อาทิตย์และวันหยุด · แถวที่ใส่ค่าไม่ถูกต้องจะถูกข้าม',
+      },
+      { name: 'note', format: 'ข้อความ (ไทยได้)', example: 'รอเอกสารลูกค้า' },
+    ],
+  },
 };
 
 // ดาวน์โหลดไฟล์ .xlsx หัวตารางแถวเดียว (ไม่มีข้อมูล)

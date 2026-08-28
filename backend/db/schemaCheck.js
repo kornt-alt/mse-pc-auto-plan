@@ -63,6 +63,25 @@ const OPTIONAL_OBJECTS = [
     column: 'material_arrived',
     impact: 'ปุ่ม "Mat\'l เข้า" ใช้ไม่ได้ program_notes กลับไปคำนวณอัตโนมัติอย่างเดียว',
   },
+  {
+    name: 'issue_date_master',
+    kind: 'table',
+    impact: 'ตั้งจำนวนวันล่วงหน้าต่อโมเดลไม่ได้ ทุกโมเดลใช้ค่า default 3 วันทำงาน (services/issueDateService.js)',
+  },
+  {
+    name: 'orders.issue_date',
+    kind: 'column',
+    table: 'orders',
+    column: 'issue_date',
+    impact: 'คอลัมน์ Issue Date ในหน้า Orders ว่างเสมอ และรันแผนไม่เขียนวัน Issue กลับ',
+  },
+  {
+    name: 'orders.issue_date_manual',
+    kind: 'column',
+    table: 'orders',
+    column: 'issue_date_manual',
+    impact: 'แก้วัน Issue ด้วยมือแล้วรันแผนรอบหน้าจะทับค่าที่แก้ไว้ (ธงกันทับหายไป)',
+  },
 ];
 
 // ---- ส่วน pure (เทสได้ ไม่แตะ DB) ----

@@ -21,6 +21,7 @@ import WipPage from './pages/wip/WipPage';
 import PlanActualPage from './pages/planActual/PlanActualPage';
 import RoutingConfigPage from './pages/routingConfig/RoutingConfigPage';
 import JigMasterPage from './pages/jig/JigMasterPage';
+import IssueDateMasterPage from './pages/issueDateMaster/IssueDateMasterPage';
 import AlertSettingsPage from './pages/alertSettings/AlertSettingsPage';
 
 // เมนูตาม role (ตาม AppDrawer ของระบบเดิม)
@@ -53,6 +54,7 @@ const MENU = [
       { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/routing-config', label: 'Routing Config', icon: 'bi-signpost-split', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/jig', label: 'Jig Master', icon: 'bi-tools', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+      { path: '/issue-date-master', label: 'Issue Date Master', icon: 'bi-file-earmark-text', roles: ['ADMIN', 'PLANNER'] },
       // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
       { path: '/settings', label: 'Import Data', icon: 'bi-database-up', roles: ['ADMIN', 'PLANNER'] },
       { divider: true },
@@ -301,6 +303,14 @@ const App = () => (
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
             <JigMasterPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/issue-date-master"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+            <IssueDateMasterPage />
           </ProtectedRoute>
         }
       />

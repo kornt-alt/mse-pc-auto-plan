@@ -15,6 +15,7 @@ const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../
 const { computeProgramNote } = require('../scheduler/planBuilder');
 const { validateAttachment, parseLogKinds, MAX_FILE_SIZE } = require('../utils/attachments');
 const { isDayUnitStep } = require('../scheduler/dayUnit');
+const { loadIssueDateContext, resolveIssueDate, hasIssueColumns } = require('../services/issueDateService');
 const constants = require('../config/constants');
 
 const router = express.Router();
@@ -779,6 +780,62 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
 
     timestamps.markEdit();
     res.json({ batch, material_ready_date: materialDate, program_notes: programNotes, log_entry: logEntry });
+  } catch (err) {
+    if (storedName) safeUnlink(storedName);
+    sendError(req, res, err);
+  }
+});
+
+// ========== PUT /api/orders/:batch/issue-date — วัน Issue (ปล่อยเอกสาร/สั่งงาน) ==========
+// ปกติค่านี้ระบบเติมให้เองตอนรันแผน (start_date ถอยหลัง N วันทำงานตามโมเดล) — endpoint นี้คือการ
+// "แก้มือทับ" ซึ่งตั้งธง issue_date_manual = 1 เพื่อไม่ให้ replan รอบหน้าทับกลับ
+// ล้างค่า (ส่งค่าว่าง) = ปลดธงกลับเป็นอัตโนมัติ แล้วคำนวณใหม่ทันทีจาก start_date ปัจจุบัน
+// ⚠️ การคำนวณต้องผ่าน services/issueDateService.js ตัวเดียวกับที่ schedulerService ใช้เท่านั้น
+// (ห้ามโหลด issue_date_master / master_holidays เองซ้ำในไฟล์นี้ ไม่งั้นสองที่จะเพี้ยนจากกันเงียบ ๆ)
+router.put('/:batch/issue-date', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+  let storedName = null;
+  try {
+    const { batch } = req.params;
+    const parsed = parseDateInput(req.body && req.body.issue_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const note = cleanNote(req.body && req.body.note);
+
+    // คอลัมน์มาจาก DDL รันมือ — ยังไม่ได้รันก็บอกไปตรง ๆ ดีกว่าปล่อยให้ UPDATE ระเบิดเป็น 500
+    if (!(await hasIssueColumns())) {
+      return res.status(400).json({
+        message: 'ยังไม่ได้สร้างคอลัมน์ issue_date ในฐานข้อมูล (ต้องรัน DDL ก่อน)',
+      });
+    }
+
+    const rows = await query('SELECT id, model, start_date FROM orders WHERE batch = @batch', { batch });
+    if (rows.length === 0) return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+
+    if (req.file) {
+      const v = validateAttachment(req.file);
+      if (!v.ok) return res.status(400).json({ message: v.message });
+      storedName = await writeAttachment(req.file);
+      req.file._storedName = storedName;
+    }
+
+    // มีค่า = แก้มือ (ตั้งธง) · ว่าง = กลับไปอัตโนมัติแล้วคำนวณใหม่เดี๋ยวนี้
+    let issueDate = parsed.value;
+    const manual = issueDate !== null;
+    if (!manual) {
+      const ctx = await loadIssueDateContext();
+      issueDate = resolveIssueDate(rows[0].start_date, rows[0].model, ctx);
+    }
+
+    await execute(
+      'UPDATE orders SET issue_date = @d, issue_date_manual = @m WHERE id = @id',
+      { d: issueDate, m: manual ? 1 : 0, id: rows[0].id },
+    );
+    // log หลัง UPDATE สำเร็จ — best-effort (ตารางยังไม่มี = แก้วันได้ แต่ไม่มีประวัติ)
+    const logEntry = await logDateEdit({
+      batch, kind: 'issue', dateValue: parsed.value, note, file: req.file, user: req.user,
+    });
+
+    // ไม่กระทบ engine (วัน Issue ไม่ใช่ input ของการจัดตาราง) จึงไม่ต้อง markEdit()
+    res.json({ batch, issue_date: issueDate, issue_date_manual: manual, log_entry: logEntry });
   } catch (err) {
     if (storedName) safeUnlink(storedName);
     sendError(req, res, err);

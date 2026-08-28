@@ -14,6 +14,7 @@ const { ENABLE_PACKING } = require('../config/constants');
 const pb = require('../scheduler/planBuilder');
 const timestamps = require('../state/timestamps');
 const { nowBangkok, toDateString } = require('../utils/dates');
+const { loadIssueDateContext, resolveIssueDate, hasIssueColumns } = require('./issueDateService');
 
 // logic.py L13-52 + L117-126 + L150-213: โหลด input ทั้งหมดจาก DB
 async function loadInputs(isReplan) {
@@ -124,15 +125,34 @@ async function persist(scheduleResultRows) {
 }
 
 // UPDATE orders SET start_date/fg_date/program_notes ต่อ batch หลังวางแผน (logic.py L541-562)
-async function persistOrderDates(updates) {
+// withIssueDate: เขียน issue_date ด้วยไหม — เท็จเมื่อยังไม่ได้รัน DDL (คอลัมน์ไม่มี)
+//
+// ⚠️ CASE ตรงนี้คือสิ่งเดียวที่กันไม่ให้ replan ทับค่าที่ planner แก้มือไว้ (issue_date_manual = 1)
+// เขียนรวมใน UPDATE เดิมคำสั่งเดียว **ไม่แยกเป็นคำสั่งที่สอง** — นี่คือการเขียนที่ใหญ่ที่สุดในระบบ
+// (ระดับพันแถวต่อรอบ) การยิงเพิ่มอีกหนึ่ง round-trip ต่อแถวขณะถือ transaction ไว้คือต้นทุนที่
+// comment ของ persist() ข้างบนอธิบายไว้แล้วว่าทำไมถึงต้องเลี่ยง
+// NULL: `NULL = 1` เป็น UNKNOWN → ตกไป ELSE → เขียนทับ = ถือว่า "อัตโนมัติ" ตรงกับกติกา
+// "คอลัมน์/ค่าที่ไม่มี = พฤติกรรมเดิม" ที่ใช้ทั้งระบบ (คอลัมน์เป็น NOT NULL DEFAULT 0 อยู่แล้ว
+// จึงไม่ควรเจอ NULL จริง แต่ให้ผลถูกต้องถ้าเจอ)
+// (SQL Server bind ทุก column reference ตอน compile → อย่าอ้างคอลัมน์ที่อาจไม่มีในสตริงเดียวกัน)
+const ORDER_DATE_SET_BASE =
+  'start_date = @start_date, fg_date = @fg_date, program_notes = @program_notes';
+const ORDER_DATE_SET_ISSUE =
+  ', issue_date = CASE WHEN issue_date_manual = 1 THEN issue_date ELSE @issue_date END';
+
+async function persistOrderDates(updates, withIssueDate = false) {
   if (updates.length === 0) return;
+  const setClause = ORDER_DATE_SET_BASE + (withIssueDate ? ORDER_DATE_SET_ISSUE : '');
   await transaction(async (t) => {
     for (const u of updates) {
-      await t.query(
-        `UPDATE orders SET start_date = @start_date, fg_date = @fg_date, program_notes = @program_notes
-         WHERE batch = @batch`,
-        { batch: u.batch, start_date: u.startDate, fg_date: u.fgDate, program_notes: u.programNotes },
-      );
+      const params = {
+        batch: u.batch,
+        start_date: u.startDate,
+        fg_date: u.fgDate,
+        program_notes: u.programNotes,
+      };
+      if (withIssueDate) params.issue_date = u.issueDate ?? null;
+      await t.query(`UPDATE orders SET ${setClause} WHERE batch = @batch`, params);
     }
   });
 }
@@ -286,16 +306,28 @@ async function run(isReplan = false, options = {}) {
     // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto (undefined)
     // (SQL Server bind ทุก column reference ตอน compile → เช็ค COL_LENGTH ก่อน อย่าอ้างคอลัมน์ที่อาจไม่มีตรง ๆ)
     const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
+    // model ต้องมีด้วย เพราะวัน Issue ถอยหลังจาก start_date เป็นจำนวนวันที่ขึ้นกับโมเดล
     const stateCols = hasArrivedCol
-      ? 'batch, start_date, fg_date, material_ready_date, material_arrived'
-      : 'batch, start_date, fg_date, material_ready_date';
+      ? 'batch, model, start_date, fg_date, material_ready_date, material_arrived'
+      : 'batch, model, start_date, fg_date, material_ready_date';
     const orderStateRows = await query(
       `SELECT ${stateCols} FROM orders WHERE is_deleted = 0`,
     );
     const orderStateMap = {};
     for (const r of orderStateRows) orderStateMap[r.batch] = r;
     const dateUpdates = pb.buildOrderDateUpdates(mainPlan, totalPlanMap, safeOrders, orderStateMap);
-    await persistOrderDates(dateUpdates);
+
+    // วัน Issue = start_date ถอยหลัง N วันทำงาน (N ต่อโมเดลจาก issue_date_master, ไม่มี = 3)
+    // เป็น post-processing ล้วน ไม่ป้อนกลับเข้า engine — scheduler/ จึงไม่ต้องรู้จักเรื่องนี้เลย
+    // ไม่มีคอลัมน์ (ยังไม่ได้รัน DDL) = ข้ามไปทั้งก้อน = พฤติกรรมเดิมทุกประการ
+    const withIssueDate = await hasIssueColumns();
+    if (withIssueDate) {
+      const issueCtx = await loadIssueDateContext();
+      for (const u of dateUpdates) {
+        u.issueDate = resolveIssueDate(u.startDate, orderStateMap[u.batch]?.model, issueCtx);
+      }
+    }
+    await persistOrderDates(dateUpdates, withIssueDate);
 
     // สรุปว่าแผนที่เพิ่งเขียนลง DB ต่างจากของเดิมยังไง — route เอาไปแปะ activity_log
     // ต้องคำนวณตรงนี้ เพราะ orderStateMap คือ "ค่าก่อนเขียนทับ" ที่มีอยู่แค่ในบล็อกนี้

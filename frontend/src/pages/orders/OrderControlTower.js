@@ -29,6 +29,7 @@ import OrderFilterPanel from './OrderFilterPanel';
 import {
   EMPTY_FILTERS, dateFilterActive, countActiveDateFilters, matchOrderDates,
 } from './orderFilters';
+import { exportXlsx, stampedFilename } from '../../utils/xlsxExport';
 
 // meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
 const DATE_EDIT_META = {
@@ -36,6 +37,9 @@ const DATE_EDIT_META = {
   material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam', logKinds: 'material,material_arrived' },
   confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
   release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
+  // ปกติระบบเติมวัน Issue ให้เองตอนรันแผน (start_date ถอยหลังตามจำนวนวันของโมเดล)
+  // กล่องนี้คือการแก้มือทับ ซึ่งตั้งธง issue_date_manual กันไม่ให้ replan รอบหน้าทับกลับ
+  issue: { endpoint: 'issue-date', bodyKey: 'issue_date', title: 'วัน Issue', label: 'เลือกวัน Issue', icon: 'bi-file-earmark-text' },
 };
 
 // ===== helpers =====
@@ -63,6 +67,11 @@ const formatWip = (wip) => {
 
 const shortDate = (v) => (v ? String(v).slice(0, 10) : '-');
 
+// issue_date_manual มาจาก DDL รันมือ — ไม่มีคอลัมน์ = undefined = อัตโนมัติ (ไม่ใช่แก้มือ)
+// DB คืน BIT เป็น true/false ส่วน JSON เก่า/ไฟล์เทสอาจเป็น 1/0 จึงรับทั้งสองแบบ
+const isManualIssueDate = (order) =>
+  order?.issue_date_manual === true || Number(order?.issue_date_manual) === 1;
+
 // วันนี้เป็น string 'YYYY-MM-DD' โซนกรุงเทพ (UTC+7 คงที่ ไม่มี DST) — ให้ตรงกับ backend nowBangkok()
 // ไม่ใช้เวลาเครื่อง (browser-local) กันเพี้ยนช่วงเที่ยงคืนถ้าเครื่องตั้ง timezone อื่น
 const todayDateStr = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
@@ -88,6 +97,28 @@ const logMarker = (n) =>
       style={{ fontSize: '0.72rem' }}
     />
   ) : null;
+
+// ⚠️ คอลัมน์ของไฟล์ export เขียนไว้ชัด ๆ ตรงนี้ **ห้าม derive จาก <th> ในตาราง** —
+// คอลัมน์ drag handle / Action / Priority เป็นตัวควบคุมบนจอ ไม่ใช่ข้อมูล ถ้าไปดึงจากหัวตาราง
+// ไฟล์จะมีคอลัมน์ว่างของปุ่มลากติดไปด้วย (ลำดับที่นี่คือลำดับที่ผู้ใช้เห็น ไม่ต้องตรงกับ <th> เป๊ะ)
+const EXPORT_COLUMNS = [
+  { key: 'batch', label: 'Batch ID' },
+  { key: 'model', label: 'Model' },
+  { key: 'description', label: 'Description' },
+  { key: 'wip', label: 'WIP', value: (o) => formatWip(o.wip) },
+  { key: 'planning_mode', label: 'Delivery mode', value: (o) => (o.planning_mode === 'backward' ? 'Backward' : 'Forward') },
+  { key: 'qty', label: 'Qty' },
+  { key: 'due_date', label: 'Due Date', value: (o) => shortDate(o.due_date) },
+  { key: 'release_date', label: 'Release Date', value: (o) => shortDate(o.release_date) },
+  { key: 'issue_date', label: 'Issue Date', value: (o) => shortDate(o.issue_date) },
+  { key: 'issue_date_manual', label: 'Issue แก้มือ', value: (o) => (isManualIssueDate(o) ? 'ใช่' : '') },
+  { key: 'material_ready_date', label: 'Material', value: (o) => shortDate(o.material_ready_date) },
+  { key: 'confirm_reply_date', label: 'Confirm', value: (o) => shortDate(o.confirm_reply_date) },
+  { key: 'start_date', label: 'Start', value: (o) => shortDate(o.start_date) },
+  { key: 'fg_date', label: 'FG', value: (o) => shortDate(o.fg_date) },
+  { key: 'program_notes', label: 'หมายเหตุ' },
+  { key: 'priority', label: 'Priority' },
+];
 
 // แผน "ค้าง" ถ้ามีการแก้ไขหลังวางแผนล่าสุด (เทียบ string 'YYYY-MM-DD HH:MM:SS')
 const isPlanOutdated = (lastPlan, lastEdit) => {
@@ -182,6 +213,29 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
         )}
         {due.icon === 'near' && <i className="bi bi-clock-fill me-1" title="ใกล้ถึงกำหนดส่ง" />}
         {String(order.due_date || '').slice(0, 10)}
+      </td>
+       <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className="p-0 text-decoration-none num"
+          disabled={datesLocked}
+          title={canEditDates ? 'แก้วัน Issue' : 'ดูประวัติวัน Issue'}
+          onClick={() => onEditDate('issue', order)}
+        >
+          {shortDate(order.issue_date)}
+        </Button>
+        {/* ⚠️ ต้องเทียบค่าให้ชัด ไม่ใช่ truthy — เครื่องที่ยังไม่ได้รัน DDL จะไม่มีคีย์นี้ (undefined)
+            ซึ่งต้องแปลว่า "อัตโนมัติ" ไม่ใช่ "แก้มือ" ไม่งั้นทุกแถวจะติดป้ายผิด */}
+        {isManualIssueDate(order) && (
+          <i
+            className="bi bi-pencil-fill ms-1 text-muted"
+            style={{ fontSize: '0.7em' }}
+            title="แก้ด้วยมือ — จัดแผนรอบหน้าจะไม่ทับค่านี้"
+            aria-hidden="true"
+          />
+        )}
+        {logMarker(order.date_log_counts?.issue)}
       </td>
       <td className="num">
         <Button
@@ -691,6 +745,13 @@ const OrderControlTower = () => {
   };
 
   // Undo — restore snapshot แล้ว refetch (ไม่ replan อัตโนมัติ; ผู้ใช้กด Replan เอง)
+  // Export "ตามที่เห็นบนจอ" — filteredOrders คือผลหลังค้นหา/ตัวกรอง เรียงตามลำดับปัจจุบัน
+  const handleExport = useCallback(() => {
+    if (filteredOrders.length === 0) return;
+    exportXlsx(stampedFilename('orders', today), 'Orders', EXPORT_COLUMNS, filteredOrders);
+    showToast(`บันทึกไฟล์ Excel ${filteredOrders.length} รายการแล้ว`);
+  }, [filteredOrders, today, showToast]);
+
   const handleUndo = async () => {
     if (!previousOrderList) return;
     setIsPlanning(true);
@@ -852,6 +913,14 @@ const OrderControlTower = () => {
               <Button variant="outline-primary" disabled={busy} onClick={handleSortByDueDate}>
                 <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
               </Button>
+              <Button
+                variant="outline-success"
+                disabled={busy || filteredOrders.length === 0}
+                onClick={handleExport}
+                title="บันทึกรายการที่เห็นอยู่เป็นไฟล์ Excel"
+              >
+                <i className="bi bi-file-earmark-excel me-1" aria-hidden="true" /> Export Excel
+              </Button>
             </>
           )}
         </Toolbar.End>
@@ -898,6 +967,7 @@ const OrderControlTower = () => {
                     <th>Delivery mode</th>
                     <th>Qty</th>
                     <th>Due Date</th>
+                    <th>Issue Date</th>
                     <th>Release Date</th>
                     <th>Material</th>
                     <th>Confirm</th>

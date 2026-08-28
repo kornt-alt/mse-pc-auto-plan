@@ -1,5 +1,5 @@
 // utils/attachments.js — validation ล้วน ๆ สำหรับไฟล์แนบของ order_date_log
-// (Release / Material / Confirm) — ไม่แตะ DB/fs จึงเทสได้ตรง ๆ ใน utils/__tests__/
+// (Release / Material / Confirm / Issue) — ไม่แตะ DB/fs จึงเทสได้ตรง ๆ ใน utils/__tests__/
 //
 // นโยบายที่ผู้ใช้ล็อกไว้: รูป + PDF + Office, ไฟล์ละไม่เกิน 25 MB
 // backend คือด่านจริง (frontend มี pre-check แค่ให้ผู้ใช้รู้ก่อนกด) — whitelist ต้องตรงกัน
@@ -7,12 +7,12 @@
 const path = require('path');
 
 // ⚠️ ไฟล์นี้ถือ "สองลิสต์ที่ไม่เท่ากัน" อย่าเผลอรวมเป็นตัวเดียว:
-//   ATTACHMENT_KINDS = kind ที่ "แนบไฟล์ได้" (3 ตัว — มาจากช่องวันที่ที่ผู้ใช้แก้เอง)
-//   DATE_LOG_KINDS   = kind ที่ "มีแถวใน order_date_log ได้" (4 ตัว — รวม material_arrived ที่เป็น
+//   ATTACHMENT_KINDS = kind ที่ "แนบไฟล์ได้" (4 ตัว — มาจากช่องวันที่ที่ผู้ใช้แก้เอง)
+//   DATE_LOG_KINDS   = kind ที่ "มีแถวใน order_date_log ได้" (5 ตัว — รวม material_arrived ที่เป็น
 //                      การติ๊ก checkbox ไม่มีไฟล์แนบ และ date_value เก็บสถานะไม่ใช่วันที่)
 
 // date_kind ที่ยอมรับ — reuse เป็น key เดียวกับ DATE_EDIT_META ฝั่ง frontend
-const ATTACHMENT_KINDS = ['material', 'confirm', 'release'];
+const ATTACHMENT_KINDS = ['material', 'confirm', 'release', 'issue'];
 
 // kind ทั้งหมดที่มีสิทธิ์อยู่ในตาราง order_date_log (ใช้กรอง query string ของ GET /:batch/date-log)
 const DATE_LOG_KINDS = [...ATTACHMENT_KINDS, 'material_arrived'];

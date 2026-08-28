@@ -15,7 +15,7 @@ const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
-const { parseUpload, uploadHeaders } = require('../utils/csv');
+const { parseUpload, uploadHeaders, getValueStrict } = require('../utils/csv');
 const { dedupeExact, rowKey } = require('../utils/dedupe');
 const { parseJigCell, hasExtras } = require('../utils/jigList');
 const { pyFloat } = require('../scheduler/pyUtils');
@@ -740,6 +740,82 @@ router.post('/upload/product_master', verifyToken, writeRoles, uploadSingle, asy
   } catch (err) {
     // FIX: เดิมคืน 200 พร้อมข้อความ error — คืน 500 ให้หน้าเว็บ catch ได้
     res.status(500).json({ message: `เกิดข้อผิดพลาดในการบันทึกข้อมูล: ${err.message}` });
+  }
+});
+
+// ========== POST /api/upload/issue_date_master — จำนวนวันปล่อยเอกสารล่วงหน้าต่อโมเดล ==========
+// ⚠️ **upsert รายแถว ไม่ใช่ delete-insert** ต่างจาก /upload/product_master โดยตั้งใจ:
+// ตารางนี้เป็นค่าที่ตั้งครั้งเดียวแล้วแก้ทีละตัว การล้างทั้งตารางเพราะอัปไฟล์ที่มี 2 แถว
+// คือการทำข้อมูลของโมเดลอื่นหายโดยที่ผู้ใช้ไม่ได้ตั้งใจ
+//
+// ⚠️ อ่านคอลัมน์ผ่าน getValueStrict (case-insensitive) ไม่ใช่ row.model ตรง ๆ —
+// handler รุ่นเก่าที่ index ตรง ๆ คือสาเหตุที่ template พิมพ์ case ไม่ตรงแล้ว import ได้ค่าว่างเงียบ ๆ
+router.post('/upload/issue_date_master', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+  try {
+    if (!requireFile(req, res)) return;
+
+    const exists = await query("SELECT OBJECT_ID('issue_date_master') AS id");
+    if (exists[0]?.id == null) {
+      return res.status(503).json({
+        message: 'ยังไม่ได้สร้างตาราง issue_date_master ในฐานข้อมูล (คำสั่ง DDL อยู่ใน CHANGELOG.md)',
+      });
+    }
+
+    const parsed = [];
+    const invalid = [];
+    for (const r of parseUpload(req.file)) {
+      const model = String(getValueStrict(r, 'model') ?? '').trim().slice(0, 100);
+      if (!model) continue; // แถวว่าง = ข้าม (เหมือน handler อื่น)
+      const raw = getValueStrict(r, 'lead_days');
+      const n = Number(raw);
+      // ค่าที่ใช้ไม่ได้ต้อง "ไม่เขียน" และรายงานกลับ — เขียน 0 แทนจะกลายเป็นปล่อยเอกสารวันเดียวกับวันเริ่ม
+      if (String(raw ?? '').trim() === '' || !Number.isInteger(n) || n < 0 || n > 365) {
+        invalid.push(model);
+        continue;
+      }
+      const note = String(getValueStrict(r, 'note') ?? '').trim().slice(0, 255) || null;
+      parsed.push({ model, lead_days: n, note });
+    }
+
+    // ไฟล์เดียวมีโมเดลซ้ำ — เอาแถวหลังสุดชนะ (ตรงกับที่ผู้ใช้เห็นบนจอว่า "แก้ทีหลัง")
+    const byModel = new Map();
+    for (const row of parsed) byModel.set(row.model, row);
+    const rows = [...byModel.values()];
+
+    if (isDryRun(req)) {
+      const existing = await query('SELECT model FROM issue_date_master');
+      const known = new Set(existing.map((e) => String(e.model).trim()));
+      return res.json({
+        preview: {
+          mode: 'upsert',
+          total: parsed.length,
+          to_update: rows.filter((r) => known.has(r.model)).length,
+          to_insert: rows.filter((r) => !known.has(r.model)).length,
+          duplicates_in_file: parsed.length - rows.length,
+          invalid_rows: invalid.length,
+        },
+      });
+    }
+
+    const updatedBy = req.user && req.user.username ? String(req.user.username).slice(0, 100) : null;
+    await transaction(async (t) => {
+      for (const r of rows) {
+        await t.query(
+          `MERGE issue_date_master AS tgt
+           USING (SELECT @model AS model) AS src ON tgt.model = src.model
+           WHEN MATCHED THEN UPDATE SET lead_days = @lead, note = @note,
+                                        updated_at = SYSDATETIME(), updated_by = @by
+           WHEN NOT MATCHED THEN INSERT (model, lead_days, note, updated_by)
+                                 VALUES (@model, @lead, @note, @by);`,
+          { model: r.model, lead: r.lead_days, note: r.note, by: updatedBy },
+        );
+      }
+    });
+
+    const skipped = invalid.length ? ` (ข้าม ${invalid.length} แถวที่จำนวนวันไม่ถูกต้อง)` : '';
+    res.json({ message: `บันทึกจำนวนวันปล่อยเอกสาร ${rows.length} โมเดลสำเร็จ!${skipped}` });
+  } catch (err) {
+    sendError(req, res, err);
   }
 });
 
