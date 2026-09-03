@@ -246,3 +246,91 @@ test('failedSteps: โมเดลหลาย flow ที่วางไม่�
   assert.equal(failedSteps[0].batch, 'B888');
   assert.equal(typeof failedSteps[0].flowIndex, 'number');
 });
+
+// ===================================================================
+// เวลาหยิบจับ (handling_time) — นาที/ชิ้น บวกกับ cycle time
+//   เวลาต่อชิ้นจริง = CycleTime + HandlingTime
+//   handling = 0 (ไม่มีคอลัมน์) ต้องได้ผลเท่าเดิมเป๊ะ ซึ่ง parity fixtures เป็นคนยืนยัน
+// ===================================================================
+const handlingMachines = (hd) => [
+  { Model: 'M1', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1', HandlingTime: hd },
+  { Model: 'M1', FlowIndex: 1, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+];
+
+const buildHandlingEngine = (hd) => {
+  const routing = processRouting(routingRows);
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(handlingMachines(hd));
+  return new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+};
+
+test('handling time: เลนเดินหน้า เวลาต่อชิ้น = cycle + handling', () => {
+  const engine = buildHandlingEngine(0.5);
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B100', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  const { mainPlan } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+
+  // 100 ชิ้น × (2 + 0.5) = 250 นาที (เดิม 200)
+  const turnRow = mainPlan.find((r) => r.step === 'TURNING');
+  assert.equal(turnRow.qty, 100);
+  assert.equal(turnRow.timeUsed_min, 250);
+  // ปฏิทินถูกหักด้วยเวลาที่รวม handling แล้ว (setup 30 + run 250)
+  assert.equal(engine.workingCalendar['MC-A']['2026-07-20'], 1240 - 280);
+
+  // ⚠️ setup ต้องไม่ถูกแตะ — handling เป็นเวลาต่อชิ้น ไม่ใช่เวลาตั้งเครื่อง
+  const setupRow = mainPlan.find((r) => r.isSetup);
+  assert.equal(setupRow.timeUsed_min, 30);
+
+  // step ที่ไม่ได้ตั้ง handling ต้องเท่าเดิม
+  assert.equal(mainPlan.find((r) => r.step === 'MILLING').timeUsed_min, 100);
+});
+
+test('handling time: handling = 0 ให้ผลเท่ากับไม่มีคอลัมน์เลย', () => {
+  const withZero = buildHandlingEngine(0);
+  const withNone = buildEngine();
+  const makeOrders = () =>
+    new OrderManager(false).processOrders([
+      { Batch: 'B101', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+    ])[0];
+  const a = withZero.run(makeOrders(), null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const b = withNone.run(makeOrders(), null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.deepEqual(a.mainPlan, b.mainPlan);
+});
+
+test('handling time: เลนถอยหลังบวก handling เหมือนกัน', () => {
+  const engine = buildHandlingEngine(0.5);
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B102', Model: 'M1', qty: 50, dueDate: '2026-07-24', priority: 1, planningMode: 'backward', planMode: 'NEW' },
+  ]);
+  const { mainPlan } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  // 50 ชิ้น × (2 + 0.5) = 125 นาที (เดิม 100)
+  const turn = mainPlan.find((r) => r.batch === 'B102' && r.step === 'TURNING');
+  assert.equal(turn.qty, 50);
+  assert.equal(turn.timeUsed_min, 125);
+});
+
+// ⚠️ เคสที่คุ้มที่สุดของชุดนี้: แถว day-unit อ่าน cycle_time เป็น "จำนวนวัน" ไม่ใช่นาที/ชิ้น
+// ถ้ามีใครย้ายการบวกไปไว้ที่ configProcessor เทสต์นี้จะจับได้ทันที
+test('handling time: แถว day-unit ไม่เอา handling มาคิด วันจบต้องเท่าเดิมเป๊ะ', () => {
+  const heatRouting = [{ Model: 'M3', FlowIndex: 1, StepIndex: 0, StepName: 'HEAT-TREATMENT' }];
+  const heatMachines = (hd) => [
+    { Model: 'M3', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1', HandlingTime: hd },
+  ];
+  const planOf = (hd) => {
+    const routing = processRouting(heatRouting);
+    const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(heatMachines(hd));
+    const engine = new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+    const [orders] = new OrderManager(false).processOrders([
+      { Batch: 'B103', Model: 'M3', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+    ]);
+    return engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00')).mainPlan;
+  };
+  const withHandling = planOf(5);
+  // กันเทสต์กลวง — ต้องมีแถว outsource ที่มีวันจริงออกมาก่อน ถึงจะเทียบมีความหมาย
+  assert.equal(withHandling.length, 1);
+  assert.equal(withHandling[0].isOutsource, true);
+  assert.match(withHandling[0].date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(withHandling, planOf(0));
+});

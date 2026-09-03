@@ -39,7 +39,8 @@ const num = (v) => (v === null || v === undefined || v === '' ? 0 : Number(v));
 
 // buildEditGroups(tree) → { groups, orphanGroup }
 //   groups = [{ key, flowIndex, flowPos, stepIndex, stepPos, stepId, stepName, setupGroup,
-//               machines: [{ id, altIndex, altPos, machine, cycleTime, setupTime, jigId, isActive }] }]
+//               machines: [{ id, altIndex, altPos, machine, cycleTime, handlingTime, setupTime,
+//                            jigId, isActive }] }]
 //
 // ⚠️ orphanMachines ของ buildRoutingTree อยู่คนละ array ไม่ได้ซ้อนใต้ step — ต้องต่อสายให้ด้วย
 // ไม่งั้นแถวที่ engine ยังอ่านอยู่จริงจะแก้ไม่ได้จากตารางนี้ (บั๊กเดียวกับที่ JigAssignDialog เคยเจอ)
@@ -65,6 +66,7 @@ export function buildEditGroups(tree) {
           altPos: altPos + 1,
           machine: m.machine,
           cycleTime: num(m.cycleTime),
+          handlingTime: num(m.handlingTime),
           setupTime: num(m.setupTime),
           jigId: m.jigId,
           jigIds: m.jigIds ?? normalizeJigList([m.jigId]),
@@ -87,6 +89,7 @@ export function buildEditGroups(tree) {
         altPos: 1,
         machine: m.machine,
         cycleTime: num(m.cycleTime),
+        handlingTime: num(m.handlingTime),
         setupTime: num(m.setupTime),
         jigId: m.jigId,
         jigIds: m.jigIds ?? normalizeJigList([m.jigId]),
@@ -184,6 +187,11 @@ export function validateEdits(groups, orphanGroup, edits) {
       if (isBadTime(fieldValue(edits, key, 'setup_time', m.setupTime))) {
         put(key, 'setup_time', 'ต้องเป็นตัวเลขไม่ติดลบ');
       }
+      // ตรวจเฉพาะแถวที่แตะช่องนี้จริง — แถวอื่นไม่ได้ส่ง handling_time ไป จึงไม่มีอะไรให้ตรวจ
+      if (isFieldEdited(edits, key, 'handling_time')
+        && isBadTime(fieldValue(edits, key, 'handling_time', m.handlingTime))) {
+        put(key, 'handling_time', 'ต้องเป็นตัวเลขไม่ติดลบ');
+      }
       // jig ว่างไม่ต้องเตือน — buildBulkPayload เติมชื่ออัตโนมัติให้ด้วยสูตรเดียวกับตอนสร้างแถว
     }
   }
@@ -246,6 +254,11 @@ export function buildBulkPayload(model, groups, orphanGroup, edits) {
         row.jig_ids = picked.length
           ? picked
           : [resolveJigId('', model, machineName, stepIndexForJig)];
+      }
+      // ⚠️ กติกาเดียวกับ jig_ids/is_active — handling_time เป็นคอลัมน์ที่เพิ่มด้วย DDL รันมือ
+      // ส่งทุกแถวที่ถูกแก้ = เครื่องที่ยังไม่ได้รัน DDL จะแก้เวลาต่อชิ้นไม่ได้เลย (503 ทั้งใบ)
+      if (isFieldEdited(edits, key, 'handling_time')) {
+        row.handling_time = Number(edits[key].handling_time);
       }
       if (isFieldEdited(edits, key, 'is_active')) {
         row.is_active = !!edits[key].is_active;

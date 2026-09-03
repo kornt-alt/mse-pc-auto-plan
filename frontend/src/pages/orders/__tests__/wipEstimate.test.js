@@ -92,6 +92,40 @@ describe('estimateStep', () => {
     expect(r.cycle_time).toBe(2); // C/T ต่อตัว (per-lot = run_minutes)
   });
 
+  // เวลาต่อชิ้นจริง = cycle + handling — สูตรเดียวกับเครื่องยนต์ (engine.js: ctEff)
+  test('เวลาหยิบจับถูกบวกเข้ากับเวลาต่อชิ้น', () => {
+    const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, handling_time: 0.5, setup_time: 40, is_day_unit: false };
+    const r = estimateStep(step, baseOpts);
+    expect(r.run_minutes).toBe(1250); // 500 × (2 + 0.5) ไม่ใช่ 1000
+    expect(r.total_minutes).toBe(1290);
+    expect(r.cycle_time).toBe(2);     // โชว์แยกกัน
+    expect(r.handling_time).toBe(0.5);
+  });
+
+  test('ไม่มี handling_time (คอลัมน์ยังไม่มีใน DB) → เท่าเดิมทุกอย่าง', () => {
+    const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, setup_time: 40, is_day_unit: false };
+    expect(estimateStep(step, baseOpts).run_minutes).toBe(1000);
+    expect(estimateStep({ ...step, handling_time: 0 }, baseOpts).run_minutes).toBe(1000);
+  });
+
+  // ⚠️ setup ถูกตัดเป็น 0 ตอน WIP แต่การหยิบจับยังเสียเวลาต่อชิ้นอยู่ ห้ามตัดตาม
+  test('WIP: setup = 0 แต่เวลาหยิบจับยังคิดอยู่', () => {
+    const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, handling_time: 0.5, setup_time: 40, is_day_unit: false };
+    const r = estimateStep(step, { ...baseOpts, isWipStart: true });
+    expect(r.setup_minutes).toBe(0);
+    expect(r.run_minutes).toBe(1250);
+  });
+
+  // ⚠️ day-unit อ่าน cycle_time เป็น "จำนวนวัน" การบวก handling จะกลายเป็นบวกวัน — ห้ามเด็ดขาด
+  test('day-unit: ไม่เอาเวลาหยิบจับมาคิด วันจบเท่าเดิมเป๊ะ', () => {
+    const base = { step_index: 3, step_name: 'HEAT-TREATMENT', machine: 'HEAT', cycle_time: 3, setup_time: 0, is_day_unit: true };
+    const opts = { ...baseOpts, fromDate: '2026-08-03' };
+    const withH = estimateStep({ ...base, handling_time: 5 }, opts);
+    expect(withH).toEqual(estimateStep(base, opts));
+    expect(withH.finish_date).toBe('2026-08-06');
+    expect(withH.handling_time).toBeNull();
+  });
+
   test('setup = 0 ที่ step เริ่ม WIP', () => {
     const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, setup_time: 40, is_day_unit: false };
     const r = estimateStep(step, { ...baseOpts, isWipStart: true });

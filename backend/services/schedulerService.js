@@ -24,9 +24,12 @@ async function loadInputs(isReplan) {
   // is_active อ่านแบบ defensive เหมือน orders.material_arrived — คอลัมน์เพิ่มด้วย DDL รันมือ
   // ไม่มีคอลัมน์ = ถือว่าเปิดใช้งานทุกแถว = พฤติกรรมเดิมทุกประการ
   const hasActiveCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
+  // handling_time (เวลาหยิบจับ นาที/ชิ้น) — คอลัมน์ DDL รันมือเช่นกัน ไม่มี = 0 = พฤติกรรมเดิม
+  const hasHandlingCol =
+    (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
   const machineRows = await query(
     `SELECT id, model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
-            ${hasActiveCol ? ', is_active' : ''}
+            ${hasActiveCol ? ', is_active' : ''}${hasHandlingCol ? ', handling_time' : ''}
      FROM machine_config ORDER BY id`,
   );
 
@@ -185,7 +188,7 @@ async function run(isReplan = false, options = {}) {
     Model: m.model, FlowIndex: m.flow_index, StepIndex: m.step_index,
     AlternativeIndex: m.alternative_index, Machine: m.machine,
     CycleTime: m.cycle_time, SetupTime: m.setup_time, JigID: m.jig_id,
-    ExtraJigs: m.extra_jigs ?? [],
+    HandlingTime: m.handling_time, ExtraJigs: m.extra_jigs ?? [],
   }));
   const routing = processRouting(flatRouting);
   const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(flatMachine);

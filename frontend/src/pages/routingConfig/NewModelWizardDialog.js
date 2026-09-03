@@ -13,6 +13,7 @@ const emptyMachine = () => ({
   alternative_index: 0,
   machine: '',
   cycle_time: 1,
+  handling_time: 0, // เวลาหยิบจับ — 0 = ไม่มี = พฤติกรรมเดิม (ต่างจาก cycle/setup ที่เริ่มที่ 1)
   setup_time: 1,
   jig_id: '1', // default ตาม wizard เดิม (dart L2617/L2731) — ห้ามเป็น '' เพราะ engine จะมองเป็น jig '-' ร่วมกัน
 });
@@ -112,6 +113,7 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
             alternative_index: m.alternative_index ?? 0,
             machine: m.machine ?? '',
             cycle_time: m.cycle_time ?? 1,
+            handling_time: m.handling_time ?? 0,
             setup_time: m.setup_time ?? 1,
             jig_id: m.jig_id ?? '1', // ตาม wizard เดิม L2830 (row ที่ไม่มี jig → '1')
           }))
@@ -149,6 +151,7 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
             alternative_index: toInt(m.alternative_index),
             machine: m.machine,
             cycle_time: toFloat(m.cycle_time),
+            handling_time: toFloat(m.handling_time),
             setup_time: toFloat(m.setup_time),
             // กัน jig ว่างหลุดลง DB (ว่าง → engine มองเป็น '-' ร่วมกันทุกงาน → setup เพี้ยน)
             jig_id: String(m.jig_id ?? '').trim() || '1',
@@ -361,8 +364,9 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                     <th style={{ width: 40 }}>S</th>
                     <th style={{ width: 40 }}>Alt</th>
                     <th>Machine</th>
-                    <th style={{ width: 55 }}>Cyc</th>
-                    <th style={{ width: 55 }}>Set</th>
+                    <th style={{ width: 55 }} title="เวลาต่อชิ้น (นาที)">Cyc</th>
+                    <th style={{ width: 55 }} title="เวลาหยิบจับ (นาที/ชิ้น)">Hnd</th>
+                    <th style={{ width: 55 }} title="เวลาตั้งเครื่อง (นาที)">Set</th>
                     <th style={{ width: 45 }}>Jig</th>
                     <th style={{ width: 30 }}></th>
                   </tr>
@@ -407,6 +411,15 @@ const NewModelWizardDialog = ({ show, initialModelName, machines, onHide, onSucc
                           type="number"
                           value={m.cycle_time}
                           onChange={(e) => updateMachine(i, 'cycle_time', e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <Form.Control
+                          size="sm"
+                          type="number"
+                          value={m.handling_time}
+                          onChange={(e) => updateMachine(i, 'handling_time', e.target.value)}
+                          aria-label="เวลาหยิบจับ (นาที/ชิ้น)"
                         />
                       </td>
                       <td>

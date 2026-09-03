@@ -94,6 +94,9 @@ export function walkCalendar(calendar, machine, fromDate, minutesNeeded, minFrag
 export function estimateStep(step, opts) {
   const { qty, calendar, minFragmentTime, logisticWeekdays, horizon, isWipStart, fromDate, prevIsDayUnit } = opts;
   const cycle = num(step.cycle_time);
+  // เวลาหยิบจับ (นาที/ชิ้น) — เครื่องยนต์คิดเวลาต่อชิ้นจริงเป็น cycle + handling (engine.js: ctEff)
+  // ไม่มีคอลัมน์ในฐานข้อมูล = 0 = ผลลัพธ์เท่าเดิม
+  const handling = num(step.handling_time) || 0;
   const setup = num(step.setup_time) || 0;
   const machine = step.machine || null;
   const start0 = prevIsDayUnit ? addDays(fromDate, 1) : fromDate;
@@ -115,6 +118,8 @@ export function estimateStep(step, opts) {
       step_index: step.step_index, step_name: step.step_name, machine,
       is_day_unit: true, lead_days: leadDays, wait_days: waitDays,
       cycle_time: null, // day-unit: cycle = lead-time วัน ไม่ใช่ นาที/ตัว → ไม่มี C/T ต่อตัว
+      // ⚠️ day-unit ไม่คิดเวลาหยิบจับ — กติกาเดียวกับเครื่องยนต์ (สาขา outsource อ่าน ct ดิบ)
+      handling_time: null,
       run_minutes: 0, setup_minutes: 0, total_minutes: 0,
       start_date: start0, finish_date: finish,
       working_days: leadDays + waitDays, downtime_days: 0,
@@ -125,13 +130,15 @@ export function estimateStep(step, opts) {
   // ---- step ปกติ ----
   const noTiming = cycle == null || cycle === 0;
   const setupMin = isWipStart ? 0 : setup; // setup=0 ที่ step เริ่ม WIP
-  const runMin = noTiming ? 0 : Math.max(0, (Number(qty) || 0) * cycle);
+  // ⚠️ handling ไม่ถูกตัดตอนเป็น WIP (ต่างจาก setup) — หยิบจับยังเสียเวลาต่อชิ้นอยู่
+  const runMin = noTiming ? 0 : Math.max(0, (Number(qty) || 0) * (cycle + handling));
   const totalMin = setupMin + runMin;
   const walk = walkCalendar(calendar, machine, start0, totalMin, minFragmentTime, horizon);
   return {
     step_index: step.step_index, step_name: step.step_name, machine,
     is_day_unit: false, lead_days: 0, wait_days: 0,
-    cycle_time: noTiming ? null : cycle, // นาที/ตัว (per-lot = run_minutes)
+    cycle_time: noTiming ? null : cycle, // นาที/ตัว (per-lot = run_minutes ซึ่งรวม handling แล้ว)
+    handling_time: noTiming ? null : handling,
     run_minutes: runMin, setup_minutes: setupMin, total_minutes: totalMin,
     start_date: walk.startDate, finish_date: walk.finishDate,
     working_days: walk.workingDays, downtime_days: walk.downtimeDays,

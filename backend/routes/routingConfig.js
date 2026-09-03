@@ -26,6 +26,18 @@ const router = express.Router();
 const hasExtraJigTable = async () =>
   (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
 
+// ---- คอลัมน์ machine_config.handling_time (เวลาหยิบจับ นาที/ชิ้น) ----
+// เพิ่มด้วย DDL รันมือเช่นกัน — ไม่มีคอลัมน์ = ตัดออกจาก INSERT/UPDATE ไม่ใช่พัง
+// (ค่า DEFAULT 0 ของคอลัมน์ทำให้แถวที่ไม่ได้ส่งค่ามาได้พฤติกรรมเดิมอยู่แล้ว)
+const hasHandlingCol = async () =>
+  (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
+
+// เวลาหยิบจับที่รับมาจาก body — ไม่ส่ง/ส่งค่าใช้ไม่ได้ → 0 (เท่าค่า DEFAULT ของคอลัมน์)
+const handlingOr0 = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
 // จิ๊กเสริมของแถวใน model หนึ่ง → Map<machine_config_id, jig[]>
 const loadExtraJigs = async (model) => {
   if (!(await hasExtraJigTable())) return new Map();
@@ -135,6 +147,7 @@ router.post('/routing_machine_config/bulk_create', verifyToken, writeRoles, asyn
       model: new_model,
     });
     if (dup.length > 0) return res.status(400).json({ message: 'Model name already exists!' });
+    const withHandling = await hasHandlingCol();
 
     await transaction(async (t) => {
       // 1. routing
@@ -159,11 +172,15 @@ router.post('/routing_machine_config/bulk_create', verifyToken, writeRoles, asyn
           m.cycle_time,
           m.setup_time,
           m.jig_id,
+          ...(withHandling ? [handlingOr0(m.handling_time)] : []),
         ]);
         await bulkInsert(
           t,
           'machine_config',
-          ['model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id'],
+          [
+            'model', 'flow_index', 'step_index', 'alternative_index', 'machine', 'cycle_time', 'setup_time', 'jig_id',
+            ...(withHandling ? ['handling_time'] : []),
+          ],
           rows
         );
       }
@@ -220,6 +237,16 @@ router.put('/routing_machine_config/bulk_edit', verifyToken, writeRoles, async (
     // คอลัมน์เพิ่มด้วย DDL รันมือ — ไม่มีก็บอกไปตรง ๆ ดีกว่าเขียนทับเงียบ ๆ แล้วสวิตช์เด้งกลับ
     const hasActiveCol =
       (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
+    // เวลาหยิบจับก็คอลัมน์ DDL รันมือ กติกาเดียวกัน — ส่งมาแต่ไม่มีคอลัมน์ = บอกไปตรง ๆ
+    const wantsHandling = machines.some((m) => m.handling_time !== undefined);
+    const withHandlingCol = await hasHandlingCol();
+    if (wantsHandling && !withHandlingCol) {
+      return res.status(503).json({
+        message:
+          'ยังไม่ได้เพิ่มคอลัมน์ machine_config.handling_time ในฐานข้อมูล (คำสั่ง DDL อยู่ใน CHANGELOG.md) — '
+          + 'การแก้ช่อง "เวลาหยิบจับ" จึงยังบันทึกไม่ได้ ช่องอื่นแก้ได้ตามปกติ',
+      });
+    }
     if (wantsActive && !hasActiveCol) {
       return res.status(503).json({
         message:
@@ -293,6 +320,12 @@ router.put('/routing_machine_config/bulk_edit', verifyToken, writeRoles, async (
           sets += ', is_active = @is_active';
           params.is_active = m.is_active;
         }
+        // ⚠️ ไม่แตะเวลาหยิบจับถ้าไม่ได้ส่งมา — เหตุผลเดียวกับจิ๊ก: แถวที่คนไม่ได้มาแก้ช่องนี้
+        // ต้องคงค่าเดิม ไม่ใช่ถูกทับด้วย 0 จากหน้าจอที่ยังไม่มีคอลัมน์
+        if (m.handling_time !== undefined) {
+          sets += ', handling_time = @handling_time';
+          params.handling_time = m.handling_time;
+        }
         await t.query(`UPDATE machine_config SET ${sets} WHERE id = @id AND model = @model`, params);
         // จิ๊กเสริมเขียนใหม่ทั้งชุดของแถวนั้น (ตัวแรกไปอยู่ jig_id แล้ว)
         if (m.jig_ids !== undefined && withExtraJigs) {
@@ -318,6 +351,7 @@ router.post('/routing_config/insert_step', verifyToken, writeRoles, async (req, 
   try {
     const { model, flow_index, step_index, step_name, setup_group, machine, cycle_time, setup_time, jig_id } =
       req.body;
+    const withHandling = await hasHandlingCol();
     await transaction(async (t) => {
       const shift = { model, flow_index, step_index };
       await t.query(
@@ -336,9 +370,12 @@ router.post('/routing_config/insert_step', verifyToken, writeRoles, async (req, 
         { model, flow_index, step_index, step_name, setup_group }
       );
       await t.query(
-        `INSERT INTO machine_config (model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id)
-         VALUES (@model, @flow_index, @step_index, 0, @machine, @cycle_time, @setup_time, @jig_id)`,
-        { model, flow_index, step_index, machine, cycle_time, setup_time, jig_id }
+        `INSERT INTO machine_config (model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id${withHandling ? ', handling_time' : ''})
+         VALUES (@model, @flow_index, @step_index, 0, @machine, @cycle_time, @setup_time, @jig_id${withHandling ? ', @handling_time' : ''})`,
+        {
+          model, flow_index, step_index, machine, cycle_time, setup_time, jig_id,
+          ...(withHandling ? { handling_time: handlingOr0(req.body.handling_time) } : {}),
+        }
       );
     });
     res.json({ message: 'Step inserted successfully' });
@@ -564,10 +601,11 @@ router.delete('/routing_config/:item_id', verifyToken, writeRoles, async (req, r
 router.put('/machine_config/:item_id', verifyToken, writeRoles, async (req, res) => {
   try {
     const { flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id } = req.body;
+    const withHandling = await hasHandlingCol();
     const count = await execute(
       `UPDATE machine_config
        SET flow_index = @flow_index, step_index = @step_index, alternative_index = @alternative_index,
-           machine = @machine, cycle_time = @cycle_time, setup_time = @setup_time, jig_id = @jig_id
+           machine = @machine, cycle_time = @cycle_time, setup_time = @setup_time, jig_id = @jig_id${withHandling ? ', handling_time = @handling_time' : ''}
        WHERE id = @id`,
       {
         flow_index,
@@ -577,6 +615,7 @@ router.put('/machine_config/:item_id', verifyToken, writeRoles, async (req, res)
         cycle_time,
         setup_time,
         jig_id,
+        ...(withHandling ? { handling_time: handlingOr0(req.body.handling_time) } : {}),
         id: parseInt(req.params.item_id, 10),
       }
     );
@@ -647,6 +686,7 @@ router.put('/machine_config/:item_id/active', verifyToken, writeRoles, async (re
 router.post('/machine_config/insert_alt', verifyToken, writeRoles, async (req, res) => {
   try {
     const { model, flow_index, step_index, machine, cycle_time, setup_time, jig_id } = req.body;
+    const withHandling = await hasHandlingCol();
     const maxRows = await query(
       `SELECT MAX(alternative_index) AS max_alt FROM machine_config
        WHERE model = @model AND flow_index = @flow_index AND step_index = @step_index`,
@@ -655,9 +695,12 @@ router.post('/machine_config/insert_alt', verifyToken, writeRoles, async (req, r
     const maxAlt = maxRows[0]?.max_alt;
     const nextAlt = maxAlt === null || maxAlt === undefined ? 0 : maxAlt + 1;
     await execute(
-      `INSERT INTO machine_config (model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id)
-       VALUES (@model, @flow_index, @step_index, @alt, @machine, @cycle_time, @setup_time, @jig_id)`,
-      { model, flow_index, step_index, alt: nextAlt, machine, cycle_time, setup_time, jig_id }
+      `INSERT INTO machine_config (model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id${withHandling ? ', handling_time' : ''})
+       VALUES (@model, @flow_index, @step_index, @alt, @machine, @cycle_time, @setup_time, @jig_id${withHandling ? ', @handling_time' : ''})`,
+      {
+        model, flow_index, step_index, alt: nextAlt, machine, cycle_time, setup_time, jig_id,
+        ...(withHandling ? { handling_time: handlingOr0(req.body.handling_time) } : {}),
+      }
     );
     res.json({ message: 'Alternative machine inserted successfully', new_alt_index: nextAlt });
   } catch (err) {

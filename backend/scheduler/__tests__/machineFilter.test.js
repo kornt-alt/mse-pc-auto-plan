@@ -13,7 +13,7 @@ const { isActiveRow, filterActiveMachines } = require('../machineFilter');
 const row = (alt, machine, cycle, extra = {}) => ({
   model: 'M1', flow_index: 1, step_index: 0,
   alternative_index: alt, machine, cycle_time: cycle, setup_time: alt * 10,
-  jig_id: `JIG-${machine}`, ...extra,
+  handling_time: alt, jig_id: `JIG-${machine}`, ...extra,
 });
 
 // ---- isActiveRow ----
@@ -57,10 +57,11 @@ test('⚠️ ปิด alt กลาง (3 เครื่อง ปิดตั
     out.map((r) => [r.alternative_index, r.machine, r.cycle_time]),
     [[0, 'MC-A', 12], [1, 'MC-C', 35]],
   );
-  // setup_time / jig_id ต้องติดไปกับเครื่องเดิมด้วย ไม่ใช่แค่ cycle_time
+  // setup_time / jig_id / handling_time ต้องติดไปกับเครื่องเดิมด้วย ไม่ใช่แค่ cycle_time
   const c = out.find((r) => r.machine === 'MC-C');
   assert.equal(c.setup_time, 20); // ค่าเดิมของ MC-C (alt เดิม = 2)
   assert.equal(c.jig_id, 'JIG-MC-C');
+  assert.equal(c.handling_time, 2); // ค่าเดิมของ MC-C
 });
 
 test('ปิดตัวแรก → ตัวที่เหลือเลื่อนขึ้นเป็น 0,1 โดยคู่ machine↔cycle ยังตรงกัน', () => {

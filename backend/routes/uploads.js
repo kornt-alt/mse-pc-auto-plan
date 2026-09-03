@@ -18,6 +18,7 @@ const timestamps = require('../state/timestamps');
 const { parseUpload, uploadHeaders, getValueStrict } = require('../utils/csv');
 const { dedupeExact, rowKey } = require('../utils/dedupe');
 const { parseJigCell, hasExtras } = require('../utils/jigList');
+const { machineColumns, extrasIndexOf, machineRow } = require('../utils/machineImportRow');
 const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
 const { MAX_FILE_SIZE } = require('../utils/attachments');
@@ -391,10 +392,12 @@ const clearExtraJigs = async (t, { mode, models }) => {
 };
 
 // ids เรียงตามลำดับที่แทรก ตรงกับ rows ทีละตัว (ดูหมายเหตุที่ insertedIds)
-const writeExtraJigs = async (t, ids, rows) => {
+// ⚠️ ตำแหน่งของจิ๊กเสริมในแถวไม่คงที่ — คอลัมน์ตัวเลือก (comments / handling_time) มีหรือไม่มี
+// ก็ได้ จึงต้องรับ index มาจากผู้เรียกที่เป็นคนประกอบ columns เอง ห้าม hardcode
+const writeExtraJigsAt = (extrasIdx) => async (t, ids, rows) => {
   const pairs = [];
   ids.forEach((id, i) => {
-    for (const jig of rows[i]?.[9] ?? []) pairs.push([id, jig]);
+    for (const jig of rows[i]?.[extrasIdx] ?? []) pairs.push([id, jig]);
   });
   if (pairs.length > 0) {
     await bulkInsert(t, 'machine_config_jig', ['machine_config_id', 'jig_id'], pairs);
@@ -405,31 +408,43 @@ const writeExtraJigs = async (t, ids, rows) => {
 router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
+
+    // ⚠️ ต้องรู้ก่อนว่ามีคอลัมน์ตัวเลือกตัวไหนบ้าง **ก่อน** ประกอบแถว เพราะแถวเป็น array ตาม
+    // ตำแหน่ง และ bulkInsert อ่านแค่ columns.length ตัวแรก — พอมีคอลัมน์ตัวเลือกสองตัว
+    // (comments, handling_time) การ hardcode ตำแหน่งจะเพี้ยนทันทีเมื่อมีตัวหนึ่งแต่ไม่มีอีกตัว
+    // ทั้งคู่เป็นคอลัมน์ที่เพิ่มด้วย DDL รันมือ — ไม่มีก็แค่ไม่เขียนช่องนั้น ไฟล์ยัง import ได้ปกติ
+    // (ต่างจากจิ๊กเสริมข้างล่างที่ต้องปฏิเสธ เพราะข้อมูลจะหายไปแบบเงียบ ๆ ถ้าเขียนครึ่งเดียว)
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+    const hasHandling =
+      (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
+    // ลำดับคอลัมน์กับตำแหน่งจิ๊กเสริมอยู่ที่ utils/machineImportRow.js (pure, มีเทสครบ 4 คู่)
+    const flags = { hasComments, hasHandling };
+    const columns = machineColumns(flags);
+    const extrasIdx = extrasIndexOf(flags);
+
     const parsed = parseUpload(req.file)
       .filter((r) => (r.Model || '').trim() !== '')
       .map((r) => {
         // ช่อง JigID ใส่หลายตัวคั่นจุลภาคได้ — ตัวแรกลง jig_id ที่เหลือลง machine_config_jig
         const { primary, extras } = parseJigCell(r.JigID);
-        return [
-          (r.Model || '').trim(),
-          Math.trunc(floatOr0(r.FlowIndex)),
-          Math.trunc(floatOr0(r.StepIndex)),
-          Math.trunc(floatOr0(r.AlternativeIndex)),
-          (r.Machine || '').trim(),
-          floatOr0(r.CycleTime),
-          floatOr0(r.SetupTime),
-          primary,
-          // ⚠️ ตำแหน่งที่ 9 (index 8) = comments — เขียนจริงเฉพาะเมื่อคอลัมน์มีอยู่ (ดู hasComments
-          // ข้างล่าง) ไม่มีคอลัมน์ = columns เหลือ 8 ตัว bulkInsert จึงข้ามช่องนี้ไปเอง
-          (r.Comments || '').trim(),
-          // ⚠️ ตำแหน่งที่ 10 (index 9) เกินจำนวน columns เสมอ — bulkInsert อ่านแค่ columns.length
-          // แรก จึงไม่ถูกเขียน แต่ dedupeExact (JSON.stringify ทั้งแถว) ยังนับมันด้วย ซึ่งถูกต้อง:
-          // สองแถวที่ต่างกันแค่จิ๊กเสริมคือคนละแถวจริง ๆ ไม่ควรถูกยุบ
-          extras,
-        ];
+        return machineRow({
+          model: (r.Model || '').trim(),
+          flow_index: Math.trunc(floatOr0(r.FlowIndex)),
+          step_index: Math.trunc(floatOr0(r.StepIndex)),
+          alternative_index: Math.trunc(floatOr0(r.AlternativeIndex)),
+          machine: (r.Machine || '').trim(),
+          cycle_time: floatOr0(r.CycleTime),
+          setup_time: floatOr0(r.SetupTime),
+          jig_id: primary,
+          comments: (r.Comments || '').trim(),
+          // เวลาหยิบจับ (นาที/ชิ้น) — ไฟล์เก่าที่ไม่มีคอลัมน์นี้ได้ 0 = พฤติกรรมเดิม
+          handling_time: floatOr0(r.HandlingTime),
+          extra_jigs: extras,
+        }, flags);
       });
 
-    const fileHasExtras = hasExtras(parsed.map((r) => r[9]));
+    const fileHasExtras = hasExtras(parsed.map((r) => r[extrasIdx]));
     const hasJigTable =
       (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
     // ไฟล์ใส่หลายจิ๊กมาแต่ยังไม่ได้สร้างตาราง = บอกไปตรง ๆ ดีกว่าเขียนครึ่งเดียวเงียบ ๆ
@@ -439,22 +454,13 @@ router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (re
       });
     }
 
-    // comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ — ไม่มีก็แค่ไม่เขียนช่องนั้น ไฟล์ยัง import ได้ปกติ
-    // (ต่างจากจิ๊กเสริมข้างบนที่ต้องปฏิเสธ เพราะข้อมูลจะหายไปแบบเงียบ ๆ ถ้าเขียนครึ่งเดียว)
-    const hasComments =
-      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
-
     await writeConfigTable(req, res, {
       table: 'machine_config',
-      columns: [
-        'model', 'flow_index', 'step_index', 'alternative_index',
-        'machine', 'cycle_time', 'setup_time', 'jig_id',
-        ...(hasComments ? ['comments'] : []),
-      ],
+      columns,
       parsed,
       label: 'Machine Config',
       beforeDelete: hasJigTable ? clearExtraJigs : undefined,
-      afterInsert: hasJigTable ? writeExtraJigs : undefined,
+      afterInsert: hasJigTable ? writeExtraJigsAt(extrasIdx) : undefined,
     });
   } catch (err) {
     sendError(req, res, err);

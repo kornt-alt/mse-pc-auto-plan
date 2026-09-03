@@ -72,6 +72,9 @@ export function buildRoutingTree(routing, machine) {
       altIndex: toInt(m.alternative_index),
       machine: m.machine ?? '',
       cycleTime: m.cycle_time ?? 0,
+      // เวลาหยิบจับ (นาที/ชิ้น) — คอลัมน์เพิ่มด้วย DDL รันมือ ไม่มีคอลัมน์ = 0 = พฤติกรรมเดิม
+      // เครื่องยนต์คิดเวลาต่อชิ้นจริงเป็น cycle_time + handling_time (ยกเว้นขั้นตอนแบบนับวัน)
+      handlingTime: m.handling_time ?? 0,
       setupTime: m.setup_time ?? 0,
       jigId: m.jig_id ?? '',
       // ชุดจิ๊กทั้งหมดของแถว (หลัก + เสริม) — หนึ่งเครื่องใช้หลายจิ๊กพร้อมกันได้ ความหมาย AND

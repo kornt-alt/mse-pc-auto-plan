@@ -4,10 +4,11 @@ import {
   buildOrdersCsvText, buildOrdersCsvMatrix,
 } from '../hanaOrders';
 
-// แถวจริงจาก Hana API (ยืนยันรูปแล้ว 2026-08-13) — qty มาเป็น number, วันที่ยังไม่เกิดเป็น '00000000'
+// แถวจริงจาก Hana API (ยืนยันรูปแล้ว 2026-08-13) — ตัวเลขมาเป็น number, วันที่ยังไม่เกิดเป็น '00000000'
+// ⚠️ `TotalOrderQuantity: 500` ใส่ตามค่า `QTY_FIELD` ใน `hanaOrders.js` **ยังไม่ได้ยืนยันกับ payload จริง** (แถวที่ยืนยันไว้ปี 2026-08-13 เก็บ qty จาก `GRQtyForOrderItem`) — ถ้าชื่อฟิลด์จริงไม่ตรง qty จะเป็น 0 ทุกใบตอน import โดยที่เทสนี้ยังเขียว
 const SAMPLE = {
   OrderNumber: '5003600792', Plant: 'LB69', OrderType: 'Z101', MRPController: 'M01',
-  CreatedOn: '20260731', GRQtyForOrderItem: 0.000, ProductionSupervisor: '', ProductionVersion: 'MSE',
+  CreatedOn: '20260731', TotalOrderQuantity: 500.000, GRQtyForOrderItem: 0.000, ProductionSupervisor: '', ProductionVersion: 'MSE',
   ChangedBy: 'LBL5525', ChangedAt: '161034', MaterialNumber: 'KT12323-2',
   MaterialDescription: 'ELEMENT/KT12323-2/CW072-20KN', BaseUnitOfMeasure: 'PC',
   BasicStartDate: '20260810', BasicFinishDate: '20260901', ActualStartDate: '00000000',
@@ -22,7 +23,7 @@ describe('mapHanaRow', () => {
       model: 'KT12323-2',
       description: 'ELEMENT CW072-20KN',
       due_date: '2026-09-01',
-      qty: 0,
+      qty: 500,
       plan_mode: 'NEW',
       wip_flow_index: 0,
       wip_start_step_index: 0,
@@ -149,9 +150,9 @@ describe('buildOrderRows', () => {
 
   test('นับ zeroQty / noSlash', () => {
     const { stats } = buildOrderRows([
-      row({ OrderNumber: 'B1', GRQtyForOrderItem: 100 }),
-      row({ OrderNumber: 'B2', GRQtyForOrderItem: 0 }),
-      row({ OrderNumber: 'B3', MaterialDescription: 'NOSLASH', GRQtyForOrderItem: 5 }),
+      row({ OrderNumber: 'B1', TotalOrderQuantity: 100 }),
+      row({ OrderNumber: 'B2', TotalOrderQuantity: 0 }),
+      row({ OrderNumber: 'B3', MaterialDescription: 'NOSLASH', TotalOrderQuantity: 5 }),
     ]);
     expect(stats).toMatchObject({ mapped: 3, zeroQty: 1, noSlash: 1 });
   });

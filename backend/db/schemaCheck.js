@@ -57,6 +57,13 @@ const OPTIONAL_OBJECTS = [
     impact: 'ช่อง Comments ในหน้า Shop Floor / Tracking ว่างเสมอ และ import machines ไม่เก็บคอลัมน์นี้',
   },
   {
+    name: 'machine_config.handling_time',
+    kind: 'column',
+    table: 'machine_config',
+    column: 'handling_time',
+    impact: 'ตั้งเวลาหยิบจับแยกจาก cycle time ไม่ได้ แผนคิดเวลาต่อชิ้นจาก cycle_time อย่างเดียวเหมือนเดิม',
+  },
+  {
     name: 'orders.material_arrived',
     kind: 'column',
     table: 'orders',

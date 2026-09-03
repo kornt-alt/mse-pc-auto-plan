@@ -215,7 +215,7 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
                 </Badge>
               )}
               {stats.zeroQty > 0 && (
-                <Badge bg="warning" text="dark" title="qty มาจาก GRQtyForOrderItem (ยอดรับเข้าแล้ว) — งานที่ยังไม่ผลิตจะเป็น 0">
+                <Badge bg="warning" text="dark" title="qty มาจาก TotalOrderQuantity (ยอดสั่งผลิต) — แถวที่เป็น 0 คือ SAP ไม่มียอดสั่ง ควรเช็คก่อนนำเข้า">
                   ⚠ qty = 0 · {stats.zeroQty.toLocaleString()} ใบ
                 </Badge>
               )}

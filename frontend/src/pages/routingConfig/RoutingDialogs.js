@@ -242,6 +242,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
         alternative_index: row.alternative_index ?? 0,
         machine: row.machine ?? '',
         cycle_time: row.cycle_time ?? 0,
+        handling_time: row.handling_time ?? 0,
         setup_time: row.setup_time ?? 0,
         jig_id: row.jig_id ?? '',
       });
@@ -259,6 +260,7 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
           alternative_index: toInt(form.alternative_index),
           machine: form.machine,
           cycle_time: toFloat(form.cycle_time),
+          handling_time: toFloat(form.handling_time),
           setup_time: toFloat(form.setup_time),
           jig_id: form.jig_id,
         }),
@@ -289,23 +291,39 @@ export const EditMachineDialog = ({ show, row, machines, jigs, onHide, onSaved, 
               onChange={(v) => setForm((f) => ({ ...f, machine: v }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
             <Form.Label className="small">เวลาต่อชิ้น (นาที)</Form.Label>
             <Form.Control
               type="number"
+              min="0"
+              step="any"
               value={form.cycle_time}
               onChange={(e) => setForm((f) => ({ ...f, cycle_time: e.target.value }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
+            <Form.Label className="small" title="ระบบบวกเข้ากับเวลาต่อชิ้นตอนคำนวณแผน">
+              เวลาหยิบจับ (นาที/ชิ้น)
+            </Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              step="any"
+              value={form.handling_time}
+              onChange={(e) => setForm((f) => ({ ...f, handling_time: e.target.value }))}
+            />
+          </Col>
+          <Col xs={6} md={3}>
             <Form.Label className="small">เวลาตั้งเครื่อง (นาที)</Form.Label>
             <Form.Control
               type="number"
+              min="0"
+              step="any"
               value={form.setup_time}
               onChange={(e) => setForm((f) => ({ ...f, setup_time: e.target.value }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
             <Form.Label className="small">รหัสจิ๊ก</Form.Label>
             <JigSelect
               value={form.jig_id}
@@ -364,6 +382,8 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
     setup_group: '',
     machine: '',
     cycle_time: 1,
+    // เวลาหยิบจับเริ่มที่ 0 ไม่ใช่ 1 — ค่าเริ่มต้น 0 คือ "ไม่มีเวลาหยิบจับ" = พฤติกรรมเดิมของระบบ
+    handling_time: 0,
     setup_time: 1,
     jig_id: '',
   });
@@ -381,6 +401,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
         setup_group: defaults?.setupGroup ?? '',
         machine: '',
         cycle_time: 1,
+        handling_time: 0,
         setup_time: 1,
         jig_id: '',
       });
@@ -400,6 +421,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
           setup_group: form.setup_group,
           machine: form.machine,
           cycle_time: toFloat(form.cycle_time),
+          handling_time: toFloat(form.handling_time),
           setup_time: toFloat(form.setup_time),
           jig_id: resolveJigId(form.jig_id, model, form.machine, form.step_index),
         }),
@@ -464,23 +486,39 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
               onChange={(v) => setForm((f) => ({ ...f, machine: v }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
             <Form.Label className="small">เวลาต่อชิ้น (นาที)</Form.Label>
             <Form.Control
               type="number"
+              min="0"
+              step="any"
               value={form.cycle_time}
               onChange={(e) => setForm((f) => ({ ...f, cycle_time: e.target.value }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
+            <Form.Label className="small" title="ระบบบวกเข้ากับเวลาต่อชิ้นตอนคำนวณแผน">
+              เวลาหยิบจับ (นาที/ชิ้น)
+            </Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              step="any"
+              value={form.handling_time}
+              onChange={(e) => setForm((f) => ({ ...f, handling_time: e.target.value }))}
+            />
+          </Col>
+          <Col xs={6} md={3}>
             <Form.Label className="small">เวลาตั้งเครื่อง (นาที)</Form.Label>
             <Form.Control
               type="number"
+              min="0"
+              step="any"
               value={form.setup_time}
               onChange={(e) => setForm((f) => ({ ...f, setup_time: e.target.value }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
             <Form.Label className="small">รหัสจิ๊ก</Form.Label>
             <JigSelect
               value={form.jig_id}
@@ -506,7 +544,7 @@ export const InsertStepDialog = ({ show, model, defaults, machines, jigs, onHide
 // primary = เครื่องหลัก (alt ต่ำสุด) ของ step นั้น — ใช้ prefill cycle/setup
 // เพราะเครื่องสำรองของ step เดียวกันเกือบทุกครั้งใช้เวลาใกล้เคียงตัวหลัก (ของเดิมเริ่มที่ 1 เสมอ)
 export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, onHide, onSaved, onError }) => {
-  const [form, setForm] = useState({ machine: '', cycle_time: 1, setup_time: 1, jig_id: '' });
+  const [form, setForm] = useState({ machine: '', cycle_time: 1, handling_time: 0, setup_time: 1, jig_id: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -514,6 +552,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
       setForm({
         machine: '',
         cycle_time: primary?.cycleTime ?? 1,
+        handling_time: primary?.handlingTime ?? 0,
         setup_time: primary?.setupTime ?? 1,
         jig_id: '',
       });
@@ -532,6 +571,7 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
           step_index: step?.stepIndex ?? 0,
           machine: form.machine,
           cycle_time: toFloat(form.cycle_time),
+          handling_time: toFloat(form.handling_time),
           setup_time: toFloat(form.setup_time),
           jig_id: resolveJigId(form.jig_id, model, form.machine, step?.stepIndex),
         }),
@@ -567,23 +607,39 @@ export const InsertAltDialog = ({ show, model, step, primary, machines, jigs, on
               onChange={(v) => setForm((f) => ({ ...f, machine: v }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
             <Form.Label className="small">เวลาต่อชิ้น (นาที)</Form.Label>
             <Form.Control
               type="number"
+              min="0"
+              step="any"
               value={form.cycle_time}
               onChange={(e) => setForm((f) => ({ ...f, cycle_time: e.target.value }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
+            <Form.Label className="small" title="ระบบบวกเข้ากับเวลาต่อชิ้นตอนคำนวณแผน">
+              เวลาหยิบจับ (นาที/ชิ้น)
+            </Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              step="any"
+              value={form.handling_time}
+              onChange={(e) => setForm((f) => ({ ...f, handling_time: e.target.value }))}
+            />
+          </Col>
+          <Col xs={6} md={3}>
             <Form.Label className="small">เวลาตั้งเครื่อง (นาที)</Form.Label>
             <Form.Control
               type="number"
+              min="0"
+              step="any"
               value={form.setup_time}
               onChange={(e) => setForm((f) => ({ ...f, setup_time: e.target.value }))}
             />
           </Col>
-          <Col xs={4}>
+          <Col xs={6} md={3}>
             <Form.Label className="small">รหัสจิ๊ก</Form.Label>
             <JigSelect
               value={form.jig_id}

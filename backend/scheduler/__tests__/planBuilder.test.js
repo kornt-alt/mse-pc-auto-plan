@@ -478,3 +478,34 @@ test('buildPlanChangeSummary: ไม่มีอะไรเลย → ตัว
   assert.equal(s.total, 0);
   assert.equal(s.makespan, null);
 });
+
+
+// ⚠️ สูตรเวลาที่นี่ต้องตรงกับเครื่องยนต์ (engine.js: ctEff = cycle + handling)
+// ต่ำไป = ขั้นที่ capacity เต็มจริงจะถูกรายงานเป็น calendar-short คือบอกเหตุผลผิด
+test('buildUnplannedReport: neededMinutes รวมเวลาหยิบจับด้วย', () => {
+  const withHandling = [
+    { model: 'M1', flow_index: 0, step_index: 0, alternative_index: 0, machine: 'MC-A', cycle_time: 1, handling_time: 0.5, setup_time: 30, jig_id: 'J-001', extra_jigs: [] },
+  ];
+  const [row] = pb.buildUnplannedReport({
+    failedSteps: [upFail()],
+    machineRows: withHandling,
+    remainingCalendar: { 'MC-A': { '2026-09-01': 5000 } },
+    lastCalendarDate: '2026-09-01',
+    dueByBatch: { B1: '2026-08-20' },
+  });
+  // 10 ชิ้น × (1 + 0.5) + setup 30 = 45 นาที (ถ้าลืม handling จะได้ 40)
+  assert.equal(row.steps[0].neededMinutes, 45);
+  assert.equal(row.steps[0].candidates[0].handlingTime, 0.5);
+});
+
+test('buildUnplannedReport: ไม่มีคอลัมน์ handling_time → neededMinutes เท่าสูตรเดิม', () => {
+  const [row] = pb.buildUnplannedReport({
+    failedSteps: [upFail()],
+    machineRows: UP_MACHINES,
+    remainingCalendar: { 'MC-A': { '2026-09-01': 5000 } },
+    lastCalendarDate: '2026-09-01',
+    dueByBatch: { B1: '2026-08-20' },
+  });
+  assert.equal(row.steps[0].neededMinutes, 40);
+  assert.equal(row.steps[0].candidates[0].handlingTime, 0);
+});

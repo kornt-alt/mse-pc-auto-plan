@@ -660,6 +660,7 @@ function buildUnplannedReport({
     return {
       machine: r.machine,
       cycleTime: Number(r.cycle_time) || 0,
+      handlingTime: Number(r.handling_time) || 0,
       setupTime: Number(r.setup_time) || 0,
       jigs,
       blockedJigs: jigs.filter((j) => isBlockedThroughHorizon(jigBlockMap, j, lastCalendarDate)),
@@ -687,7 +688,9 @@ function buildUnplannedReport({
     if (candidates.length === 0) return null;
     let best = null;
     for (const c of candidates) {
-      const need = (Number(qty) || 0) * c.cycleTime + c.setupTime;
+      // ต้องตรงกับสูตรของเครื่องยนต์ (engine.js: ctEff = cycle + handling) ไม่งั้น classify
+      // จะบอกเหตุผลผิด — ขั้นที่ capacity เต็มจริงกลายเป็น calendar-short
+      const need = (Number(qty) || 0) * (c.cycleTime + c.handlingTime) + c.setupTime;
       if (best === null || need < best) best = need;
     }
     return Math.round(best * 10) / 10;

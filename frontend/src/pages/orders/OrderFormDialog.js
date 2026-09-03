@@ -20,11 +20,16 @@ const stepReason = (s) => {
   return `${parts.join(' + ')} = ${Math.round(s.total_minutes)} นาที`;
 };
 // C/T ต่อตัว + ต่อ lot (per-lot = run_minutes); day-unit/ไม่มีเวลา → "—"
+// เวลาหยิบจับโชว์แยกในวงเล็บ เพราะ run_minutes รวมมันไปแล้ว — ไม่งั้นเลขต่อตัว × qty
+// จะไม่เท่ากับเลขต่อ lot แล้วดูเหมือนคำนวณผิด
 const num0 = (n) => Math.round(n).toLocaleString('en-US');
+const round2 = (n) => Math.round(n * 100) / 100;
 const formatCT = (s) => {
   if (s.is_day_unit || s.no_timing || s.cycle_time == null) return '—';
-  const perPiece = Math.round(s.cycle_time * 100) / 100;
-  return `${perPiece} นาที/ตัว · ${num0(s.run_minutes)} นาที/lot`;
+  const perPiece = round2(s.cycle_time);
+  const handling = round2(s.handling_time || 0);
+  const head = handling > 0 ? `${perPiece} + ${handling} นาที/ตัว` : `${perPiece} นาที/ตัว`;
+  return `${head} · ${num0(s.run_minutes)} นาที/lot`;
 };
 
 // Dialog เพิ่ม/แก้ไข Order — โครง 3 โซนตามหน้าจอเดิม (order_management_screen.dart)

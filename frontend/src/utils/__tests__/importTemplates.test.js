@@ -10,6 +10,26 @@ describe('ORDER_CSV_COLUMNS (hanaOrders) ↔ TEMPLATE_SPECS.orders', () => {
   });
 });
 
+// ⚠️ backend/routes/uploads.js อ่านคอลัมน์ machines ด้วย property access ตรง ๆ (r.HandlingTime)
+// ไม่ผ่าน getValueStrict — พิมพ์ตัวพิมพ์ไม่ตรง = import ได้ค่าว่างแบบเงียบ ๆ
+describe('TEMPLATE_SPECS.machines', () => {
+  const names = TEMPLATE_SPECS.machines.columns.map((c) => c.name);
+
+  test('มีคอลัมน์เวลาครบทั้งสามตัว ตัวพิมพ์ตรงกับ backend', () => {
+    expect(names).toEqual(expect.arrayContaining(['CycleTime', 'HandlingTime', 'SetupTime']));
+  });
+
+  test('HandlingTime มีค่า default เป็น 0 (ไฟล์เก่าที่ไม่กรอกต้องได้พฤติกรรมเดิม)', () => {
+    const col = TEMPLATE_SPECS.machines.columns.find((c) => c.name === 'HandlingTime');
+    expect(col.default).toBe('0');
+  });
+
+  test('โครงแถวที่ generate ออกมามีคีย์ครบตาม spec ที่เป็นตัวเลข', () => {
+    const [row] = buildConfigRows({ withAlternatives: true }, 'MDL-1', [{ steps: [{ alts: 1 }] }]);
+    expect(Object.keys(row)).toEqual(expect.arrayContaining(['CycleTime', 'HandlingTime', 'SetupTime']));
+  });
+});
+
 describe('buildCalendarRows', () => {
   test('machine × date, available_time ว่างให้กรอก', () => {
     const rows = buildCalendarRows(['M1', 'M2'], ['2024-06-01', '2024-06-02']);

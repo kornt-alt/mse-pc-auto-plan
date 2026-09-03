@@ -85,6 +85,18 @@ function processUnifiedMachineConfig(flatData) {
     } catch {
       stVal = 0.0;
     }
+
+    // เวลาหยิบจับ (นาที/ชิ้น) — คอลัมน์ machine_config.handling_time ที่เพิ่มด้วย DDL รันมือ
+    // ⚠️ ต้อง **ไม่** บวกเข้า ctVal ตรงนี้: แถว day-unit/outsource ตีความ ct เป็น "จำนวนวัน"
+    // ไม่ใช่นาที/ชิ้น (engine.js:319 / :678) บวกที่นี่ = HEAT-TREATMENT บวกไปอีกหนึ่งวันแบบเงียบ ๆ
+    // และดักที่นี่ก็ไม่ได้ เพราะไม่เห็นชื่อ step — เครื่องยนต์บวกเองที่ลูปเดินงานสองจุด
+    // ไม่มีคอลัมน์ / แปลงไม่ได้ → 0.0 = ผลลัพธ์เท่าเดิมทุกกรณี (parity fixtures จึงไม่ต้อง rebaseline)
+    let hdVal;
+    try {
+      hdVal = pyFloat(getValueStrict(row, 'HandlingTime'));
+    } catch {
+      hdVal = 0.0;
+    }
     // ชุดจิ๊กของแถวนี้ = จิ๊กหลัก (JigID) + จิ๊กเสริม (ExtraJigs จากตาราง machine_config_jig)
     // ความหมายเป็น AND — ต้องว่างครบทุกตัวถึงทำงานวันนั้นได้ (ดู scheduler/jigBlocks.js)
     const rawJig = getValueStrict(row, 'JigID');
@@ -100,6 +112,7 @@ function processUnifiedMachineConfig(flatData) {
       time: stVal,
       jig: extras.length ? jigSetKey(jigs) : (rawJig || '-'),
       jigs,
+      handling: hdVal,
     };
 
     for (const outDict of [fmOut, ctOut, stOut]) {

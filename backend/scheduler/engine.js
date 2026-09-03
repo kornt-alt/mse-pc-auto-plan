@@ -368,13 +368,19 @@ class SchedulerEngine {
         let s = 0;
         let jig = '-';
         let jigs = [];
+        let handling = 0;
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
           jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
+          handling = 'handling' in rawS ? pyFloat(rawS.handling) : 0;
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
+
+        // เวลาต่อชิ้นจริง = cycle + handling (นาที/ชิ้น ทั้งคู่) — handling = 0 คือของเดิมเป๊ะ
+        // บวกที่นี่ ไม่ใช่ที่ configProcessor เพราะสาขา day-unit ข้างบนอ่าน ct ดิบเป็น "จำนวนวัน"
+        const ctEff = ct + handling;
 
         // HYBRID RULE: คาเครื่องอยู่ setup = 0 (L464-465)
         if (isWipStep) s = 0;
@@ -391,10 +397,10 @@ class SchedulerEngine {
           if (av < this.MIN_FRAGMENT_TIME) av = 0;
           if (av > 0) {
             assertDivisibleCt(ct, model, step, machine);
-            const canQty = Math.floor(av / ct);
+            const canQty = Math.floor(av / ctEff);
             const doNow = Math.min(canQty, qtyRem);
             if (doNow > 0) {
-              const timeUsed = doNow * ct;
+              const timeUsed = doNow * ctEff;
               qtyRem -= doNow;
               runDatesFound.push({ date: d, qty: doNow, timeUsed });
             }
@@ -710,13 +716,19 @@ class SchedulerEngine {
         let s = 0;
         let jig = '-';
         let jigs = [];
+        let handling = 0;
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
           jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
+          handling = 'handling' in rawS ? pyFloat(rawS.handling) : 0;
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
+
+        // เวลาต่อชิ้นจริง = cycle + handling — ⚠️ อยู่นอกบล็อก HYBRID RULE 3 ข้างล่างโดยตั้งใจ:
+        // งาน WIP ตัด setup เป็น 0 ได้ แต่การหยิบจับยังเสียเวลาต่อชิ้นอยู่ ห้ามย้ายเข้าไปในนั้น
+        const ctEff = ct + handling;
 
         // HYBRID RULE 3 (L720-745): มี actual / เป็น WIP / uploaded-WIP → setup 0
         const stepClean = String(step).trim().toUpperCase();
@@ -818,10 +830,10 @@ class SchedulerEngine {
 
             if (sDone && av > 0) {
               assertDivisibleCt(ct, model, step, m);
-              const can = Math.floor(av / ct);
+              const can = Math.floor(av / ctEff);
               const doNow = Math.min(can, stepQtyRem - curQty);
               if (doNow > 0) {
-                const timeUsed = doNow * ct;
+                const timeUsed = doNow * ctEff;
                 if (!isSimulation) {
                   runItemsTemp.push({
                     date: d,

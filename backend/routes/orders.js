@@ -382,8 +382,13 @@ router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) =>
       return res.json({ found: false, description, steps: [] });
     }
 
+    // handling_time = คอลัมน์ DDL รันมือ (เวลาหยิบจับ นาที/ชิ้น) — ไม่มีก็ไม่ select
+    // ฝั่งหน้าเว็บ (wipEstimate.js) บวกกับ cycle_time เป็นเวลาต่อชิ้นจริง เหมือนที่เครื่องยนต์ทำ
+    const hasHandlingCol =
+      (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
     const machines = await query(
       `SELECT flow_index, step_index, alternative_index, machine, cycle_time, setup_time
+              ${hasHandlingCol ? ', handling_time' : ''}
        FROM machine_config WHERE model = @model`,
       { model: modelName }
     );
@@ -406,6 +411,8 @@ router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) =>
       const alternatives = own.map((m) => ({
         machine: m.machine,
         cycle_time: num(m.cycle_time),
+        // ไม่มีคอลัมน์ → 0 ไม่ใช่ null: null แปลว่า "ไม่มีข้อมูลเวลา" ซึ่งคนละเรื่องกับ "ไม่มีเวลาหยิบจับ"
+        handling_time: num(m.handling_time) ?? 0,
         setup_time: num(m.setup_time),
       }));
       const primary = alternatives[0] || null;
@@ -416,6 +423,7 @@ router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) =>
         previous_machines: [...new Set(prevMacs)],
         machine: primary ? primary.machine : null,
         cycle_time: primary ? primary.cycle_time : null,
+        handling_time: primary ? primary.handling_time : 0,
         setup_time: primary ? primary.setup_time : null,
         is_day_unit: isDayUnitStep(
           step.step_name,
