@@ -77,12 +77,46 @@ const isExcelFile = (file) => {
   return mime.includes('spreadsheet') || mime === 'application/vnd.ms-excel';
 };
 
+// เซลล์ "วันที่จริง" ของ Excel → เขียนทับเป็นข้อความ ISO ก่อนให้ sheet_to_json อ่าน
+//
+// ⚠️ raw:false คืน **ข้อความที่ Excel แสดงผล** ไม่ใช่ค่าวัน — เซลล์ที่ format เป็น dd/mm/yy จึงออกมา
+// เป็น '31/08/26' แล้ววิ่งเข้า DB ทั้งอย่างนั้น (คอลัมน์วันเป็น NVARCHAR เทียบ lexicographic ทั้งระบบ)
+// XLSX.SSF.parse_date_code คำนวณจาก serial ด้วยเลขจำนวนเต็มล้วน — ไม่มี timezone ไม่มี locale
+// จึงไม่ต้องเดา dd/mm vs mm/dd เลย
+// ⚠️ ห้ามใช้ cellDates:true แทน — มันคืน Date ที่เพี้ยนไป 1 วันตาม timezone ของเครื่อง
+// ⚠️ XLSX.SSF.is_date(undefined) throw — ต้องเช็ค c.z ก่อนเสมอ (จึงต้องอ่านด้วย cellNF:true)
+const pad2Cell = (n) => String(n).padStart(2, '0');
+const isoFromParts = (y, m, d) => `${y}-${pad2Cell(m)}-${pad2Cell(d)}`;
+
+const isoOfDateCell = (XLSX, c) => {
+  if (c.t === 'd' && c.v instanceof Date) {
+    // เซลล์ที่ writer อื่นเขียนมาเป็น Date อยู่แล้ว — อ่านด้วย local getters (driver คืน wall-clock)
+    return isoFromParts(c.v.getFullYear(), c.v.getMonth() + 1, c.v.getDate());
+  }
+  if (c.t === 'n' && typeof c.v === 'number' && c.z && XLSX.SSF.is_date(c.z)) {
+    const p = XLSX.SSF.parse_date_code(c.v);
+    if (p && p.y) return isoFromParts(p.y, p.m, p.d);
+  }
+  return null;
+};
+
 // อ่าน sheet แรกเป็น 2D array (raw:false → ค่าเป็น text กันวันที่กลายเป็น serial number)
 const excelRows = (buffer) => {
   const XLSX = require('xlsx');
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+  // cellNF: เก็บ number format (c.z) ไว้ — จำเป็นสำหรับ is_date
+  const wb = XLSX.read(buffer, { type: 'buffer', cellNF: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return [];
+  for (const addr of Object.keys(ws)) {
+    if (addr.charCodeAt(0) === 33) continue; // ข้าม metadata '!ref', '!margins', ...
+    const c = ws[addr];
+    const iso = isoOfDateCell(XLSX, c);
+    if (iso) {
+      c.t = 's';
+      c.v = iso;
+      c.w = iso;
+    }
+  }
   return XLSX.utils.sheet_to_json(ws, {
     header: 1,
     raw: false,

@@ -21,10 +21,30 @@ const { parseJigCell, hasExtras } = require('../utils/jigList');
 const { machineColumns, extrasIndexOf, machineRow } = require('../utils/machineImportRow');
 const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
+const { normalizeRowDates, invalidDateMessage } = require('../utils/importDates');
 const { MAX_FILE_SIZE } = require('../utils/attachments');
 
 const router = express.Router();
 const writeRoles = requireRole('ADMIN', 'PLANNER');
+
+// คอลัมน์วันที่ของแต่ละไฟล์ import — ค่าดิบจากไฟล์เคยลง DB ตรง ๆ ทำให้ '31/08/26' จาก Excel
+// หลุดเข้าไปพังการเทียบวันแบบ lexicographic ทั้งระบบ (ดู utils/importDates.js)
+// ⚠️ ชื่อคอลัมน์ต้อง **case ตรงเป๊ะ** กับ TEMPLATE_SPECS ฝั่งเว็บ (frontend/src/utils/importTemplates.js)
+// ซึ่งมี flag isDate คู่กับตารางนี้ — แก้ที่นี่ต้องแก้ที่นั่นด้วย
+const DATE_COLUMNS = {
+  orders: ['due_date', 'wip_finish_date', 'release_date'],
+  calendar: ['Date'],
+  actual_result: ['working_date'],
+};
+
+// ตรวจทุกคอลัมน์วันของทั้งไฟล์ก่อนทำอย่างอื่น — ผิดแม้ช่องเดียว = ตีกลับทั้งไฟล์
+// (ผู้ใช้เลือก 2026-09-04: ไม่ import บางส่วน ไม่เก็บช่องที่แปลงไม่ได้เป็น NULL)
+// คืน { values, bad } — values[i] = { column: 'YYYY-MM-DD' | null } ของแถวที่ i
+const checkFileDates = (rows, columns) => {
+  const bad = [];
+  const values = rows.map((r, i) => normalizeRowDates(r, columns, i + 1, bad));
+  return { values, bad };
+};
 // memoryStorage: ไฟล์ทั้งก้อนเข้า RAM ของ process → **ต้องมี limits เสมอ**
 // ไม่มี limit = ไฟล์ยักษ์ (หรือ .xlsx ที่บานตอน parse) ทำ Node OOM แล้วทั้งระบบดับ ไม่ใช่แค่ request นี้พัง
 // ใช้เพดานเดียวกับไฟล์แนบ order (25 MB) — import มา ไม่ตั้งเลขซ้ำ
@@ -169,6 +189,12 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
     const isReplace = mode === 'replace';
     const csvRows = parseUpload(req.file);
 
+    // ด่านวันที่: ตรวจก่อน query อะไรทั้งนั้น ไฟล์ผิดจะได้ไม่เสียเวลาเปล่า
+    const { values: dateValues, bad: badDates } = checkFileDates(csvRows, DATE_COLUMNS.orders);
+    if (badDates.length > 0) {
+      return res.status(400).json({ message: invalidDateMessage(badDates) });
+    }
+
     // replace: ล้างทั้งตารางแล้วใส่ใหม่ → priority เริ่มใหม่จาก 0, ไม่ข้าม batch ที่มีอยู่
     // append: ต่อท้าย → priority ต่อจาก max เดิม, ข้าม batch ที่มีใน DB
     let currentMax = 0;
@@ -198,7 +224,8 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
 
     let skippedExisting = 0;
     const rows = [];
-    for (const r of csvRows) {
+    for (let i = 0; i < csvRows.length; i += 1) {
+      const r = csvRows[i];
       const batch = String(r.batch ?? '').trim();
       if (!batch || batch === 'None') continue;
       if (existingBatches.has(batch)) {
@@ -207,8 +234,8 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
       }
       currentMax += 1;
 
-      const rawDue = String(r.due_date ?? '').trim();
-      const cleanDueDate = rawDue !== '' ? rawDue : null;
+      // normalize แล้วที่ด่านข้างบน — ค่าว่างยังได้ null เท่าเดิม
+      const cleanDueDate = dateValues[i].due_date;
       let cleanQty;
       try {
         cleanQty = floatOr0(r.qty);
@@ -226,10 +253,10 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
         String(getSafe(r, 'plan_mode', 'NEW')),
         intSafe(r, 'wip_flow_index', 0),
         intSafe(r, 'wip_start_step_index', 0),
-        getSafeNull(r, 'wip_finish_date'),
+        dateValues[i].wip_finish_date,
         getSafeNull(r, 'wip_machine'),
         String(getSafe(r, 'planning_mode', 'forward')),
-        getSafeNull(r, 'release_date'),
+        dateValues[i].release_date,
         intSafe(r, 'is_deleted', 0),
         intSafe(r, 'is_new', 1),
         0, // is_missing_routing (ORM เดิมใส่ default ฝั่ง client)
@@ -300,9 +327,19 @@ router.post('/upload/calendar', verifyToken, writeRoles, uploadSingle, async (re
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'replace'); // 'replace' | 'upsert'
-    const parsed = parseUpload(req.file)
-      .filter((r) => (r.Machine || '').trim() !== '' && (r.Date || '').trim() !== '')
-      .map((r) => [(r.Machine || '').trim(), (r.Date || '').trim(), floatOr0(r.AvailableTime)]);
+    const rawRows = parseUpload(req.file);
+    // แถวที่ Machine หรือ Date ว่าง = ข้าม (พฤติกรรมเดิม) — ที่เหลือต้องเป็นวันที่ถูกรูป
+    const badDates = [];
+    const parsed = [];
+    rawRows.forEach((r, i) => {
+      const machine = (r.Machine || '').trim();
+      if (machine === '' || (r.Date || '').trim() === '') return;
+      const { Date: date } = normalizeRowDates(r, DATE_COLUMNS.calendar, i + 1, badDates);
+      if (date) parsed.push([machine, date, floatOr0(r.AvailableTime)]);
+    });
+    if (badDates.length > 0) {
+      return res.status(400).json({ message: invalidDateMessage(badDates) });
+    }
 
     if (mode === 'upsert') {
       // อัปเดตเฉพาะ machine+date ที่กรอก (ตัวอื่นในตารางไม่แตะ) — ยุบ key ซ้ำในไฟล์ (ค่าล่าสุดชนะ)
@@ -498,6 +535,12 @@ router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, asyn
     const mode = getMode(req, 'append'); // 'append' (กันซ้ำกับ DB) | 'append_all' (ไม่เช็คซ้ำ)
     const csvRows = parseUpload(req.file); // ทุกค่าเป็น string อยู่แล้ว (เทียบ dtype=str เดิม)
 
+    // ด่านวันที่ก่อน query แผน/records — ตอบ 400 ตรง ๆ ไม่ throw (catch ของ handler นี้คืน 500 เสมอ)
+    const { values: dateValues, bad: badDates } = checkFileDates(csvRows, DATE_COLUMNS.actual_result);
+    if (badDates.length > 0) {
+      return res.status(400).json({ message: invalidDateMessage(badDates) });
+    }
+
     const csvBatches = [
       ...new Set(csvRows.map((r) => String(r.batch ?? '').trim()).filter(Boolean)),
     ];
@@ -568,7 +611,8 @@ router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, asyn
     const seenInFile = new Set();
     // ORM เดิมใส่ timestamp default get_thai_time ฝั่ง client — DB ไม่มี default ต้องใส่เอง
     const ts = nowBangkokString();
-    for (const r of csvRows) {
+    for (let i = 0; i < csvRows.length; i += 1) {
+      const r = csvRows[i];
       const batch = String(r.batch ?? '').trim();
       if (!batch) continue;
       const processStep = String(r.process_step ?? '').trim();
@@ -586,7 +630,7 @@ router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, asyn
         floatOr0(r.qty_ok),
         floatOr0(r.qty_ng),
         modeNg || null,
-        String(r.working_date ?? '').trim(),
+        dateValues[i].working_date ?? '',
         String(r.working_shift ?? '').trim(),
       ];
       const identity = rowKey(record, IDENTITY_IDX);

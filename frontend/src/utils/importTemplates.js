@@ -5,7 +5,10 @@
 //    orders/actual_result/product_master = lowercase) — handler อ่านคอลัมน์ตรง ๆ ไม่ผ่าน getValueStrict
 import * as XLSX from 'xlsx';
 
-// col: { name, required, format, default, example, note }
+// col: { name, required, isDate, format, default, example, note }
+// ⚠️ isDate = คอลัมน์วันที่ — ต้องตรงกับ DATE_COLUMNS ใน backend/routes/uploads.js (แก้ที่หนึ่งต้องแก้อีกที่)
+//    downloadRows ล็อกคอลัมน์พวกนี้เป็น "ข้อความ" ในไฟล์ .xlsx เพื่อไม่ให้ Excel แปลงสิ่งที่ผู้ใช้พิมพ์
+//    เป็น date cell ตาม locale ของเครื่อง (ต้นเหตุที่ '4/9/2026' เคยกลายเป็น '31/08/26' ตอนอ่านกลับ)
 export const TEMPLATE_SPECS = {
   orders: {
     id: 'orders',
@@ -16,15 +19,15 @@ export const TEMPLATE_SPECS = {
       { name: 'batch', required: true, format: 'ข้อความ', example: 'B2024-001', note: 'ห้ามซ้ำกับ batch เดิม (ระบบข้ามตัวซ้ำ)' },
       { name: 'model', format: 'ข้อความ', example: 'MDL-123' },
       { name: 'description', format: 'ข้อความ (ไทยได้)', example: 'ชิ้นงานเหล็ก' },
-      { name: 'due_date', format: 'YYYY-MM-DD', example: '2024-12-31', note: 'ว่างได้ (= ไม่กำหนด)' },
+      { name: 'due_date', isDate: true, format: 'YYYY-MM-DD', example: '2024-12-31', note: 'ว่างได้ (= ไม่กำหนด)' },
       { name: 'qty', format: 'ตัวเลข', default: '0', example: '100' },
       { name: 'plan_mode', format: 'NEW / FIXED', default: 'NEW', example: 'NEW' },
       { name: 'wip_flow_index', format: 'จำนวนเต็ม', default: '0', example: '0' },
       { name: 'wip_start_step_index', format: 'จำนวนเต็ม', default: '0', example: '0' },
-      { name: 'wip_finish_date', format: 'YYYY-MM-DD', example: '', note: 'ว่างได้' },
+      { name: 'wip_finish_date', isDate: true, format: 'YYYY-MM-DD', example: '', note: 'ว่างได้' },
       { name: 'wip_machine', format: 'ข้อความ', example: '', note: 'ว่างได้' },
       { name: 'planning_mode', format: 'forward / backward', default: 'forward', example: 'forward' },
-      { name: 'release_date', format: 'YYYY-MM-DD', example: '', note: 'ว่างได้' },
+      { name: 'release_date', isDate: true, format: 'YYYY-MM-DD', example: '', note: 'ว่างได้' },
       { name: 'is_deleted', format: '0 / 1', default: '0', example: '0' },
       { name: 'is_new', format: '0 / 1', default: '1', example: '1' },
     ],
@@ -36,7 +39,7 @@ export const TEMPLATE_SPECS = {
     sheetName: 'calendar',
     columns: [
       { name: 'Machine', required: true, format: 'ข้อความ', example: 'CNC-01' },
-      { name: 'Date', required: true, format: 'YYYY-MM-DD', example: '2024-06-01' },
+      { name: 'Date', required: true, isDate: true, format: 'YYYY-MM-DD', example: '2024-06-01' },
       { name: 'AvailableTime', format: 'ตัวเลข (นาที)', default: '0', example: '480' },
     ],
   },
@@ -91,7 +94,7 @@ export const TEMPLATE_SPECS = {
       { name: 'qty_ok', format: 'ตัวเลข', default: '0', example: '95' },
       { name: 'qty_ng', format: 'ตัวเลข', default: '0', example: '5' },
       { name: 'mode_ng', format: 'ข้อความ', example: 'รอยขีด' },
-      { name: 'working_date', format: 'YYYY-MM-DD', example: '2024-06-01' },
+      { name: 'working_date', isDate: true, format: 'YYYY-MM-DD', example: '2024-06-01' },
       { name: 'working_shift', format: 'ข้อความ', example: 'A' },
     ],
   },
@@ -133,15 +136,40 @@ export const TEMPLATE_SPECS = {
 // ดาวน์โหลดไฟล์ .xlsx หัวตารางแถวเดียว (ไม่มีข้อมูล)
 export const downloadTemplate = (spec) => downloadRows(spec, []);
 
+// จำนวนแถวที่ล็อก format ข้อความไว้ล่วงหน้าในคอลัมน์วันที่ (แถวว่างที่เกินมาไม่กระทบ import —
+// parseExcel ฝั่ง backend กรองแถวที่ว่างทั้งแถวทิ้งอยู่แล้ว)
+const DATE_FORMAT_ROWS = 500;
+
+// ประทับ number format "ข้อความ" (@) ลงคอลัมน์ isDate เพื่อกัน Excel แปลงเป็น date cell ตาม locale
+const lockDateColumns = (ws, columns, dataRows) => {
+  const dateCols = columns.map((c, i) => (c.isDate ? i : -1)).filter((i) => i >= 0);
+  if (dateCols.length === 0) return;
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const lastRow = Math.max(range.e.r, dataRows + DATE_FORMAT_ROWS);
+  for (const c of dateCols) {
+    for (let r = 1; r <= lastRow; r += 1) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (ws[addr]) ws[addr].z = '@';
+      else ws[addr] = { t: 's', v: '', z: '@' };
+    }
+  }
+  range.e.r = lastRow;
+  ws['!ref'] = XLSX.utils.encode_range(range);
+};
+
 // ดาวน์โหลด .xlsx: header (ตาม spec.columns) + data (rows = array ของ object keyed by ชื่อคอลัมน์)
 export const downloadRows = (spec, rows) => {
   const header = spec.columns.map((c) => c.name);
   const body = rows.map((row) => spec.columns.map((c) => row[c.name] ?? ''));
   const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
+  lockDateColumns(ws, spec.columns, body.length);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, spec.sheetName);
   XLSX.writeFile(wb, spec.filename);
 };
+
+// คอลัมน์วันที่ของแต่ละ template — คู่กับ DATE_COLUMNS ใน backend/routes/uploads.js
+export const dateColumnsOf = (spec) => spec.columns.filter((c) => c.isDate).map((c) => c.name);
 
 // แถวตัวอย่าง (colName → example) สำหรับโชว์บนเว็บ
 export const exampleRow = (spec) =>

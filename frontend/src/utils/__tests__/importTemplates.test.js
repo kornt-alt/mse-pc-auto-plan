@@ -1,4 +1,4 @@
-import { TEMPLATE_SPECS, buildCalendarRows, buildConfigRows, buildActualRows } from '../importTemplates';
+import { TEMPLATE_SPECS, dateColumnsOf, buildCalendarRows, buildConfigRows, buildActualRows } from '../importTemplates';
 import { ORDER_CSV_COLUMNS } from '../hanaOrders';
 
 // hanaOrders.js เก็บชื่อคอลัมน์ orders ไว้เอง (import จากที่นี่ไม่ได้ ไฟล์นี้ลาก xlsx มาด้วย)
@@ -92,5 +92,27 @@ describe('buildActualRows', () => {
   test('planByBatch ว่าง → []', () => {
     expect(buildActualRows({})).toEqual([]);
     expect(buildActualRows(null)).toEqual([]);
+  });
+});
+
+
+// คอลัมน์วันที่ต้องตรงกับ DATE_COLUMNS ใน backend/routes/uploads.js เป๊ะ ๆ — backend เป็นด่านจริง
+// (ตีกลับทั้งไฟล์เมื่อรูปแบบผิด) ส่วน isDate ฝั่งนี้คือการล็อกคอลัมน์ในไฟล์ template ให้เป็นข้อความ
+// ตกไปตัวหนึ่ง = Excel เครื่องไทยจะแปลงกลับเป็น date cell แล้ววันเพี้ยนเงียบ ๆ เหมือนเดิม
+describe('คอลัมน์วันที่ (isDate) ↔ DATE_COLUMNS ฝั่ง backend', () => {
+  const BACKEND_DATE_COLUMNS = {
+    orders: ['due_date', 'wip_finish_date', 'release_date'],
+    calendar: ['Date'],
+    actual_result: ['working_date'],
+  };
+
+  test.each(Object.keys(BACKEND_DATE_COLUMNS))('%s ตรงกัน', (key) => {
+    expect(dateColumnsOf(TEMPLATE_SPECS[key])).toEqual(BACKEND_DATE_COLUMNS[key]);
+  });
+
+  test('template ที่ไม่มีคอลัมน์วันที่ ต้องไม่มี isDate หลงมา', () => {
+    for (const key of ['machines', 'routing', 'product_master', 'issue_date_master']) {
+      expect(dateColumnsOf(TEMPLATE_SPECS[key])).toEqual([]);
+    }
   });
 });
