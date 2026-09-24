@@ -2,8 +2,11 @@
 // FIX: JWT guard ADMIN/PLANNER/MFG (เดิมไม่มี auth) และ /machines ดึงจาก machine_config
 //   แทน list hardcode FACTORY_MACHINES (L2336-2344) — กติกาโปรเจกต์ห้าม hardcode เครื่อง
 // กติกาเวลา: timestamp ใน DB เป็นเวลาไทย wall-clock (เขียนด้วย nowBangkokString) —
-//   เทียบช่วงด้วย CONVERT(DATETIME, @s, 120) และอ่านกลับด้วย local getters
-//   (ห้ามใช้ getUTC* กับค่าที่อ่านจาก DB ในไฟล์นี้)
+//   เทียบช่วงด้วย CONVERT(DATETIME, @s, 120) และอ่านกลับด้วย getUTC*
+// FIX: เดิมอ่านด้วย local getters — driver ตั้ง useUTC = true ตัวเลข wall-clock จึงอยู่ในช่อง UTC
+//   ของ Date ที่คืนมา (ดู utils/dates.js) พอเครื่อง server เป็น timezone ไทย local getters เลย
+//   บวก 7 ชม. กลับเข้าไป หักล้างกับการลบ 7 ชม. หา factory date พอดี → ยอดกะดึก (00:00-07:00)
+//   ตกวันผิดเงียบ ๆ มาตลอด
 const express = require('express');
 const { query } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
@@ -61,8 +64,8 @@ router.get('/summary', verifyToken, readRoles, async (req, res) => {
     for (const r of results) {
       const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
       const factory = new Date(ts.getTime() - 7 * 3600 * 1000);
-      const dayNum = factory.getDate();
-      const dateStr = `${factory.getFullYear()}-${pad2(factory.getMonth() + 1)}-${pad2(factory.getDate())}`;
+      const dayNum = factory.getUTCDate();
+      const dateStr = `${factory.getUTCFullYear()}-${pad2(factory.getUTCMonth() + 1)}-${pad2(factory.getUTCDate())}`;
       if (!(dayNum in dailyMap)) {
         dailyMap[dayNum] = { date: dateStr, day: dayNum, ttl_input: 0, ttl_output: 0 };
       }

@@ -246,9 +246,9 @@ const OverviewTab = ({ planData }) => {
           <table className="planning-matrix">
             <thead>
               <tr>
-                <th className="frozen-0">Machine</th>
-                <th className="frozen-1">Batch</th>
-                <th className="frozen-2">Process</th>
+                <th className="frozen-0" style={{ minWidth: '150px' }}>Machine</th>
+                <th className="frozen-1" style={{ minWidth: '150px' }}>Batch</th>
+                <th className="frozen-2" style={{ minWidth: '150px' }}>Process</th>
                 {sortedDates.map((d) => {
                   const { label, day, isSunday } = headerInfo(d);
                   const booked = bookedMinsPerDate[d] ?? 0;

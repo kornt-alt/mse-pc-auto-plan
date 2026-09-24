@@ -54,7 +54,8 @@ test('subtractWorkingDays: ชนเพดานรอบวน → null ไม�
 });
 
 test('buildHolidaySet: normalize Date object จากไดรเวอร์ (ไม่งั้นวันหยุดถูกมองข้ามเงียบ ๆ)', () => {
-  const set = buildHolidaySet([{ date: new Date(2026, 8, 10) }]); // 2026-09-10 local
+  // driver ตั้ง useUTC = true → คอลัมน์ DATE คืนมาเป็น Date.UTC (tedious value-parser readDate)
+  const set = buildHolidaySet([{ date: new Date(Date.UTC(2026, 8, 10)) }]); // 2026-09-10
   assert.ok(set.has('2026-09-10'));
   // และต้องมีผลจริงกับการนับ: จันทร์ 14 ถอย 3 → ปกติได้ 09-09 แต่เมื่อ 09-10 หยุดจะเลื่อนเป็น 09-08
   assert.equal(subtractWorkingDays('2026-09-14', 3, set), '2026-09-08');
