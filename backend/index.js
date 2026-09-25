@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { getPool } = require('./db/pool');
 const { reportSchema } = require('./db/schemaCheck');
+const { loadTimestamps } = require('./state/timestamps');
 const { activityLogger } = require('./middleware/activityLog');
 const { errorHandler, notFoundApi } = require('./middleware/errorHandler');
 
@@ -49,6 +50,7 @@ app.use('/api/visualization', require('./routes/visualization'));
 app.use('/api', require('./routes/routingConfig')); // /routing_machine_config, /routing_config/*, /machine_config/*, /routing/*
 app.use('/api', require('./routes/alerts')); // /alert/*
 app.use('/api', require('./routes/jig')); // /jig, /jig/:jig_id, /jig/:jig_id/status
+app.use('/api', require('./routes/issueDateMaster')); // /issue-date-master, /issue-date-master/:model
 // ⚠️ ไม่มี route สำหรับ Hana (SAP COOIS) ที่นี่โดยตั้งใจ — เครื่องนี้อยู่ใน DMZ ไม่มีเส้นทางไป plb044
 //    มีแต่ network ของเครื่อง client ที่ถึง การ์ดหน้า Import จึงยิงจาก browser เอง
 //    (เคยเขียน passthrough ไว้แล้วเมื่อ 2026-08-14 แล้วลบทิ้งด้วยเหตุนี้ — ดู CHANGELOG/CLAUDE.md
@@ -76,6 +78,9 @@ getPool()
     // เตือนตอน start ว่ามี DDL ตัวไหนยังไม่ได้รันบน DB นี้ — log อย่างเดียว ไม่ทำให้ start ล้ม
     // (ดูเหตุผลใน db/schemaCheck.js: โค้ด degrade เงียบ ๆ ได้ ตัวนี้คือสิ่งที่ทำให้รู้ว่าเงียบอยู่)
     await reportSchema();
+    // ป้าย "แผนไม่เป็นปัจจุบัน" ต้องรอด restart — โหลดเวลาวางแผน/แก้ไขล่าสุดที่เก็บไว้ใน system_settings
+    // (ไม่มีคอลัมน์/DB พัง = เริ่มจาก '-' แบบเดิม · ไม่ throw)
+    await loadTimestamps();
 
     // เตือนตอน start ถ้า SMTP ไม่ครบ — ไม่ exit (dev ที่ไม่ใช้เมลต้องรันได้)
     if (!env.isMailConfigured()) {

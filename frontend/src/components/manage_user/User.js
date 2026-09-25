@@ -20,7 +20,8 @@ import useTableFilter from '../shared/useTableFilter';
 import TableFilterBar from '../shared/TableFilterBar';
 import TablePagination from '../shared/TablePagination';
 
-const ROLES = ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'];
+// MC = Material Control (แก้วัน material / Mat'l / Issue ได้ ต้องตรงกับ VALID_ROLES ใน backend/routes/users.js)
+const ROLES = ['ADMIN', 'PLANNER', 'MFG', 'MC', 'OPERATOR'];
 
 const emptyForm = {
   username: '',
@@ -36,7 +37,7 @@ const emptyForm = {
 };
 
 const roleBadge = (role) =>
-  role === 'ADMIN' ? 'danger' : role === 'PLANNER' ? 'primary' : role === 'MFG' ? 'info' : 'secondary';
+  role === 'ADMIN' ? 'danger' : role === 'PLANNER' ? 'primary' : role === 'MFG' ? 'info' : role === 'MC' ? 'warning' : 'secondary';
 
 // สถานะรวม status + is_active ไว้ที่เดียว: รออนุมัติ ต้องเด่นกว่าอย่างอื่นเพราะเป็นงานที่ ADMIN ต้องทำ
 // ฟิลเตอร์สถานะใช้ฟังก์ชันตัวนี้ด้วย — ป้ายในตารางกับตัวเลือกในฟิลเตอร์จะได้ไม่หลุดจากกัน

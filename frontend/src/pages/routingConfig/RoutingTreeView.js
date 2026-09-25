@@ -139,6 +139,7 @@ const RoutingTreeView = ({
                     <tr>
                       <th>ขั้นตอน / เครื่องจักร</th>
                       <th className="text-end" style={{ width: 110 }}>เวลาต่อชิ้น</th>
+                      <th className="text-end" style={{ width: 110 }} title="เวลาหยิบจับต่อชิ้น — ระบบบวกเข้ากับเวลาต่อชิ้นตอนคำนวณแผน">เวลาหยิบจับ</th>
                       <th className="text-end" style={{ width: 110 }}>เวลาตั้งเครื่อง</th>
                       <th style={{ width: 140 }}>รหัสจิ๊ก</th>
                       <th className="text-end" style={{ width: 170 }}>จัดการ</th>
@@ -147,7 +148,7 @@ const RoutingTreeView = ({
                   <tbody>
                     {flow.steps.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="text-muted small text-center py-3">
+                        <td colSpan={6} className="text-muted small text-center py-3">
                           สายการผลิตนี้ยังไม่มีขั้นตอน
                         </td>
                       </tr>
@@ -164,7 +165,7 @@ const RoutingTreeView = ({
                               <span className="chip chip-info ms-2">setup: {step.setupGroup}</span>
                             ) : null}
                           </td>
-                          <td colSpan={3} />
+                          <td colSpan={4} />
                           <td className="text-end text-nowrap">
                             {canEdit && (
                               <>
@@ -212,6 +213,7 @@ const RoutingTreeView = ({
                               {!mc.isActive && <span className="chip chip-ng ms-2">ปิดใช้งาน</span>}
                             </td>
                             <td className="num text-end">{mc.cycleTime}</td>
+                            <td className="num text-end">{mc.handlingTime}</td>
                             <td className="num text-end">{mc.setupTime}</td>
                             <td className="num">{mc.jigId}</td>
                             <td className="text-end text-nowrap">
@@ -260,7 +262,7 @@ const RoutingTreeView = ({
 
                         {canEdit && (
                           <tr>
-                            <td colSpan={5} className="ps-4 py-1 border-bottom">
+                            <td colSpan={6} className="ps-4 py-1 border-bottom">
                               <Button
                                 size="sm"
                                 variant="link"
@@ -305,6 +307,7 @@ const RoutingTreeView = ({
                   <th>alt</th>
                   <th>เครื่องจักร</th>
                   <th className="text-end">เวลาต่อชิ้น</th>
+                  <th className="text-end" title="เวลาหยิบจับต่อชิ้น">เวลาหยิบจับ</th>
                   <th className="text-end">เวลาตั้งเครื่อง</th>
                   <th>รหัสจิ๊ก</th>
                   <th className="text-end">จัดการ</th>
@@ -318,6 +321,7 @@ const RoutingTreeView = ({
                     <td className="num">{mc.altIndex}</td>
                     <td className="fw-semibold">{mc.machine}</td>
                     <td className="num text-end">{mc.cycleTime}</td>
+                    <td className="num text-end">{mc.handlingTime}</td>
                     <td className="num text-end">{mc.setupTime}</td>
                     <td className="num">{mc.jigId}</td>
                     <td className="text-end text-nowrap">

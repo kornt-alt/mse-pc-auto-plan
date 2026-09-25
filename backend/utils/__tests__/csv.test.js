@@ -65,3 +65,39 @@ test('uploadHeaders: อ่านหัวตารางจาก xlsx แล�
   const csv = { originalname: 'pm.csv', buffer: Buffer.from('model,description,setup_group\n', 'utf8') };
   assert.deepStrictEqual(uploadHeaders(csv), ['model', 'description', 'setup_group']);
 });
+
+// สร้าง buffer .xlsx ที่มีเซลล์ "วันที่จริง" (serial + number format) แบบที่ Excel เขียนออกมา
+const xlsxWithDateCells = (header, cells) => {
+  const XL = require('xlsx');
+  const ws = XL.utils.aoa_to_sheet([header]);
+  const range = XL.utils.decode_range(ws['!ref']);
+  cells.forEach(([r, c, v, z]) => {
+    ws[XL.utils.encode_cell({ r, c })] = { t: 'n', v, z };
+    if (r > range.e.r) range.e.r = r;
+  });
+  ws['!ref'] = XL.utils.encode_range(range);
+  return XL.write({ SheetNames: ['s'], Sheets: { s: ws } }, { type: 'buffer', bookType: 'xlsx' });
+};
+
+test('parseUpload: เซลล์วันที่จริงของ Excel → ISO ไม่ว่าเครื่องจะ format แบบไหน', () => {
+  // 46265 = 2026-08-31; format ต่างกันแต่ต้องได้ค่าเดียวกัน (ไม่เดา dd/mm vs mm/dd)
+  const file = {
+    originalname: 'orders.xlsx',
+    buffer: xlsxWithDateCells(
+      ['due_date', 'release_date', 'qty'],
+      [[1, 0, 46265, 'dd/mm/yy'], [1, 1, 46265, 'm/d/yy'], [1, 2, 55, 'General']]
+    ),
+  };
+  const rows = parseUpload(file);
+  assert.strictEqual(rows[0].due_date, '2026-08-31');
+  assert.strictEqual(rows[0].release_date, '2026-08-31');
+  assert.strictEqual(rows[0].qty, '55'); // เซลล์ตัวเลขธรรมดาต้องไม่ถูกแตะ
+});
+
+test('parseUpload: เซลล์วันที่ที่มีเวลาติดมา → ตัดเหลือแค่วัน', () => {
+  const file = {
+    originalname: 'c.xlsx',
+    buffer: xlsxWithDateCells(['Date'], [[1, 0, 46265.5, 'dd/mm/yyyy hh:mm']]),
+  };
+  assert.strictEqual(parseUpload(file)[0].Date, '2026-08-31');
+});

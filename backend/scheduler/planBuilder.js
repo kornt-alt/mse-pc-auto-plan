@@ -70,7 +70,7 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
     const simulatedPriority = hasOverride ? priorityOverrides[row.batch] : row.priority;
     const priorityVal = simulatedPriority !== null && simulatedPriority !== undefined ? Number(simulatedPriority) : 99;
 
-    rawOrders.push({
+    const raw = {
       Batch: row.batch, Model: row.model, dueDate: row.due_date,
       priority: priorityVal, qty: row.qty, planMode,
       WIP_FlowIndex: wFlowIdx, WIP_StartStepIndex: wStepIdx,
@@ -80,7 +80,11 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
       setup_group: setupGroupVal ? setupGroupVal : row.model, // falsy ('' / null) -> model
       confirm_reply_date: confDate,
       has_actuals: hasActuals,
-    });
+    };
+    // orders.flow_locked (DDL รันมือ) = ผู้ใช้เลือกเส้นทางเอง — ใส่ key เฉพาะตอนล็อกจริง
+    // ⚠️ อย่าใส่ false ทุกแถว: order object ไหลไปถึง total_plan_map ที่ parity เทียบ union ของ key
+    if (row.flow_locked === true || row.flow_locked === 1) raw.WIP_FlowLocked = true;
+    rawOrders.push(raw);
   }
   return rawOrders;
 }
@@ -660,6 +664,7 @@ function buildUnplannedReport({
     return {
       machine: r.machine,
       cycleTime: Number(r.cycle_time) || 0,
+      handlingTime: Number(r.handling_time) || 0,
       setupTime: Number(r.setup_time) || 0,
       jigs,
       blockedJigs: jigs.filter((j) => isBlockedThroughHorizon(jigBlockMap, j, lastCalendarDate)),
@@ -687,7 +692,9 @@ function buildUnplannedReport({
     if (candidates.length === 0) return null;
     let best = null;
     for (const c of candidates) {
-      const need = (Number(qty) || 0) * c.cycleTime + c.setupTime;
+      // ต้องตรงกับสูตรของเครื่องยนต์ (engine.js: ctEff = cycle + handling) ไม่งั้น classify
+      // จะบอกเหตุผลผิด — ขั้นที่ capacity เต็มจริงกลายเป็น calendar-short
+      const need = (Number(qty) || 0) * (c.cycleTime + c.handlingTime) + c.setupTime;
       if (best === null || need < best) best = need;
     }
     return Math.round(best * 10) / 10;

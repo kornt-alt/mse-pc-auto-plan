@@ -180,3 +180,21 @@ test('findEmptiedSteps: แถวที่ปิดอยู่แล้วแ�
   const allOff = [{ id: 1, flow_index: 2, step_index: 3, is_active: 0 }];
   assert.deepEqual(findEmptiedSteps(allOff, []), [{ flow_index: 2, step_index: 3 }]);
 });
+
+// ⚠️ กติกาเดียวกับ is_active — คอลัมน์ handling_time เพิ่มด้วย DDL รันมือ ส่งมาทุกแถวไม่ได้
+// เครื่องที่ยังไม่ได้รัน DDL ต้องแก้เวลา/จิ๊กได้ตามปกติ route ถึงจะ 503 เฉพาะตอนคีย์นี้โผล่
+test('parseBulkEdit: handling_time ส่งมาเฉพาะแถวที่แก้ช่องนี้จริง — ไม่ส่งมาต้องไม่มีคีย์นี้', () => {
+  const out = parseBulkEdit({ model: 'M', machines: [machine(), machine({ id: 2, handling_time: '0.5' })] });
+  assert.equal(out.error, null);
+  assert.equal('handling_time' in out.machines[0], false);
+  assert.equal(out.machines[1].handling_time, 0.5);
+});
+
+test('parseBulkEdit: handling_time = 0 ใช้ได้ แต่ติดลบ/ไม่ใช่ตัวเลข/ว่างไม่ได้', () => {
+  assert.equal(parseBulkEdit({ model: 'M', machines: [machine({ handling_time: 0 })] }).machines[0].handling_time, 0);
+  for (const bad of [-1, 'abc', '', null]) {
+    const out = parseBulkEdit({ model: 'M', machines: [machine({ handling_time: bad })] });
+    assert.notEqual(out.error, null);
+    assert.match(out.error, /เวลาหยิบจับ/);
+  }
+});

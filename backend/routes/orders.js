@@ -15,12 +15,22 @@ const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../
 const { computeProgramNote } = require('../scheduler/planBuilder');
 const { validateAttachment, parseLogKinds, MAX_FILE_SIZE } = require('../utils/attachments');
 const { isDayUnitStep } = require('../scheduler/dayUnit');
+const { resolveTrackingFlow } = require('../scheduler/flowPick');
+const { loadIssueDateContext, resolveIssueDate, hasIssueColumns } = require('../services/issueDateService');
 const constants = require('../config/constants');
 
 const router = express.Router();
 
-const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
+// MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
+const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'MC');
 const writeRoles = requireRole('ADMIN', 'PLANNER');
+// งานของ Material Control: วัน material, dropdown Mat'l เข้า, วัน Issue (user decision) — ที่เหลือยังเป็น writeRoles
+const materialRoles = requireRole('ADMIN', 'PLANNER', 'MC');
+
+// orders.flow_locked (manual flow) มาจาก DDL รันมือ — SQL Server bind column ตอน compile
+// จึงต้องเช็คก่อนอ้างถึง ไม่มีคอลัมน์ = ข้ามการเขียน (house style เดียวกับ material_arrived)
+const hasFlowLockedColumn = async () =>
+  (await query("SELECT COL_LENGTH('orders','flow_locked') AS c"))[0].c != null;
 
 // ===== ไฟล์แนบของ Release/Material/Confirm (order_date_log) =====
 // memoryStorage + limit ที่ multer เพื่อกันไฟล์ยักษ์ตั้งแต่ต้น; validateAttachment เช็คซ้ำอีกชั้น
@@ -381,8 +391,13 @@ router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) =>
       return res.json({ found: false, description, steps: [] });
     }
 
+    // handling_time = คอลัมน์ DDL รันมือ (เวลาหยิบจับ นาที/ชิ้น) — ไม่มีก็ไม่ select
+    // ฝั่งหน้าเว็บ (wipEstimate.js) บวกกับ cycle_time เป็นเวลาต่อชิ้นจริง เหมือนที่เครื่องยนต์ทำ
+    const hasHandlingCol =
+      (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
     const machines = await query(
       `SELECT flow_index, step_index, alternative_index, machine, cycle_time, setup_time
+              ${hasHandlingCol ? ', handling_time' : ''}
        FROM machine_config WHERE model = @model`,
       { model: modelName }
     );
@@ -405,6 +420,8 @@ router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) =>
       const alternatives = own.map((m) => ({
         machine: m.machine,
         cycle_time: num(m.cycle_time),
+        // ไม่มีคอลัมน์ → 0 ไม่ใช่ null: null แปลว่า "ไม่มีข้อมูลเวลา" ซึ่งคนละเรื่องกับ "ไม่มีเวลาหยิบจับ"
+        handling_time: num(m.handling_time) ?? 0,
         setup_time: num(m.setup_time),
       }));
       const primary = alternatives[0] || null;
@@ -415,6 +432,7 @@ router.get('/model-info/:modelName', verifyToken, readRoles, async (req, res) =>
         previous_machines: [...new Set(prevMacs)],
         machine: primary ? primary.machine : null,
         cycle_time: primary ? primary.cycle_time : null,
+        handling_time: primary ? primary.handling_time : 0,
         setup_time: primary ? primary.setup_time : null,
         is_day_unit: isDayUnitStep(
           step.step_name,
@@ -565,17 +583,21 @@ router.post('/', verifyToken, writeRoles, async (req, res) => {
     const maxRows = await query('SELECT MAX(priority) AS maxp FROM orders WHERE priority < 999');
     const autoPriority = (maxRows[0].maxp || 0) + 1;
 
+    // flow_locked (manual flow) — DDL รันมือ ไม่มีคอลัมน์ = ข้าม (DEFAULT 0 ดูแลแถวที่ไม่ได้ส่งมา)
+    const writeFlowLocked = await hasFlowLockedColumn();
+
     // FIX: ระบบเดิมไม่ save wip_*/release_date/is_missing_routing (bug) — เวอร์ชันนี้ save ครบ
     await execute(
       `INSERT INTO orders
        (batch, model, description, qty, due_date, priority, plan_mode, planning_mode,
         release_date, wip_flow_index, wip_start_step_index, wip_machine, wip_finish_date,
-        is_missing_routing, is_deleted, is_new)
+        is_missing_routing, is_deleted, is_new${writeFlowLocked ? ', flow_locked' : ''})
        VALUES
        (@batch, @model, @description, @qty, @due_date, @priority, @plan_mode, @planning_mode,
         @release_date, @wip_flow_index, @wip_start_step_index, @wip_machine, @wip_finish_date,
-        @is_missing_routing, 0, 1)`,
+        @is_missing_routing, 0, 1${writeFlowLocked ? ', @flow_locked' : ''})`,
       {
+        flow_locked: b.flow_locked ? 1 : 0,
         batch: b.batch,
         model: b.model,
         description: b.description ?? null,
@@ -743,7 +765,7 @@ async function readMaterialArrived(batch) {
 
 // ========== PUT /api/orders/:batch/material-date — Mat'l Receive: วันวัตถุดิบเข้า ==========
 // เขียน material_ready_date + คำนวณ program_notes ใหม่เทียบ start_date ปัจจุบัน + log ทุกครั้ง (แนบไฟล์ได้)
-router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+router.put('/:batch/material-date', verifyToken, materialRoles, uploadSingle, async (req, res) => {
   let storedName = null;
   try {
     const { batch } = req.params;
@@ -785,6 +807,62 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
   }
 });
 
+// ========== PUT /api/orders/:batch/issue-date — วัน Issue (ปล่อยเอกสาร/สั่งงาน) ==========
+// ปกติค่านี้ระบบเติมให้เองตอนรันแผน (start_date ถอยหลัง N วันทำงานตามโมเดล) — endpoint นี้คือการ
+// "แก้มือทับ" ซึ่งตั้งธง issue_date_manual = 1 เพื่อไม่ให้ replan รอบหน้าทับกลับ
+// ล้างค่า (ส่งค่าว่าง) = ปลดธงกลับเป็นอัตโนมัติ แล้วคำนวณใหม่ทันทีจาก start_date ปัจจุบัน
+// ⚠️ การคำนวณต้องผ่าน services/issueDateService.js ตัวเดียวกับที่ schedulerService ใช้เท่านั้น
+// (ห้ามโหลด issue_date_master / master_holidays เองซ้ำในไฟล์นี้ ไม่งั้นสองที่จะเพี้ยนจากกันเงียบ ๆ)
+router.put('/:batch/issue-date', verifyToken, materialRoles, uploadSingle, async (req, res) => {
+  let storedName = null;
+  try {
+    const { batch } = req.params;
+    const parsed = parseDateInput(req.body && req.body.issue_date);
+    if (!parsed.ok) return res.status(400).json({ message: BAD_DATE_MSG });
+    const note = cleanNote(req.body && req.body.note);
+
+    // คอลัมน์มาจาก DDL รันมือ — ยังไม่ได้รันก็บอกไปตรง ๆ ดีกว่าปล่อยให้ UPDATE ระเบิดเป็น 500
+    if (!(await hasIssueColumns())) {
+      return res.status(400).json({
+        message: 'ยังไม่ได้สร้างคอลัมน์ issue_date ในฐานข้อมูล (ต้องรัน DDL ก่อน)',
+      });
+    }
+
+    const rows = await query('SELECT id, model, start_date FROM orders WHERE batch = @batch', { batch });
+    if (rows.length === 0) return res.status(404).json({ message: 'ไม่พบ Order นี้ในระบบ' });
+
+    if (req.file) {
+      const v = validateAttachment(req.file);
+      if (!v.ok) return res.status(400).json({ message: v.message });
+      storedName = await writeAttachment(req.file);
+      req.file._storedName = storedName;
+    }
+
+    // มีค่า = แก้มือ (ตั้งธง) · ว่าง = กลับไปอัตโนมัติแล้วคำนวณใหม่เดี๋ยวนี้
+    let issueDate = parsed.value;
+    const manual = issueDate !== null;
+    if (!manual) {
+      const ctx = await loadIssueDateContext();
+      issueDate = resolveIssueDate(rows[0].start_date, rows[0].model, ctx);
+    }
+
+    await execute(
+      'UPDATE orders SET issue_date = @d, issue_date_manual = @m WHERE id = @id',
+      { d: issueDate, m: manual ? 1 : 0, id: rows[0].id },
+    );
+    // log หลัง UPDATE สำเร็จ — best-effort (ตารางยังไม่มี = แก้วันได้ แต่ไม่มีประวัติ)
+    const logEntry = await logDateEdit({
+      batch, kind: 'issue', dateValue: parsed.value, note, file: req.file, user: req.user,
+    });
+
+    // ไม่กระทบ engine (วัน Issue ไม่ใช่ input ของการจัดตาราง) จึงไม่ต้อง markEdit()
+    res.json({ batch, issue_date: issueDate, issue_date_manual: manual, log_entry: logEntry });
+  } catch (err) {
+    if (storedName) safeUnlink(storedName);
+    sendError(req, res, err);
+  }
+});
+
 // ========== PUT /api/orders/:batch/material-arrived — override สถานะ "ของเข้า/ไม่เข้า" ==========
 // material_arrived เป็น tri-state (column BIT NULL): true/1 = ยืนยันเข้า(OK), false/0 = ยืนยันไม่เข้า,
 // null = reset เป็น auto (ระบบถือว่าเข้าเมื่อถึง material_ready_date). override นี้เป็นแหล่งความจริงของ
@@ -794,7 +872,7 @@ router.put('/:batch/material-date', verifyToken, writeRoles, uploadSingle, async
 // column material_arrived เพิ่มด้วย DDL รันมือ
 // บันทึกประวัติ "ใครติ๊ก" ลง order_date_log ด้วย (date_kind='material_arrived') — เฉพาะตอนค่าเปลี่ยนจริง
 // ยังเป็น JSON body (ไม่ใช่ multipart) — **อย่าเติม uploadSingle** ไม่งั้นฝั่ง frontend ที่ส่ง JSON.stringify พัง
-router.put('/:batch/material-arrived', verifyToken, writeRoles, async (req, res) => {
+router.put('/:batch/material-arrived', verifyToken, materialRoles, async (req, res) => {
   try {
     const { batch } = req.params;
     const raw = req.body ? req.body.material_arrived : undefined;
@@ -936,15 +1014,21 @@ router.put('/:batch', verifyToken, writeRoles, async (req, res) => {
       return res.status(404).json({ message: 'หาออเดอร์นี้ไม่เจอครับพี่!' });
     }
 
+    // flow_locked (manual flow) — DDL รันมือ: เขียนเฉพาะเมื่อมีคอลัมน์ และ client ส่งมาเท่านั้น
+    // (client เก่าที่ไม่ส่ง = ไม่แตะค่าเดิม)
+    const writeFlowLocked =
+      Object.prototype.hasOwnProperty.call(b, 'flow_locked') && (await hasFlowLockedColumn());
+
     await execute(
       `UPDATE orders SET
          model = @model, description = @description, qty = @qty, due_date = @due_date,
          priority = @priority, plan_mode = @plan_mode, planning_mode = @planning_mode,
          wip_flow_index = @wip_flow_index, wip_start_step_index = @wip_start_step_index,
          wip_machine = @wip_machine, wip_finish_date = @wip_finish_date,
-         release_date = @release_date
+         release_date = @release_date${writeFlowLocked ? ', flow_locked = @flow_locked' : ''}
        WHERE id = @id`,
       {
+        flow_locked: b.flow_locked ? 1 : 0,
         id: rows[0].id,
         model: b.model,
         description: b.description ?? null,
@@ -981,12 +1065,43 @@ router.get('/:batchId/tracking', verifyToken, readRoles, async (req, res) => {
     const modelStr = String(order.model).trim();
     const qtyLot = parseFloat(order.qty) || 0;
 
-    // ระบบเดิม lock flow_index = 0 เสมอ (order ไม่มีคอลัมน์ flow_index)
-    const routings = await query(
-      `SELECT step_index, step_name FROM routing_config
-       WHERE model = @model AND flow_index = 0 ORDER BY step_index ASC`,
+    const records = await query(
+      `SELECT process_step, machine, SUM(qty_ok) AS total_ok, SUM(qty_ng) AS total_ng,
+              MAX(timestamp) AS last_time
+       FROM production_records WHERE batch = @batch
+       GROUP BY process_step, machine`,
+      { batch: batchId }
+    );
+
+    // FIX: ระบบเดิม lock flow_index = 0 เสมอ (order ไม่มีคอลัมน์ flow_index) — batch ที่เดิน flow อื่น
+    //   จึงเห็น step ผิดทั้งชุด และยอดของ step ที่ไม่มีใน flow 0 (เช่น 1ST-2ND) ไม่โผล่เลย
+    //   ตอนนี้เลือก flow ด้วยกติกาเดียวกับ engine (scheduler/flowPick.js): WIP ที่ระบุ step ชนะ
+    //   ไม่งั้นดูจากยอดจริง + step ในแผนล่าสุด ไม่มีข้อมูลอะไรเลย = flow 0 เหมือนเดิม
+    const allRoutings = await query(
+      `SELECT flow_index, step_index, step_name FROM routing_config
+       WHERE model = @model ORDER BY flow_index ASC, step_index ASC`,
       { model: modelStr }
     );
+    const flowMachineRows = await query(
+      'SELECT flow_index, step_index, machine FROM machine_config WHERE model = @model',
+      { model: modelStr }
+    );
+    const planStepRows = await query(
+      `SELECT DISTINCT step FROM schedule_results
+       WHERE (batch = @batch OR ',' + REPLACE(sub_batches, ' ', '') + ',' LIKE '%,' + @batch + ',%')
+         AND is_setup = 0`,
+      { batch: batchId }
+    );
+    const flowIndex = resolveTrackingFlow({
+      routingRows: allRoutings,
+      machineRows: flowMachineRows,
+      order,
+      records: records.map((r) => ({
+        process_step: r.process_step, machine: r.machine, qty_ok: r.total_ok, qty_ng: r.total_ng,
+      })),
+      planStepNames: planStepRows.map((r) => r.step),
+    });
+    const routings = allRoutings.filter((r) => (Number(r.flow_index) || 0) === flowIndex);
 
     const seenSteps = new Set();
     const uniqueSteps = [];
@@ -997,14 +1112,6 @@ router.get('/:batchId/tracking', verifyToken, readRoles, async (req, res) => {
         uniqueSteps.push(stepName);
       }
     }
-
-    const records = await query(
-      `SELECT process_step, machine, SUM(qty_ok) AS total_ok, SUM(qty_ng) AS total_ng,
-              MAX(timestamp) AS last_time
-       FROM production_records WHERE batch = @batch
-       GROUP BY process_step, machine`,
-      { batch: batchId }
-    );
 
     // Batch ที่ migrate มาเป็น WIP: ไม่มี record เลยแต่ระบุ wip_start_step_index
     let isMigratedWip = false;
@@ -1074,10 +1181,10 @@ router.get('/:batchId/tracking', verifyToken, readRoles, async (req, res) => {
            FROM routing_config r
            JOIN machine_config m
              ON m.model = r.model AND m.flow_index = r.flow_index AND m.step_index = r.step_index
-          WHERE r.model = @model AND r.flow_index = 0
+          WHERE r.model = @model AND r.flow_index = @flow
             AND m.comments IS NOT NULL AND LTRIM(RTRIM(m.comments)) <> ''
           ORDER BY m.step_index, m.alternative_index`,
-        { model: modelStr }
+        { model: modelStr, flow: flowIndex ?? 0 }
       );
       for (const c of commentRows) {
         // คีย์ต้อง upper ให้ตรงกับ uniqueSteps ไม่งั้นไม่มีวัน match
@@ -1100,11 +1207,25 @@ router.get('/:batchId/tracking', verifyToken, readRoles, async (req, res) => {
         last_record: rec ? formatThaiTimestamp(rec._lastTime) : '-',
       };
     });
+    // ยอดของ step ที่ไม่อยู่ใน flow ที่เลือก (เช่นเคยบันทึกผิด flow) ต่อท้ายไว้ ไม่ทิ้งเงียบ ๆ
+    for (const [stepName, rec] of Object.entries(recMap)) {
+      if (seenSteps.has(stepName)) continue;
+      stepsData.push({
+        step_name: stepName,
+        machine: rec.machine,
+        comments: '',
+        qty_ok: rec.qty_ok,
+        qty_ng: rec.qty_ng,
+        last_record: formatThaiTimestamp(rec._lastTime),
+        outside_flow: true,
+      });
+    }
 
     res.json({
       batch: batchId,
       model: modelStr,
       qty: qtyLot,
+      flow_index: flowIndex,
       steps: stepsData,
       is_migrated_wip: isMigratedWip,
       migrated_message: migratedMsg,

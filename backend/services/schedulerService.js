@@ -4,7 +4,6 @@
 'use strict';
 
 const { query, transaction } = require('../db/pool');
-const { bulkInsert } = require('../db/bulk');
 const { processRouting, processUnifiedMachineConfig } = require('../scheduler/configProcessor');
 const { OrderManager } = require('../scheduler/orderManager');
 const { SchedulerEngine } = require('../scheduler/engine');
@@ -14,6 +13,9 @@ const { ENABLE_PACKING } = require('../config/constants');
 const pb = require('../scheduler/planBuilder');
 const timestamps = require('../state/timestamps');
 const { nowBangkok, toDateString } = require('../utils/dates');
+const { loadIssueDateContext, resolveIssueDate, hasIssueColumns } = require('./issueDateService');
+const { writeScheduleResults, writeOrderDates } = require('./planWriter');
+const { recordPlanRun } = require('./planRunService');
 
 // logic.py L13-52 + L117-126 + L150-213: โหลด input ทั้งหมดจาก DB
 async function loadInputs(isReplan) {
@@ -23,9 +25,12 @@ async function loadInputs(isReplan) {
   // is_active อ่านแบบ defensive เหมือน orders.material_arrived — คอลัมน์เพิ่มด้วย DDL รันมือ
   // ไม่มีคอลัมน์ = ถือว่าเปิดใช้งานทุกแถว = พฤติกรรมเดิมทุกประการ
   const hasActiveCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
+  // handling_time (เวลาหยิบจับ นาที/ชิ้น) — คอลัมน์ DDL รันมือเช่นกัน ไม่มี = 0 = พฤติกรรมเดิม
+  const hasHandlingCol =
+    (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
   const machineRows = await query(
     `SELECT id, model, flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id
-            ${hasActiveCol ? ', is_active' : ''}
+            ${hasActiveCol ? ', is_active' : ''}${hasHandlingCol ? ', handling_time' : ''}
      FROM machine_config ORDER BY id`,
   );
 
@@ -62,11 +67,13 @@ async function loadInputs(isReplan) {
   // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto
   // (undefined) เหมือน orderStateMap ด้านล่าง — arrived=1 (OK) ปลด material floor ใน buildRawOrders
   const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
+  // flow_locked (manual flow) — DDL รันมือ ไม่มีคอลัมน์ = ไม่มี order ไหนล็อก = พฤติกรรมเดิม
+  const hasFlowLockedCol = (await query("SELECT COL_LENGTH('orders','flow_locked') AS c"))[0].c != null;
   const orderRows = await query(
     `SELECT batch, model, due_date, priority, qty, plan_mode,
             wip_flow_index, wip_start_step_index, wip_finish_date, wip_machine,
             planning_mode, release_date, material_ready_date, confirm_reply_date
-            ${hasArrivedCol ? ', material_arrived' : ''}
+            ${hasArrivedCol ? ', material_arrived' : ''}${hasFlowLockedCol ? ', flow_locked' : ''}
      FROM orders
      WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
      ORDER BY id`,
@@ -99,42 +106,15 @@ async function loadInputs(isReplan) {
   };
 }
 
-// logic.py L254-436 (delete + insert schedule_results):
-// ของเก่า delete 2 รอบ (L254 + L408) เพราะไม่มี transaction — รอบเดียวใน transaction พอ
-//
-// นี่คือการเขียนที่ใหญ่ที่สุดในระบบ (แผนหนึ่งรอบระดับพันแถว) เดิม INSERT ทีละแถวใน loop
-// = round-trip เท่าจำนวนแถว ขณะถือ lock ตาราง schedule_results ไว้ทั้งชุด
-// เปลี่ยนมาใช้ bulkInsert (db/bulk.js) ที่ทุก route ใช้กันอยู่แล้ว — มันหั่น chunk ให้เองไม่ให้
-// เกินเพดาน ~2100 พารามิเตอร์ของ SQL Server · ลำดับแถวยังเป็นลำดับเดิม ผลลัพธ์ต้องเท่าเดิมเป๊ะ
-const SCHEDULE_RESULT_COLUMNS = [
-  'batch', 'sub_batches', 'model', 'step', 'step_index', 'machine',
-  'date_plan', 'time_used_min', 'qty_plan', 'is_setup', 'is_force_closed',
-];
-
+// การเขียน schedule_results + วันที่ใน orders ย้ายไป services/planWriter.js (1:1) เพื่อให้
+// การย้อนกลับแผน (planRunService.rollback) ใช้ SQL ตัวเดียวกัน — รวมถึง CASE ที่กันทับ issue_date แก้มือ
 async function persist(scheduleResultRows) {
-  // is_force_closed เดิมเป็น literal 0 ใน SQL — ตอนนี้ต้องใส่เป็นค่าของทุกแถวแทน
-  const rows = scheduleResultRows.map((r) => [
-    r.batch, r.sub_batches, r.model, r.step, r.step_index, r.machine,
-    r.date_plan, r.time_used_min, r.qty_plan, r.is_setup ? 1 : 0, 0,
-  ]);
-  await transaction(async (t) => {
-    await t.query('DELETE FROM schedule_results');
-    await bulkInsert(t, 'schedule_results', SCHEDULE_RESULT_COLUMNS, rows);
-  });
+  await transaction((t) => writeScheduleResults(t, scheduleResultRows));
 }
 
-// UPDATE orders SET start_date/fg_date/program_notes ต่อ batch หลังวางแผน (logic.py L541-562)
-async function persistOrderDates(updates) {
+async function persistOrderDates(updates, withIssueDate = false) {
   if (updates.length === 0) return;
-  await transaction(async (t) => {
-    for (const u of updates) {
-      await t.query(
-        `UPDATE orders SET start_date = @start_date, fg_date = @fg_date, program_notes = @program_notes
-         WHERE batch = @batch`,
-        { batch: u.batch, start_date: u.startDate, fg_date: u.fgDate, program_notes: u.programNotes },
-      );
-    }
-  });
+  await transaction((t) => writeOrderDates(t, updates, withIssueDate));
 }
 
 // SchedulerService.run (logic.py L13-499) — คืน response shape เดิมเป๊ะ
@@ -143,12 +123,14 @@ async function persistOrderDates(updates) {
 // options.jigOverrides: [{ jig_id, status, unavailable_from, unavailable_to }] สวมรอย jig_master
 //   ตอน simulation — ใช้ทำพรีวิว "ถ้า jig ตัวนี้พังจะเป็นยังไง" โดยยังไม่เขียนอะไรลง DB
 // options.planModeOverrides: { batch: 'FIXED'|'NEW' } สวมรอย plan_mode ตอน simulation (lock/unlock)
+// options.actor: username ของคนกด — เก็บลงประวัติแผน (plan_runs) เท่านั้น ไม่มีผลกับแผน
 async function run(isReplan = false, options = {}) {
   const {
     isSimulation = false,
     priorityOverrides = {},
     planModeOverrides = {},
     jigOverrides = [],
+    actor = null,
   } = options;
   const inputs = await loadInputs(isReplan);
 
@@ -165,7 +147,7 @@ async function run(isReplan = false, options = {}) {
     Model: m.model, FlowIndex: m.flow_index, StepIndex: m.step_index,
     AlternativeIndex: m.alternative_index, Machine: m.machine,
     CycleTime: m.cycle_time, SetupTime: m.setup_time, JigID: m.jig_id,
-    ExtraJigs: m.extra_jigs ?? [],
+    HandlingTime: m.handling_time, ExtraJigs: m.extra_jigs ?? [],
   }));
   const routing = processRouting(flatRouting);
   const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(flatMachine);
@@ -276,6 +258,8 @@ async function run(isReplan = false, options = {}) {
 
   // สรุปความต่างของแผนที่ยืนยันจริง — ตั้งค่าเฉพาะตอน !isSimulation (ดูในบล็อกข้างล่าง)
   let planChange = null;
+  // วันที่ที่เขียนกลับ orders รอบนี้ — เก็บลงประวัติแผนด้วย (rollback ต้องใช้)
+  let savedOrderDates = [];
 
   // Simulation: ห้ามบันทึกอะไรลง DB (schedule_results / lastPlan / order dates) — แค่คืนแผน (logic.py L293-300, L455-458)
   if (!isSimulation) {
@@ -286,16 +270,29 @@ async function run(isReplan = false, options = {}) {
     // material_arrived อ่านแบบ defensive — column เพิ่มด้วย DDL รันมือ ถ้ายังไม่มีให้ degrade เป็น auto (undefined)
     // (SQL Server bind ทุก column reference ตอน compile → เช็ค COL_LENGTH ก่อน อย่าอ้างคอลัมน์ที่อาจไม่มีตรง ๆ)
     const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
+    // model ต้องมีด้วย เพราะวัน Issue ถอยหลังจาก start_date เป็นจำนวนวันที่ขึ้นกับโมเดล
     const stateCols = hasArrivedCol
-      ? 'batch, start_date, fg_date, material_ready_date, material_arrived'
-      : 'batch, start_date, fg_date, material_ready_date';
+      ? 'batch, model, start_date, fg_date, material_ready_date, material_arrived'
+      : 'batch, model, start_date, fg_date, material_ready_date';
     const orderStateRows = await query(
       `SELECT ${stateCols} FROM orders WHERE is_deleted = 0`,
     );
     const orderStateMap = {};
     for (const r of orderStateRows) orderStateMap[r.batch] = r;
     const dateUpdates = pb.buildOrderDateUpdates(mainPlan, totalPlanMap, safeOrders, orderStateMap);
-    await persistOrderDates(dateUpdates);
+
+    // วัน Issue = start_date ถอยหลัง N วันทำงาน (N ต่อโมเดลจาก issue_date_master, ไม่มี = 3)
+    // เป็น post-processing ล้วน ไม่ป้อนกลับเข้า engine — scheduler/ จึงไม่ต้องรู้จักเรื่องนี้เลย
+    // ไม่มีคอลัมน์ (ยังไม่ได้รัน DDL) = ข้ามไปทั้งก้อน = พฤติกรรมเดิมทุกประการ
+    const withIssueDate = await hasIssueColumns();
+    if (withIssueDate) {
+      const issueCtx = await loadIssueDateContext();
+      for (const u of dateUpdates) {
+        u.issueDate = resolveIssueDate(u.startDate, orderStateMap[u.batch]?.model, issueCtx);
+      }
+    }
+    await persistOrderDates(dateUpdates, withIssueDate);
+    savedOrderDates = dateUpdates;
 
     // สรุปว่าแผนที่เพิ่งเขียนลง DB ต่างจากของเดิมยังไง — route เอาไปแปะ activity_log
     // ต้องคำนวณตรงนี้ เพราะ orderStateMap คือ "ค่าก่อนเขียนทับ" ที่มีอยู่แค่ในบล็อกนี้
@@ -315,6 +312,20 @@ async function run(isReplan = false, options = {}) {
     message += ` (⚠️ ข้าม ${rejectedOrders.length} รายการที่ Model ไม่ถูกต้อง)`;
   }
   message += pb.blockedStepsMessage(blockedSteps, lastCalendarDate);
+
+  // ประวัติแผน + รายงานของการรัน (plan_runs) — best-effort: ตารางไม่มี/เขียนพัง = ข้าม ไม่ทำให้การรันพัง
+  // อยู่หลัง capacityWarning/message เพราะรายงานต้องมีครบ · early return สองจุดข้างบนไม่มีแผนใหม่ จึงไม่บันทึก
+  if (!isSimulation) {
+    await recordPlanRun({
+      kind: isReplan ? 'REPLAN' : 'RUN',
+      actor,
+      message,
+      totalPlannedSteps: cleanedData.length,
+      result: { unplanned, blocked_steps: blockedSteps, capacity_warning: capacityWarning, report: shipmentReport },
+      scheduleRows: scheduleResultRows,
+      orderDates: savedOrderDates,
+    });
+  }
 
   // shape เดิม: total_plan_map = บัญชี missing routing เท่านั้น (logic.py L498)
   return {

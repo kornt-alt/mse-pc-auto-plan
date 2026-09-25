@@ -8,7 +8,7 @@ export const ORDER_CSV_COLUMNS = [
 ];
 
 
-export const QTY_FIELD = 'GRQtyForOrderItem';
+export const QTY_FIELD = 'TotalOrderQuantity';
 export const RELEASE_DATE_SOURCE = null;
 
 const str = (v) => (v === undefined || v === null ? '' : String(v));

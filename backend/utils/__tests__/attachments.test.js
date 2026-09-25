@@ -13,17 +13,18 @@ const {
 
 const file = (originalname, mimetype, size = 1024) => ({ originalname, mimetype, size });
 
-test('isAttachmentKind: รับเฉพาะ material/confirm/release', () => {
+test('isAttachmentKind: รับเฉพาะ material/confirm/release/issue', () => {
   assert.ok(isAttachmentKind('material'));
   assert.ok(isAttachmentKind('confirm'));
   assert.ok(isAttachmentKind('release'));
+  assert.ok(isAttachmentKind('issue'));
   assert.ok(!isAttachmentKind('duedate'));
   assert.ok(!isAttachmentKind(''));
   assert.ok(!isAttachmentKind(undefined));
-  assert.deepStrictEqual(ATTACHMENT_KINDS, ['material', 'confirm', 'release']);
+  assert.deepStrictEqual(ATTACHMENT_KINDS, ['material', 'confirm', 'release', 'issue']);
   // material_arrived อยู่ใน log ได้แต่ "แนบไฟล์ไม่ได้" — สองลิสต์นี้ต้องไม่เท่ากัน
   assert.ok(!isAttachmentKind('material_arrived'));
-  assert.deepStrictEqual(DATE_LOG_KINDS, ['material', 'confirm', 'release', 'material_arrived']);
+  assert.deepStrictEqual(DATE_LOG_KINDS, ['material', 'confirm', 'release', 'issue', 'material_arrived']);
 });
 
 test('parseLogKinds: ไม่ส่ง kind → null (ไม่กรอง)', () => {

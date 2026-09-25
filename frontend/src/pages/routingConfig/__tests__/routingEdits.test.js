@@ -192,6 +192,21 @@ describe('buildBulkPayload', () => {
     expect('jig_ids' in out.machines[0]).toBe(false);
   });
 
+  // ⚠️ กติกาเดียวกับ jig_ids/is_active — handling_time เป็นคอลัมน์ DDL รันมือ
+  // ส่งไปทุกแถวที่ถูกแก้ = เครื่องที่ยังไม่ได้รัน DDL จะบันทึกอะไรไม่ได้เลย (backend ตอบ 503 ทั้งใบ)
+  test('ไม่ได้แตะช่องเวลาหยิบจับ → ไม่ส่ง handling_time ไปเลย', () => {
+    const key = editKey('machine', 10);
+    const out = buildBulkPayload('M', groups, orphanGroup, setEdit({}, key, 'cycle_time', '99', 12.5));
+    expect('handling_time' in out.machines[0]).toBe(false);
+  });
+
+  test('แตะช่องเวลาหยิบจับ → ส่งไปเป็น number', () => {
+    const key = editKey('machine', 10);
+    const out = buildBulkPayload('M', groups, orphanGroup, setEdit({}, key, 'handling_time', '0.5', 0));
+    expect(out.machines[0].handling_time).toBe(0.5);
+    expect(typeof out.machines[0].handling_time).toBe('number');
+  });
+
   // ⚠️ กับดักหลัก: ลิสต์ว่างต้องไม่หลุดออกไป — ถ้ากลายเป็น '-' engine จะแจกส่วนลด MINOR_SETUP ทั้งโรงงาน
   test('ลบจิ๊กออกจนหมด → เติมชื่ออัตโนมัติด้วยสูตรเดียวกับตอนสร้างแถว ไม่ส่งลิสต์ว่าง', () => {
     const key = editKey('machine', 10);

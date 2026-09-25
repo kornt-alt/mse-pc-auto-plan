@@ -39,9 +39,20 @@ const renderTable = (over = {}) => {
 test('หัวตารางใช้คำไทยล้วน ไม่มีชื่อคอลัมน์ดิบหลุดออกมา', () => {
   renderTable();
   expect(screen.getByText('เวลาต่อชิ้น (นาที)')).toBeInTheDocument();
+  expect(screen.getByText('เวลาหยิบจับ (นาที)')).toBeInTheDocument();
   expect(screen.getByText('เวลาตั้งเครื่อง (นาที)')).toBeInTheDocument();
   expect(screen.getByText('จิ๊กที่ต้องใช้')).toBeInTheDocument();
-  expect(screen.queryByText(/cycle_time|setup_time|jig_id|alternative_index/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/cycle_time|handling_time|setup_time|jig_id|alternative_index/i)).not.toBeInTheDocument();
+});
+
+// เวลาหยิบจับเป็นคอลัมน์ที่เพิ่มด้วย DDL รันมือ — แถวจากเครื่องที่ยังไม่ได้รันต้องวาดเป็น 0
+// ไม่ใช่ช่องว่างหรือ NaN แล้วต้องแก้ได้ตามปกติ (backend เป็นคนตอบ 503 ถ้าคอลัมน์ยังไม่มี)
+test('ช่องเวลาหยิบจับแก้ได้ และแถวที่ยังไม่มีคอลัมน์ในฐานข้อมูลโชว์ 0', () => {
+  const { onEdit } = renderTable();
+  const cell = screen.getAllByLabelText('เวลาหยิบจับ (นาที/ชิ้น)')[0];
+  expect(cell).toHaveValue(0);
+  fireEvent.change(cell, { target: { value: '0.5' } });
+  expect(onEdit).toHaveBeenCalledWith(editKey('machine', 10), 'handling_time', '0.5', 0);
 });
 
 // เลขดิบใน DB คือ 0 กับ 3 — ผู้ใช้ต้องเห็น "ขั้นที่ 1" กับ "ขั้นที่ 2"

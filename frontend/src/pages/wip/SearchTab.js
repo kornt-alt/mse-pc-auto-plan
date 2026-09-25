@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Form, Button, Table, Spinner } from 'react-bootstrap';
+import PropTypes from 'prop-types';
+import { Form, Button, Spinner } from 'react-bootstrap';
 import ToastHost, { useToast } from '../../components/shared/ToastHost';
 import { apiCall } from '../../api/client';
+import { ReportActions, PrintHeader } from '../../components/report';
+import { exportWorkbook, stampedFilename } from '../../utils/xlsxExport';
 
-// WIP ค้นหารายการ — port จาก wip_screen_batch.dart
-const SearchTab = () => {
+// WIP ค้นหารายการ — port จาก wip_screen_batch.dart (ปรับหน้าตาเข้าชุดหน้ารายงาน + Excel/พิมพ์ 2026-09-25)
+const SearchTab = ({ today }) => {
   const [options, setOptions] = useState({ batches: [], descriptions: [], models: [] });
   const [searchDesc, setSearchDesc] = useState('');
   const [searchBatch, setSearchBatch] = useState('');
@@ -46,107 +49,98 @@ const SearchTab = () => {
     setHasSearched(false);
   };
 
+  const filters = [
+    searchDesc.trim() ? `Description/Model "${searchDesc.trim()}"` : null,
+    searchBatch.trim() ? `Batch "${searchBatch.trim()}"` : null,
+  ].filter(Boolean).join(' · ') || 'ทั้งหมด';
+  const totalQty = wipData.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+
+  const handleExport = () => exportWorkbook(stampedFilename('wip_search', today), [{
+    name: 'WIP',
+    header: [
+      { key: 'description', label: 'Description' },
+      { key: 'model', label: 'Model' },
+      { key: 'batch', label: 'Batch' },
+      { key: 'step', label: 'Step' },
+      { key: 'qty', label: 'Qty' },
+    ],
+    rows: wipData,
+  }], { title: 'WIP — ผลการค้นหา', filters, asOf: today });
+
   return (
     <div>
-      <Card className="shadow-sm mb-3">
-        <Card.Body className="py-2">
-          <Form
-            className="d-flex flex-wrap align-items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              fetchWipData();
-            }}
-          >
-            <Form.Group style={{ minWidth: 260, flex: 1 }}>
-              <Form.Label className="small mb-0">Search Description / Model</Form.Label>
-              <Form.Control
-                size="sm"
-                list="wip-desc-options"
-                value={searchDesc}
-                onChange={(e) => setSearchDesc(e.target.value)}
-              />
-              <datalist id="wip-desc-options">
-                {combined.map((v) => (
-                  <option key={v} value={v} />
-                ))}
-              </datalist>
-            </Form.Group>
-            <Form.Group style={{ minWidth: 220, flex: 1 }}>
-              <Form.Label className="small mb-0">Search Batch</Form.Label>
-              <Form.Control
-                size="sm"
-                list="wip-batch-options"
-                value={searchBatch}
-                onChange={(e) => setSearchBatch(e.target.value)}
-              />
-              <datalist id="wip-batch-options">
-                {(options.batches || []).map((v) => (
-                  <option key={v} value={v} />
-                ))}
-              </datalist>
-            </Form.Group>
-            <Button type="submit" size="sm" className="btn-mse">
-              <i className="bi bi-search me-1" aria-hidden="true" />
-              ค้นหา
-            </Button>
-            <Button type="button" size="sm" variant="outline-secondary" onClick={resetSearch}>
-              <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />
-              ล้างคำค้นหา
-            </Button>
-          </Form>
-        </Card.Body>
-      </Card>
+      <PrintHeader title="WIP — ผลการค้นหา" filters={filters} asOf={today} />
+      <Form
+        className="rpt-toolbar align-items-end"
+        onSubmit={(e) => {
+          e.preventDefault();
+          fetchWipData();
+        }}
+      >
+        <Form.Group style={{ minWidth: 240, flex: 1 }}>
+          <Form.Label className="small mb-0">Description / Model</Form.Label>
+          <Form.Control size="sm" list="wip-desc-options" value={searchDesc} onChange={(e) => setSearchDesc(e.target.value)} />
+          <datalist id="wip-desc-options">
+            {combined.map((v) => <option key={v} value={v} />)}
+          </datalist>
+        </Form.Group>
+        <Form.Group style={{ minWidth: 200, flex: 1 }}>
+          <Form.Label className="small mb-0">Batch</Form.Label>
+          <Form.Control size="sm" list="wip-batch-options" value={searchBatch} onChange={(e) => setSearchBatch(e.target.value)} />
+          <datalist id="wip-batch-options">
+            {(options.batches || []).map((v) => <option key={v} value={v} />)}
+          </datalist>
+        </Form.Group>
+        <Button type="submit" size="sm" className="btn-mse">
+          <i className="bi bi-search me-1" aria-hidden="true" />ค้นหา
+        </Button>
+        <Button type="button" size="sm" variant="outline-secondary" onClick={resetSearch}>
+          <i className="bi bi-x-lg me-1" aria-hidden="true" />ล้าง
+        </Button>
+        {wipData.length > 0 && <ReportActions onExcel={handleExport} />}
+      </Form>
 
-      <Card className="shadow-sm">
-        <Card.Body>
-          {loading ? (
-            <div className="text-center py-4">
-              <Spinner animation="border" />
-            </div>
-          ) : !hasSearched ? (
-            <div className="empty-state">
-              <i className="bi bi-search" aria-hidden="true" />
-              <div>พิมพ์คำค้นหาเพื่อดูข้อมูล WIP</div>
-            </div>
-          ) : wipData.length === 0 ? (
-            <div className="empty-state">
-              <i className="bi bi-inbox" aria-hidden="true" />
-              <div>ไม่พบข้อมูลที่ค้นหา</div>
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <Table bordered hover size="sm">
-                <thead>
-                  <tr>
-                    <th>Description</th>
-                    <th>Model</th>
-                    <th>Batch</th>
-                    <th>Step</th>
-                    <th>Qty</th>
+      {loading ? (
+        <div className="text-center py-4"><Spinner animation="border" /></div>
+      ) : !hasSearched ? (
+        <div className="empty-state"><i className="bi bi-search" aria-hidden="true" /><div>พิมพ์คำค้นหาเพื่อดูข้อมูล WIP</div></div>
+      ) : wipData.length === 0 ? (
+        <div className="empty-state"><i className="bi bi-inbox" aria-hidden="true" /><div>ไม่พบข้อมูลที่ค้นหา</div></div>
+      ) : (
+        <>
+          <div className="rpt-note">{wipData.length} รายการ · รวม {Math.trunc(totalQty).toLocaleString()} ชิ้น</div>
+          <div className="rpt-wrap">
+            <table className="rpt-table">
+              <thead>
+                <tr>
+                  <th style={{ minWidth: 200 }}>Description</th>
+                  <th style={{ minWidth: 120 }}>Model</th>
+                  <th style={{ minWidth: 120 }}>Batch</th>
+                  <th style={{ minWidth: 140 }}>Step</th>
+                  <th className="text-end" style={{ minWidth: 70 }}>Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {wipData.map((row, i) => (
+                  <tr key={i}>
+                    <td>{row.description}</td>
+                    <td>{row.model}</td>
+                    <td className="num">{row.batch}</td>
+                    <td>{row.step}</td>
+                    <td className="text-end fw-bold num text-primary">{row.qty}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {wipData.map((row, i) => (
-                    <tr key={i}>
-                      <td>{row.description}</td>
-                      <td>{row.model}</td>
-                      <td>{row.batch}</td>
-                      <td>{row.step}</td>
-                      <td className="fw-bold num" style={{ color: 'var(--mse-info)' }}>
-                        {row.qty}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </div>
-          )}
-        </Card.Body>
-      </Card>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       <ToastHost toast={toast} onClose={hideToast} />
     </div>
   );
 };
+
+SearchTab.propTypes = { today: PropTypes.string.isRequired };
 
 export default SearchTab;

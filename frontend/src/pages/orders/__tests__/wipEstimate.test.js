@@ -1,6 +1,6 @@
 import {
   addDays, weekdayOf, diffDays, walkCalendar, estimateStep, estimateFlow, estimateFlowTotal,
-  NOMINAL_MINUTES,
+  NOMINAL_MINUTES, ownMachinesOf, withFirstMachine,
 } from '../wipEstimate';
 
 // ปฏิทินเต็มวัน (1240 นาที) ต่อเนื่อง n วันจาก start
@@ -92,6 +92,40 @@ describe('estimateStep', () => {
     expect(r.cycle_time).toBe(2); // C/T ต่อตัว (per-lot = run_minutes)
   });
 
+  // เวลาต่อชิ้นจริง = cycle + handling — สูตรเดียวกับเครื่องยนต์ (engine.js: ctEff)
+  test('เวลาหยิบจับถูกบวกเข้ากับเวลาต่อชิ้น', () => {
+    const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, handling_time: 0.5, setup_time: 40, is_day_unit: false };
+    const r = estimateStep(step, baseOpts);
+    expect(r.run_minutes).toBe(1250); // 500 × (2 + 0.5) ไม่ใช่ 1000
+    expect(r.total_minutes).toBe(1290);
+    expect(r.cycle_time).toBe(2);     // โชว์แยกกัน
+    expect(r.handling_time).toBe(0.5);
+  });
+
+  test('ไม่มี handling_time (คอลัมน์ยังไม่มีใน DB) → เท่าเดิมทุกอย่าง', () => {
+    const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, setup_time: 40, is_day_unit: false };
+    expect(estimateStep(step, baseOpts).run_minutes).toBe(1000);
+    expect(estimateStep({ ...step, handling_time: 0 }, baseOpts).run_minutes).toBe(1000);
+  });
+
+  // ⚠️ setup ถูกตัดเป็น 0 ตอน WIP แต่การหยิบจับยังเสียเวลาต่อชิ้นอยู่ ห้ามตัดตาม
+  test('WIP: setup = 0 แต่เวลาหยิบจับยังคิดอยู่', () => {
+    const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, handling_time: 0.5, setup_time: 40, is_day_unit: false };
+    const r = estimateStep(step, { ...baseOpts, isWipStart: true });
+    expect(r.setup_minutes).toBe(0);
+    expect(r.run_minutes).toBe(1250);
+  });
+
+  // ⚠️ day-unit อ่าน cycle_time เป็น "จำนวนวัน" การบวก handling จะกลายเป็นบวกวัน — ห้ามเด็ดขาด
+  test('day-unit: ไม่เอาเวลาหยิบจับมาคิด วันจบเท่าเดิมเป๊ะ', () => {
+    const base = { step_index: 3, step_name: 'HEAT-TREATMENT', machine: 'HEAT', cycle_time: 3, setup_time: 0, is_day_unit: true };
+    const opts = { ...baseOpts, fromDate: '2026-08-03' };
+    const withH = estimateStep({ ...base, handling_time: 5 }, opts);
+    expect(withH).toEqual(estimateStep(base, opts));
+    expect(withH.finish_date).toBe('2026-08-06');
+    expect(withH.handling_time).toBeNull();
+  });
+
   test('setup = 0 ที่ step เริ่ม WIP', () => {
     const step = { step_index: 2, step_name: 'MILL', machine: 'M1', cycle_time: 2, setup_time: 40, is_day_unit: false };
     const r = estimateStep(step, { ...baseOpts, isWipStart: true });
@@ -152,6 +186,21 @@ describe('estimateFlow', () => {
     expect(r.steps[0].setup_minutes).toBe(30); // ไม่ใช่ WIP → มี setup
   });
 
+  test('routing ที่เริ่ม step 0: นับ step 0 ด้วย และเริ่มที่ step 0 (manual flow) คิด setup เต็ม', () => {
+    const info0 = {
+      ...info,
+      steps: [
+        { step_name: 'FIRST', flow_index: 0, step_index: 0, machine: 'M1', cycle_time: 1, setup_time: 30, is_day_unit: false },
+        { step_name: 'SECOND', flow_index: 0, step_index: 1, machine: 'M2', cycle_time: 1, setup_time: 20, is_day_unit: false },
+      ],
+    };
+    const total = estimateFlowTotal(info0, 0, 300, '2026-08-01');
+    expect(total.steps.map((s) => s.step_index)).toEqual([0, 1]);
+    const manual = estimateFlow(info0, { flowIndex: 0, startStepIndex: 0, qty: 300, anchorDate: '2026-08-01' });
+    expect(manual.steps.map((s) => s.step_index)).toEqual([0, 1]);
+    expect(manual.steps[0].setup_minutes).toBe(30); // ไม่ใช่ WIP → setup เต็ม
+  });
+
   test('flow ที่ไม่มี step → null', () => {
     expect(estimateFlow(info, { flowIndex: 9, startStepIndex: 1, qty: 1, anchorDate: '2026-08-01' })).toBeNull();
   });
@@ -183,5 +232,35 @@ describe('estimateFlow', () => {
     };
     const r = estimateFlow(shortInfo, { flowIndex: 2, startStepIndex: 1, qty: 3000, anchorDate: '2026-08-01', today: '2026-08-01' });
     expect(r.insufficient).toBe(true); // horizon ของ M2 = 08-02 ไม่ใช่ global 08-30
+  });
+});
+
+describe('เครื่องของขั้นตอนแรก (manual flow)', () => {
+  const steps = [
+    {
+      step_name: 'CUT', flow_index: 0, step_index: 0, machine: 'MC-A', cycle_time: 1, setup_time: 10, handling_time: 0,
+      is_day_unit: false,
+      alternatives: [
+        { machine: 'MC-A', cycle_time: 1, setup_time: 10, handling_time: 0 },
+        { machine: 'MC-B', cycle_time: 3, setup_time: 20, handling_time: 0.5 },
+      ],
+    },
+    { step_name: 'FIN', flow_index: 0, step_index: 1, machine: 'MC-A', cycle_time: 1, setup_time: 0, alternatives: [] },
+  ];
+
+  test('ownMachinesOf คืนเครื่องของ step นั้นเอง ไม่ซ้ำ', () => {
+    expect(ownMachinesOf(steps[0])).toEqual(['MC-A', 'MC-B']);
+    expect(ownMachinesOf(null)).toEqual([]);
+  });
+
+  test('withFirstMachine สลับเวลาของขั้นตอนแรกเป็นของเครื่องที่เลือก', () => {
+    const out = withFirstMachine(steps, 0, 'MC-B');
+    expect(out[0]).toMatchObject({ machine: 'MC-B', cycle_time: 3, setup_time: 20, handling_time: 0.5 });
+    expect(out[1]).toBe(steps[1]); // ขั้นตอนอื่นไม่แตะ
+  });
+
+  test('withFirstMachine: เครื่องไม่อยู่ในตัวเลือก/ไม่ได้เลือก → คืนของเดิม', () => {
+    expect(withFirstMachine(steps, 0, 'MC-Z')[0]).toBe(steps[0]);
+    expect(withFirstMachine(steps, 0, '')).toBe(steps);
   });
 });

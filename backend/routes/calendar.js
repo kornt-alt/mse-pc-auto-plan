@@ -1,11 +1,15 @@
 // Calendar + Holiday — port จาก OLD_BACKUP/backend/routers/api.py L2886-3026 พฤติกรรม 1:1
-// quirk เดิมที่คงไว้: ไม่มี markEdit ทุก endpoint — หน้า Calendar ใช้ hasChanges + ปุ่ม Replan แทน
+// FIX: ระบบเดิมไม่มี markEdit ทุก endpoint (หน้า Calendar ใช้ hasChanges + ปุ่ม Replan แทน) ทำให้แก้ปฏิทินแล้ว
+// ป้าย "แผนไม่เป็นปัจจุบัน" บนหน้า Orders ยังเขียว — write routes ของ calendar_config ใส่ markEditOnSuccess แล้ว
+// (holiday CRUD ไม่ใส่: ไม่แตะ calendar_config จนกว่าจะ generate ซึ่ง markEdit เองอยู่แล้ว)
 const express = require('express');
 const { query, execute, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
 const { normalizeCells, cellKey, dateRange, splitByExisting } = require('../utils/calendarCells');
+const { dateOnly } = require('../utils/dates');
+const { markEditOnSuccess } = require('../middleware/markEdit');
 
 const router = express.Router();
 const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
@@ -17,7 +21,7 @@ const writeRoles = requireRole('ADMIN', 'PLANNER');
 // client แล้วยิง /calendar/cells แทน เพราะที่นี่เป็น UPDATE อย่างเดียว ช่วงวันที่ยังไม่มีแถวจะได้
 // updated_count = 0 เงียบ ๆ **เก็บไว้โดยตั้งใจ** เหมือน PUT /calendar/:cal_id ข้างล่าง: เป็น API
 // ของระบบเก่าที่ port มา 1:1 และยังเรียกตรงได้
-router.put('/calendar/bulk_update', verifyToken, writeRoles, async (req, res) => {
+router.put('/calendar/bulk_update', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { start_date, end_date, machine, available_time } = req.body;
     let sqlText =
@@ -40,7 +44,7 @@ router.put('/calendar/bulk_update', verifyToken, writeRoles, async (req, res) =>
 //
 // หน้า Calendar เป็น grid เครื่อง × วัน จึงต้องแก้ช่องที่ "ยังไม่มีแถว" ได้ด้วย
 // (PUT /:cal_id ต้องมี id, bulk_update เป็น UPDATE อย่างเดียว) — ที่นี่จึงเป็น upsert
-router.put('/calendar/cells', verifyToken, writeRoles, async (req, res) => {
+router.put('/calendar/cells', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { cells, error } = normalizeCells(req.body && req.body.cells);
     if (error) return res.status(400).json({ message: error });
@@ -110,7 +114,7 @@ router.get('/calendar', verifyToken, readRoles, async (req, res) => {
 });
 
 // ========== POST /api/calendar/generate (L2930) — สร้างปฏิทินทั้งเดือน ==========
-router.post('/calendar/generate', verifyToken, writeRoles, async (req, res) => {
+router.post('/calendar/generate', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const year = parseInt(req.body.year, 10);
     const month = parseInt(req.body.month, 10);
@@ -134,7 +138,11 @@ router.post('/calendar/generate', verifyToken, writeRoles, async (req, res) => {
       'SELECT date FROM master_holidays WHERE date >= @s AND date <= @e',
       { s: startDateStr, e: endDateStr }
     );
-    const holidaySet = new Set(holidays.map((h) => h.date));
+    // FIX: master_holidays.date เป็นคอลัมน์ DATE → driver คืน Date object ส่วน dateStr ด้านล่างเป็น string
+    // Set.has() จึงไม่เคยเจอ วันหยุดไม่เคยได้ 0 นาที (ระบบเก่าเป็นเหมือนกัน: models.py ประกาศ String(10)
+    // แต่คอลัมน์จริงเป็น DATE → pyodbc คืน datetime.date) · normalize แบบเดียวกับ utils/issueDate.js buildHolidaySet
+    // เสาร์-อาทิตย์ยังไม่ zero ตามเดิม — เป็น decision แยก ยังไม่ได้ตัดสิน
+    const holidaySet = new Set(holidays.map((h) => dateOnly(h.date)).filter(Boolean));
 
     const existing = await query(
       'SELECT date, machine FROM calendar_config WHERE date >= @s AND date <= @e',
@@ -164,7 +172,7 @@ router.post('/calendar/generate', verifyToken, writeRoles, async (req, res) => {
 // ⚠️ ไม่มีใครเรียกใน frontend/src แล้ว — หน้า Calendar ย้ายไปใช้ /calendar/cells ทั้งการแก้ช่องเดียว
 // และหลายช่อง (เพราะเป็นทางเดียวที่ทำกับช่องที่ยังไม่มีแถวได้) **เก็บไว้โดยตั้งใจ** ไม่ใช่ dead code
 // ที่ลืมลบ: เป็น API ของระบบเก่าที่ port มา 1:1 และยังเรียกตรงได้
-router.put('/calendar/:cal_id', verifyToken, writeRoles, async (req, res) => {
+router.put('/calendar/:cal_id', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const count = await execute(
       'UPDATE calendar_config SET available_time = @available_time WHERE id = @id',

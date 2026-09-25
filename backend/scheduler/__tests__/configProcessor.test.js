@@ -53,7 +53,7 @@ test('processUnifiedMachineConfig: key เดี่ยว → scalar', () => {
   const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(rows);
   assert.equal(fixedMachine.A.get(1)[0], 'MC-01');
   assert.equal(cycleTime.A.get(1)[0], 2.5);
-  assert.deepEqual(setupConfig.A.get(1)[0], { time: 30, jig: 'J1', jigs: ['J1'] });
+  assert.deepEqual(setupConfig.A.get(1)[0], { time: 30, jig: 'J1', jigs: ['J1'], handling: 0 });
 });
 
 test('processUnifiedMachineConfig: alternatives → list pad ด้วย null ตาม index', () => {
@@ -66,9 +66,9 @@ test('processUnifiedMachineConfig: alternatives → list pad ด้วย null �
   assert.deepEqual(cycleTime.A.get(1)[0], [1, null, 3]);
   // jig ว่าง → '-'
   assert.deepEqual(setupConfig.A.get(1)[0], [
-    { time: 20, jig: '-', jigs: [] },
+    { time: 20, jig: '-', jigs: [], handling: 0 },
     null,
-    { time: 10, jig: 'J3', jigs: ['J3'] },
+    { time: 10, jig: 'J3', jigs: ['J3'], handling: 0 },
   ]);
 });
 
@@ -78,7 +78,30 @@ test('processUnifiedMachineConfig: CycleTime/SetupTime แปลงไม่ไ�
   ];
   const { cycleTime, setupConfig } = processUnifiedMachineConfig(rows);
   assert.equal(cycleTime.A.get(1)[0], 0);
-  assert.deepEqual(setupConfig.A.get(1)[0], { time: 0, jig: '-', jigs: [] });
+  assert.deepEqual(setupConfig.A.get(1)[0], { time: 0, jig: '-', jigs: [], handling: 0 });
+});
+
+// ===================================================================
+// เวลาหยิบจับ (HandlingTime) — คอลัมน์ DDL รันมือ ไม่มี = 0 = ผลลัพธ์เดิมทุกกรณี
+// ⚠️ ต้องอยู่ใน setupConfig ไม่ใช่บวกเข้า cycleTime — สาขา day-unit ของ engine อ่าน ct ดิบ
+// เป็น "จำนวนวัน" (ดูคอมเมนต์ใน configProcessor.js)
+// ===================================================================
+test('processUnifiedMachineConfig: HandlingTime เข้า setupConfig ไม่แตะ cycleTime', () => {
+  const rows = [
+    { Model: 'A', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'M1', CycleTime: 2, SetupTime: 5, JigID: 'J1', HandlingTime: '0.5' },
+  ];
+  const { cycleTime, setupConfig } = processUnifiedMachineConfig(rows);
+  assert.equal(cycleTime.A.get(1)[0], 2); // ไม่ถูกบวก
+  assert.equal(setupConfig.A.get(1)[0].handling, 0.5);
+});
+
+test('processUnifiedMachineConfig: ไม่มี HandlingTime / แปลงไม่ได้ → 0', () => {
+  for (const v of [undefined, null, '', 'abc']) {
+    const row = { Model: 'A', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'M1', CycleTime: 2, SetupTime: 5, JigID: 'J1' };
+    if (v !== undefined) row.HandlingTime = v;
+    const { setupConfig } = processUnifiedMachineConfig([row]);
+    assert.equal(setupConfig.A.get(1)[0].handling, 0);
+  }
 });
 
 test('processUnifiedMachineConfig: Machine null → ไม่ set fixedMachine แต่ ct/st ยัง set', () => {
@@ -98,7 +121,7 @@ test('processUnifiedMachineConfig: ExtraJigs รวมกับ JigID เป็�
     { Model: 'A', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'M1', CycleTime: 1, SetupTime: 30, JigID: 'J2', ExtraJigs: ['J1'] },
   ];
   const { setupConfig } = processUnifiedMachineConfig(rows);
-  assert.deepEqual(setupConfig.A.get(1)[0], { time: 30, jig: 'J1|J2', jigs: ['J1', 'J2'] });
+  assert.deepEqual(setupConfig.A.get(1)[0], { time: 30, jig: 'J1|J2', jigs: ['J1', 'J2'], handling: 0 });
 });
 
 // ⚠️ พฤติกรรมเดิมต้องเป๊ะเมื่อไม่มีจิ๊กเสริม — jig คำนวณด้วยนิพจน์เดิม ไม่ผ่าน normalize
@@ -127,5 +150,5 @@ test('processUnifiedMachineConfig: จิ๊กหลักว่างแต่
     { Model: 'A', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'M1', CycleTime: 1, SetupTime: 5, JigID: '', ExtraJigs: ['J7'] },
   ];
   const { setupConfig } = processUnifiedMachineConfig(rows);
-  assert.deepEqual(setupConfig.A.get(1)[0], { time: 5, jig: 'J7', jigs: ['J7'] });
+  assert.deepEqual(setupConfig.A.get(1)[0], { time: 5, jig: 'J7', jigs: ['J7'], handling: 0 });
 });

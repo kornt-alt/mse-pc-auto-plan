@@ -13,7 +13,8 @@ const {
 
 const router = express.Router();
 const SALT_ROUNDS = 10;
-const VALID_ROLES = ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'];
+// MC = Material Control: อ่าน Orders/Planning + แก้เฉพาะวัน material / Mat'l / Issue date (routes/orders.js materialRoles)
+const VALID_ROLES = ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR', 'MC'];
 const VALID_STATUS = ['ACTIVE', 'PENDING', 'REJECTED'];
 
 // คอลัมน์ที่ส่งกลับหน้าเว็บ — ไม่มี password_hash

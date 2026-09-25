@@ -8,6 +8,8 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap-icons/font/bootstrap-icons.css'; // โหลดจาก node_modules ไม่ใช่ CDN (เครือข่ายโรงงานออกเน็ตไม่ได้)
 import './index.css';
 import './theme/theme.css';
+import './theme/report.css'; // หน้ารายงาน (KPI / ตาราง / สี tone)
+import './theme/print.css'; // พิมพ์ A4 แนวนอน — ต้องมาหลังสุดให้ทับสไตล์จอ
 
 import 'bootstrap/dist/js/bootstrap.bundle.min.js';
 

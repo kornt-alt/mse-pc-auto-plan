@@ -94,6 +94,9 @@ export function walkCalendar(calendar, machine, fromDate, minutesNeeded, minFrag
 export function estimateStep(step, opts) {
   const { qty, calendar, minFragmentTime, logisticWeekdays, horizon, isWipStart, fromDate, prevIsDayUnit } = opts;
   const cycle = num(step.cycle_time);
+  // เวลาหยิบจับ (นาที/ชิ้น) — เครื่องยนต์คิดเวลาต่อชิ้นจริงเป็น cycle + handling (engine.js: ctEff)
+  // ไม่มีคอลัมน์ในฐานข้อมูล = 0 = ผลลัพธ์เท่าเดิม
+  const handling = num(step.handling_time) || 0;
   const setup = num(step.setup_time) || 0;
   const machine = step.machine || null;
   const start0 = prevIsDayUnit ? addDays(fromDate, 1) : fromDate;
@@ -115,6 +118,8 @@ export function estimateStep(step, opts) {
       step_index: step.step_index, step_name: step.step_name, machine,
       is_day_unit: true, lead_days: leadDays, wait_days: waitDays,
       cycle_time: null, // day-unit: cycle = lead-time วัน ไม่ใช่ นาที/ตัว → ไม่มี C/T ต่อตัว
+      // ⚠️ day-unit ไม่คิดเวลาหยิบจับ — กติกาเดียวกับเครื่องยนต์ (สาขา outsource อ่าน ct ดิบ)
+      handling_time: null,
       run_minutes: 0, setup_minutes: 0, total_minutes: 0,
       start_date: start0, finish_date: finish,
       working_days: leadDays + waitDays, downtime_days: 0,
@@ -125,13 +130,15 @@ export function estimateStep(step, opts) {
   // ---- step ปกติ ----
   const noTiming = cycle == null || cycle === 0;
   const setupMin = isWipStart ? 0 : setup; // setup=0 ที่ step เริ่ม WIP
-  const runMin = noTiming ? 0 : Math.max(0, (Number(qty) || 0) * cycle);
+  // ⚠️ handling ไม่ถูกตัดตอนเป็น WIP (ต่างจาก setup) — หยิบจับยังเสียเวลาต่อชิ้นอยู่
+  const runMin = noTiming ? 0 : Math.max(0, (Number(qty) || 0) * (cycle + handling));
   const totalMin = setupMin + runMin;
   const walk = walkCalendar(calendar, machine, start0, totalMin, minFragmentTime, horizon);
   return {
     step_index: step.step_index, step_name: step.step_name, machine,
     is_day_unit: false, lead_days: 0, wait_days: 0,
-    cycle_time: noTiming ? null : cycle, // นาที/ตัว (per-lot = run_minutes)
+    cycle_time: noTiming ? null : cycle, // นาที/ตัว (per-lot = run_minutes ซึ่งรวม handling แล้ว)
+    handling_time: noTiming ? null : handling,
     run_minutes: runMin, setup_minutes: setupMin, total_minutes: totalMin,
     start_date: walk.startDate, finish_date: walk.finishDate,
     working_days: walk.workingDays, downtime_days: walk.downtimeDays,
@@ -155,8 +162,10 @@ function machineHorizons(calendar) {
 // args: { flowIndex, startStepIndex, qty, anchorDate, today }
 export function estimateFlow(info, args) {
   const { flowIndex, startStepIndex, qty, anchorDate, today } = args || {};
+  // FIX: เดิมกรอง step_index > 0 ทิ้ง ทั้งที่ routing จริงเริ่มที่ 0 และ engine วาง step 0 ด้วย
+  //   เวลารวมต่อ flow (label ใน dropdown) จึงขาด step แรกไปทั้ง step
   const allSteps = (info.steps || [])
-    .filter((s) => s.flow_index === flowIndex && s.step_index > 0)
+    .filter((s) => s.flow_index === flowIndex && s.step_index >= 0)
     .sort((a, b) => a.step_index - b.step_index);
   const startIdx = startStepIndex == null ? (allSteps[0] ? allSteps[0].step_index : 0) : startStepIndex;
   const ordered = allSteps.filter((s) => s.step_index >= startIdx);
@@ -178,7 +187,9 @@ export function estimateFlow(info, args) {
     const est = estimateStep(step, {
       ...baseOpts,
       horizon: (step.machine && horizons[step.machine]) || info.calendar_horizon || null,
-      isWipStart: step.step_index === startIdx && startStepIndex != null,
+      // step แรกสุด (manual flow ที่ยังไม่ผลิต) ไม่ใช่ WIP → คิด setup เต็ม — ตรงกับ isUploadedWip
+      // ของ engine ที่ต้องการ startStep > 0
+      isWipStart: step.step_index === startIdx && startStepIndex != null && startStepIndex > 0,
       fromDate,
       prevIsDayUnit,
     });
@@ -225,4 +236,32 @@ export function formatDays(days) {
   if (days == null) return '-';
   if (days < 1) return '<1 วัน';
   return `~${Math.round(days * 10) / 10} วัน`;
+}
+
+// เครื่องทางเลือกของ step นั้นเอง (จาก model-info: alternatives เรียงตาม alternative_index)
+// ใช้เป็นตัวเลือก "เครื่องของขั้นตอนแรก" ตอนเลือกเส้นทางเอง (manual flow)
+export function ownMachinesOf(step) {
+  const alts = (step && step.alternatives) || [];
+  return [...new Set(alts.map((a) => a.machine).filter(Boolean))];
+}
+
+// สลับค่าเวลาของขั้นตอนแรกของ flow เป็นของเครื่องที่ผู้ใช้เลือก — ให้ประมาณการตรงกับที่ engine
+// ล็อกเครื่องนั้น (engine.js narrowToMachine) · ไม่เจอเครื่องในตัวเลือก = คืนของเดิม
+export function withFirstMachine(steps, flowIndex, machine) {
+  const list = steps || [];
+  const flowSteps = list.filter((s) => s.flow_index === flowIndex);
+  if (!machine || flowSteps.length === 0) return list;
+  const firstIdx = Math.min(...flowSteps.map((s) => s.step_index));
+  return list.map((s) => {
+    if (s.flow_index !== flowIndex || s.step_index !== firstIdx) return s;
+    const alt = (s.alternatives || []).find((a) => a.machine === machine);
+    if (!alt) return s;
+    return {
+      ...s,
+      machine: alt.machine,
+      cycle_time: alt.cycle_time,
+      setup_time: alt.setup_time,
+      handling_time: alt.handling_time ?? 0,
+    };
+  });
 }

@@ -13,6 +13,7 @@ const express = require('express');
 const { query, execute, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
+const { markEditOnSuccess } = require('../middleware/markEdit');
 const { isUniqueViolation } = require('../db/errors');
 const { parseAssignments } = require('../utils/jigAssign');
 
@@ -167,7 +168,7 @@ router.put('/jig/:jig_id', verifyToken, adminRoles, async (req, res) => {
 // unavailable_from ว่าง = ตั้งแต่วันนี้ (buildJigBlockMap เติม todayStr ให้)
 // unavailable_to   ว่าง = ยังไม่รู้กำหนดกลับ = บล็อกยาว → ขึ้นคำเตือนใน pre-flight
 // ================================================================
-router.put('/jig/:jig_id/status', verifyToken, statusRoles, async (req, res) => {
+router.put('/jig/:jig_id/status', verifyToken, statusRoles, markEditOnSuccess, async (req, res) => {
   try {
     if (!(await ensureTable(res))) return;
     const status = String((req.body && req.body.status) ?? '').trim().toUpperCase();
@@ -295,7 +296,7 @@ router.get('/jig/:jig_id/assignments', verifyToken, readRoles, async (req, res) 
 // เดียวกันใช้ jig เดียวกัน แต่ resolveJigId ตั้งชื่อไม่ซ้ำเสมอ ส่วนลดนี้จึงไม่เคยถูกใช้เลย
 // หน้าเว็บมีหน้าจอสรุป + คำเตือนก่อนกดบันทึกด้วยเหตุผลนี้
 // ================================================================
-router.put('/jig/:jig_id/assignments', verifyToken, adminRoles, async (req, res) => {
+router.put('/jig/:jig_id/assignments', verifyToken, adminRoles, markEditOnSuccess, async (req, res) => {
   try {
     if (!(await ensureTable(res))) return;
     const jigId = cleanJigId(req.params.jig_id);

@@ -52,4 +52,7 @@ module.exports = {
   SENTINEL_DEFAULT_DUE: '2099-12-31',
   DROP_DATES: ['NO_CAPACITY', 'OVERDUE', '9999-12-31', 'CONFIG_ERROR'],
   META_CAPACITY_BATCH: '_META_CAPACITY_',
+
+  // ประวัติแผน (plan_runs) — เก็บกี่รุ่นล่าสุด (services/planRunService.js)
+  PLAN_RUN_KEEP: Math.max(1, Math.trunc(num('PLAN_RUN_KEEP', 30))),
 };

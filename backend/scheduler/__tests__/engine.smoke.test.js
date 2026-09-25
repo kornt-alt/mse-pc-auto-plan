@@ -153,6 +153,94 @@ test('flow lock: มี actuals ที่ step ของ flow 2 → บังค
   assert.equal(totalPlanMap.get('BF')._chosenFlow, 2);
 });
 
+// M3 จำลองรูปของ KT15186-3: HEAT มีทุก flow, flow 0 แยก 1ST/2ND, flow 1 รวมเป็น 1ST-2ND
+const buildM3Engine = () => {
+  const r = [
+    { Model: 'M3', FlowIndex: 0, StepIndex: 0, StepName: '1ST' },
+    { Model: 'M3', FlowIndex: 0, StepIndex: 1, StepName: '2ND' },
+    { Model: 'M3', FlowIndex: 0, StepIndex: 2, StepName: 'HEAT' },
+    { Model: 'M3', FlowIndex: 1, StepIndex: 0, StepName: '1ST-2ND' },
+    { Model: 'M3', FlowIndex: 1, StepIndex: 1, StepName: 'HEAT' },
+  ];
+  const m = [
+    { Model: 'M3', FlowIndex: 0, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M3', FlowIndex: 0, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M3', FlowIndex: 0, StepIndex: 2, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M3', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M3', FlowIndex: 1, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+  ];
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(m);
+  return new SchedulerEngine(makeCalendar(), processRouting(r), fixedMachine, cycleTime, setupConfig);
+};
+
+test('flow lock: ยอดจริง 1ST-2ND + HEAT → flow 1 ไม่ใช่ flow 0 ที่แค่มี HEAT และไม่วาง 1ST/2ND ซ้ำ', () => {
+  const engine = buildM3Engine();
+  const [orders] = new OrderManager(true, {}).processOrders([
+    { Batch: 'B3', Model: 'M3', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  const actuals = { B3: { '1ST-2ND': 100, HEAT: 100 } };
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, actuals, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('B3')._chosenFlow, 1);
+  assert.ok(!mainPlan.some((row) => row.step === '1ST' || row.step === '2ND'));
+});
+
+test('flow lock: WIP ที่ระบุ step บน flow 0 ต้องไม่ถูกยอดจริงของ flow อื่นเปลี่ยนทับ', () => {
+  const engine = buildM3Engine();
+  const [orders] = new OrderManager(true, {}).processOrders([
+    {
+      Batch: 'B4', Model: 'M3', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW',
+      WIP_FlowIndex: 0, WIP_StartStepIndex: 1, WIP_Machine: 'MC-A',
+    },
+  ]);
+  const actuals = { B4: { '1ST-2ND': 100 } };
+  const { totalPlanMap } = engine.run(orders, null, actuals, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('B4')._chosenFlow, 0);
+});
+
+test('manual flow: ล็อก Flow 0 ที่ขั้นตอนแรก → ใช้ flow 0 เริ่มจาก 1ST และไม่โดดคิวเป็น -999', () => {
+  const engine = buildM3Engine();
+  const [orders] = new OrderManager(false).processOrders([
+    {
+      Batch: 'B5', Model: 'M3', qty: 100, dueDate: '2026-07-30', priority: 7, planningMode: 'forward', planMode: 'NEW',
+      WIP_FlowIndex: 0, WIP_StartStepIndex: 0, WIP_FlowLocked: true,
+    },
+  ]);
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const planned = totalPlanMap.get('B5');
+  assert.equal(planned._chosenFlow, 0);
+  assert.equal(planned.priority, 7);
+  assert.ok(mainPlan.some((row) => row.step === '1ST'));
+});
+
+test('manual flow: flow > 0 ที่ขั้นตอนแรก + backward → ยังเข้าสายถอยหลัง และใช้แค่ flow ที่ล็อก', () => {
+  const engine = buildM3Engine();
+  const [orders] = new OrderManager(false).processOrders([
+    {
+      Batch: 'B6', Model: 'M3', qty: 100, dueDate: '2026-07-30', priority: 7, planningMode: 'backward', planMode: 'NEW',
+      WIP_FlowIndex: 1, WIP_StartStepIndex: 0, WIP_FlowLocked: true,
+    },
+  ]);
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const planned = totalPlanMap.get('B6');
+  assert.equal(planned.StatusLOT, 'Backward Planned');
+  assert.equal(planned._chosenFlow, 1);
+  assert.ok(mainPlan.some((row) => row.step === '1ST-2ND'));
+  assert.ok(!mainPlan.some((row) => row.step === '1ST'));
+});
+
+test('ไม่ล็อก: flow > 0 ที่ขั้นตอนแรก ยังเป็น WIP แบบเดิม (-999 + บังคับเดินหน้า)', () => {
+  const engine = buildM3Engine();
+  const [orders] = new OrderManager(false).processOrders([
+    {
+      Batch: 'B7', Model: 'M3', qty: 100, dueDate: '2026-07-24', priority: 7, planningMode: 'backward', planMode: 'NEW',
+      WIP_FlowIndex: 1, WIP_StartStepIndex: 0,
+    },
+  ]);
+  const { totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('B7').priority, -999);
+  assert.equal(totalPlanMap.get('B7').StatusLOT, 'Proceeding');
+});
+
 test('settings injection: min_fragment_time / minor_setup_time จาก settings ทับ default', () => {
   const routing = processRouting(routingRows);
   const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(machineRows);
@@ -245,4 +333,150 @@ test('failedSteps: โมเดลหลาย flow ที่วางไม่�
   assert.ok(failedSteps.length > 0, 'ทุก flow วางไม่ลง แต่ไม่มี failedSteps เลย');
   assert.equal(failedSteps[0].batch, 'B888');
   assert.equal(typeof failedSteps[0].flowIndex, 'number');
+});
+
+// ===================================================================
+// เวลาหยิบจับ (handling_time) — นาที/ชิ้น บวกกับ cycle time
+//   เวลาต่อชิ้นจริง = CycleTime + HandlingTime
+//   handling = 0 (ไม่มีคอลัมน์) ต้องได้ผลเท่าเดิมเป๊ะ ซึ่ง parity fixtures เป็นคนยืนยัน
+// ===================================================================
+const handlingMachines = (hd) => [
+  { Model: 'M1', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1', HandlingTime: hd },
+  { Model: 'M1', FlowIndex: 1, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-B', CycleTime: 1, SetupTime: 0, JigID: '-' },
+];
+
+const buildHandlingEngine = (hd) => {
+  const routing = processRouting(routingRows);
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(handlingMachines(hd));
+  return new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+};
+
+test('handling time: เลนเดินหน้า เวลาต่อชิ้น = cycle + handling', () => {
+  const engine = buildHandlingEngine(0.5);
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B100', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+  ]);
+  const { mainPlan } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+
+  // 100 ชิ้น × (2 + 0.5) = 250 นาที (เดิม 200)
+  const turnRow = mainPlan.find((r) => r.step === 'TURNING');
+  assert.equal(turnRow.qty, 100);
+  assert.equal(turnRow.timeUsed_min, 250);
+  // ปฏิทินถูกหักด้วยเวลาที่รวม handling แล้ว (setup 30 + run 250)
+  assert.equal(engine.workingCalendar['MC-A']['2026-07-20'], 1240 - 280);
+
+  // ⚠️ setup ต้องไม่ถูกแตะ — handling เป็นเวลาต่อชิ้น ไม่ใช่เวลาตั้งเครื่อง
+  const setupRow = mainPlan.find((r) => r.isSetup);
+  assert.equal(setupRow.timeUsed_min, 30);
+
+  // step ที่ไม่ได้ตั้ง handling ต้องเท่าเดิม
+  assert.equal(mainPlan.find((r) => r.step === 'MILLING').timeUsed_min, 100);
+});
+
+test('handling time: handling = 0 ให้ผลเท่ากับไม่มีคอลัมน์เลย', () => {
+  const withZero = buildHandlingEngine(0);
+  const withNone = buildEngine();
+  const makeOrders = () =>
+    new OrderManager(false).processOrders([
+      { Batch: 'B101', Model: 'M1', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+    ])[0];
+  const a = withZero.run(makeOrders(), null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const b = withNone.run(makeOrders(), null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.deepEqual(a.mainPlan, b.mainPlan);
+});
+
+test('handling time: เลนถอยหลังบวก handling เหมือนกัน', () => {
+  const engine = buildHandlingEngine(0.5);
+  const om = new OrderManager(false);
+  const [orders] = om.processOrders([
+    { Batch: 'B102', Model: 'M1', qty: 50, dueDate: '2026-07-24', priority: 1, planningMode: 'backward', planMode: 'NEW' },
+  ]);
+  const { mainPlan } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  // 50 ชิ้น × (2 + 0.5) = 125 นาที (เดิม 100)
+  const turn = mainPlan.find((r) => r.batch === 'B102' && r.step === 'TURNING');
+  assert.equal(turn.qty, 50);
+  assert.equal(turn.timeUsed_min, 125);
+});
+
+// ⚠️ เคสที่คุ้มที่สุดของชุดนี้: แถว day-unit อ่าน cycle_time เป็น "จำนวนวัน" ไม่ใช่นาที/ชิ้น
+// ถ้ามีใครย้ายการบวกไปไว้ที่ configProcessor เทสต์นี้จะจับได้ทันที
+test('handling time: แถว day-unit ไม่เอา handling มาคิด วันจบต้องเท่าเดิมเป๊ะ', () => {
+  const heatRouting = [{ Model: 'M3', FlowIndex: 1, StepIndex: 0, StepName: 'HEAT-TREATMENT' }];
+  const heatMachines = (hd) => [
+    { Model: 'M3', FlowIndex: 1, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 2, SetupTime: 30, JigID: 'J1', HandlingTime: hd },
+  ];
+  const planOf = (hd) => {
+    const routing = processRouting(heatRouting);
+    const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(heatMachines(hd));
+    const engine = new SchedulerEngine(makeCalendar(), routing, fixedMachine, cycleTime, setupConfig);
+    const [orders] = new OrderManager(false).processOrders([
+      { Batch: 'B103', Model: 'M3', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW' },
+    ]);
+    return engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00')).mainPlan;
+  };
+  const withHandling = planOf(5);
+  // กันเทสต์กลวง — ต้องมีแถว outsource ที่มีวันจริงออกมาก่อน ถึงจะเทียบมีความหมาย
+  assert.equal(withHandling.length, 1);
+  assert.equal(withHandling[0].isOutsource, true);
+  assert.match(withHandling[0].date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(withHandling, planOf(0));
+});
+
+// M4: ขั้นตอนแรกมีเครื่องทางเลือก 2 ตัวที่ cycle time ต่างกัน — ใช้จับว่าเครื่องที่ล็อกได้เวลาของตัวเอง
+const buildM4Engine = () => {
+  const r = [
+    { Model: 'M4', FlowIndex: 0, StepIndex: 0, StepName: 'CUT' },
+    { Model: 'M4', FlowIndex: 0, StepIndex: 1, StepName: 'FIN' },
+  ];
+  const m = [
+    { Model: 'M4', FlowIndex: 0, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M4', FlowIndex: 0, StepIndex: 0, AlternativeIndex: 1, Machine: 'MC-B', CycleTime: 3, SetupTime: 0, JigID: '-' },
+    { Model: 'M4', FlowIndex: 0, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 1, SetupTime: 0, JigID: '-' },
+  ];
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(m);
+  return new SchedulerEngine(makeCalendar(), processRouting(r), fixedMachine, cycleTime, setupConfig);
+};
+const m4Order = (over) =>
+  new OrderManager(false).processOrders([
+    { Batch: 'B8', Model: 'M4', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW', ...over },
+  ])[0];
+
+test('manual flow: ล็อกเครื่องขั้นตอนแรกเป็น alternative ตัวที่ 2 → ใช้เครื่องนั้นและ cycle time ของมันเอง', () => {
+  const engine = buildM4Engine();
+  const orders = m4Order({ WIP_FlowIndex: 0, WIP_StartStepIndex: 0, WIP_FlowLocked: true, WIP_Machine: 'MC-B' });
+  const { mainPlan } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  const cut = mainPlan.filter((row) => row.step === 'CUT');
+  assert.ok(cut.length > 0 && cut.every((row) => row.machine === 'MC-B'));
+  assert.equal(cut.reduce((a, row) => a + row.timeUsed_min, 0), 300); // 100 ชิ้น × 3 นาที ไม่ใช่ × 1
+});
+
+test('manual flow: สายถอยหลังก็ล็อกเครื่องขั้นตอนแรก', () => {
+  const engine = buildM4Engine();
+  const orders = m4Order({
+    planningMode: 'backward', WIP_FlowIndex: 0, WIP_StartStepIndex: 0, WIP_FlowLocked: true, WIP_Machine: 'MC-B',
+  });
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('B8').StatusLOT, 'Backward Planned');
+  const cut = mainPlan.filter((row) => row.step === 'CUT');
+  assert.ok(cut.length > 0 && cut.every((row) => row.machine === 'MC-B'));
+});
+
+test('manual flow: เครื่องที่เลือกไม่อยู่ในตัวเลือกของ step → ไม่ล็อก engine เลือกเอง', () => {
+  const engine = buildM4Engine();
+  const orders = m4Order({ WIP_FlowIndex: 0, WIP_StartStepIndex: 0, WIP_FlowLocked: true, WIP_Machine: 'MC-Z' });
+  const { mainPlan, totalPlanMap } = engine.run(orders, null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.equal(totalPlanMap.get('B8').StatusLOT, 'Proceeding');
+  assert.ok(mainPlan.some((row) => row.step === 'CUT' && row.machine === 'MC-A'));
+});
+
+test('FIX: งานผลิตค้างที่ล็อกกับ alternative ตัวที่ 2 ต้องได้ cycle time ของเครื่องนั้น ไม่ใช่ของตัวแรก', () => {
+  const engine = buildM4Engine();
+  const orders = m4Order({});
+  const actuals = { B8: { CUT: 50 } };
+  const actualMachines = { B8: { CUT: 'MC-B' } };
+  const { mainPlan } = engine.run(orders, null, actuals, actualMachines, null, bkk('2026-07-16T09:00:00'));
+  const cut = mainPlan.filter((row) => row.step === 'CUT' && !row.isSetup);
+  assert.ok(cut.length > 0 && cut.every((row) => row.machine === 'MC-B'));
+  assert.equal(cut.reduce((a, row) => a + row.timeUsed_min, 0), 150); // เหลือ 50 ชิ้น × 3 นาที
 });

@@ -56,8 +56,8 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
   const config = useMemo(() => hanaConfigStatus(), []);
 
   // อัปโหลดจริงสำเร็จ → ล้างผลลัพธ์ (แพตเทิร์นเดียวกับ UploadRow) แล้วเตือนให้ Replan
-  // ⚠️ /upload/orders จงใจไม่เรียก timestamps.markEdit() (quirk, uploads.js:241) ต่างจาก /seed/orders
-  //    ตัวชี้ "แผนค้าง" จึงไม่ติดเอง — ต้องบอกที่นี่ ไม่งั้นนำเข้าทีละ 200 ใบแล้วไม่มีอะไรเตือนให้ Replan เลย
+  // /upload/orders ตั้งป้าย "แผนไม่เป็นปัจจุบัน" บนหน้า Orders แล้ว (เดิมเป็น quirk ที่ไม่ markEdit) แต่ผู้ใช้อยู่หน้า Import
+  // ไม่เห็นป้ายนั้น — คำเตือนให้ Replan ตรงนี้จึงยังต้องมี
   useEffect(() => {
     if (resetToken > 0) {
       setResult(null);
@@ -215,7 +215,7 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
                 </Badge>
               )}
               {stats.zeroQty > 0 && (
-                <Badge bg="warning" text="dark" title="qty มาจาก GRQtyForOrderItem (ยอดรับเข้าแล้ว) — งานที่ยังไม่ผลิตจะเป็น 0">
+                <Badge bg="warning" text="dark" title="qty มาจาก TotalOrderQuantity (ยอดสั่งผลิต) — แถวที่เป็น 0 คือ SAP ไม่มียอดสั่ง ควรเช็คก่อนนำเข้า">
                   ⚠ qty = 0 · {stats.zeroQty.toLocaleString()} ใบ
                 </Badge>
               )}

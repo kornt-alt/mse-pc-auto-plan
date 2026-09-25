@@ -44,6 +44,13 @@ const UPLOAD_ROWS = [
     template: 'product_master',
     mode: 'replace',
   },
+  {
+    endpoint: '/upload/issue_date_master',
+    label: 'Issue Date Master',
+    note: 'เพิ่ม/อัปเดตรายตัวตาม model (โมเดลอื่นไม่หาย)',
+    template: 'issue_date_master',
+    mode: 'upsert',
+  },
 ];
 
 // ดึงจาก Hana API — ปลายทาง/โหมดเดียวกับแถว Orders ต่างแค่ไฟล์มาจาก API ไม่ได้มาจากเครื่องผู้ใช้

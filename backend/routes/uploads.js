@@ -15,15 +15,36 @@ const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
-const { parseUpload, uploadHeaders } = require('../utils/csv');
+const { parseUpload, uploadHeaders, getValueStrict } = require('../utils/csv');
 const { dedupeExact, rowKey } = require('../utils/dedupe');
 const { parseJigCell, hasExtras } = require('../utils/jigList');
+const { machineColumns, extrasIndexOf, machineRow } = require('../utils/machineImportRow');
 const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
+const { normalizeRowDates, invalidDateMessage } = require('../utils/importDates');
 const { MAX_FILE_SIZE } = require('../utils/attachments');
 
 const router = express.Router();
 const writeRoles = requireRole('ADMIN', 'PLANNER');
+
+// คอลัมน์วันที่ของแต่ละไฟล์ import — ค่าดิบจากไฟล์เคยลง DB ตรง ๆ ทำให้ '31/08/26' จาก Excel
+// หลุดเข้าไปพังการเทียบวันแบบ lexicographic ทั้งระบบ (ดู utils/importDates.js)
+// ⚠️ ชื่อคอลัมน์ต้อง **case ตรงเป๊ะ** กับ TEMPLATE_SPECS ฝั่งเว็บ (frontend/src/utils/importTemplates.js)
+// ซึ่งมี flag isDate คู่กับตารางนี้ — แก้ที่นี่ต้องแก้ที่นั่นด้วย
+const DATE_COLUMNS = {
+  orders: ['due_date', 'wip_finish_date', 'release_date'],
+  calendar: ['Date'],
+  actual_result: ['working_date'],
+};
+
+// ตรวจทุกคอลัมน์วันของทั้งไฟล์ก่อนทำอย่างอื่น — ผิดแม้ช่องเดียว = ตีกลับทั้งไฟล์
+// (ผู้ใช้เลือก 2026-09-04: ไม่ import บางส่วน ไม่เก็บช่องที่แปลงไม่ได้เป็น NULL)
+// คืน { values, bad } — values[i] = { column: 'YYYY-MM-DD' | null } ของแถวที่ i
+const checkFileDates = (rows, columns) => {
+  const bad = [];
+  const values = rows.map((r, i) => normalizeRowDates(r, columns, i + 1, bad));
+  return { values, bad };
+};
 // memoryStorage: ไฟล์ทั้งก้อนเข้า RAM ของ process → **ต้องมี limits เสมอ**
 // ไม่มี limit = ไฟล์ยักษ์ (หรือ .xlsx ที่บานตอน parse) ทำ Node OOM แล้วทั้งระบบดับ ไม่ใช่แค่ request นี้พัง
 // ใช้เพดานเดียวกับไฟล์แนบ order (25 MB) — import มา ไม่ตั้งเลขซ้ำ
@@ -168,6 +189,12 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
     const isReplace = mode === 'replace';
     const csvRows = parseUpload(req.file);
 
+    // ด่านวันที่: ตรวจก่อน query อะไรทั้งนั้น ไฟล์ผิดจะได้ไม่เสียเวลาเปล่า
+    const { values: dateValues, bad: badDates } = checkFileDates(csvRows, DATE_COLUMNS.orders);
+    if (badDates.length > 0) {
+      return res.status(400).json({ message: invalidDateMessage(badDates) });
+    }
+
     // replace: ล้างทั้งตารางแล้วใส่ใหม่ → priority เริ่มใหม่จาก 0, ไม่ข้าม batch ที่มีอยู่
     // append: ต่อท้าย → priority ต่อจาก max เดิม, ข้าม batch ที่มีใน DB
     let currentMax = 0;
@@ -197,7 +224,8 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
 
     let skippedExisting = 0;
     const rows = [];
-    for (const r of csvRows) {
+    for (let i = 0; i < csvRows.length; i += 1) {
+      const r = csvRows[i];
       const batch = String(r.batch ?? '').trim();
       if (!batch || batch === 'None') continue;
       if (existingBatches.has(batch)) {
@@ -206,8 +234,8 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
       }
       currentMax += 1;
 
-      const rawDue = String(r.due_date ?? '').trim();
-      const cleanDueDate = rawDue !== '' ? rawDue : null;
+      // normalize แล้วที่ด่านข้างบน — ค่าว่างยังได้ null เท่าเดิม
+      const cleanDueDate = dateValues[i].due_date;
       let cleanQty;
       try {
         cleanQty = floatOr0(r.qty);
@@ -225,10 +253,10 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
         String(getSafe(r, 'plan_mode', 'NEW')),
         intSafe(r, 'wip_flow_index', 0),
         intSafe(r, 'wip_start_step_index', 0),
-        getSafeNull(r, 'wip_finish_date'),
+        dateValues[i].wip_finish_date,
         getSafeNull(r, 'wip_machine'),
         String(getSafe(r, 'planning_mode', 'forward')),
-        getSafeNull(r, 'release_date'),
+        dateValues[i].release_date,
         intSafe(r, 'is_deleted', 0),
         intSafe(r, 'is_new', 1),
         0, // is_missing_routing (ORM เดิมใส่ default ฝั่ง client)
@@ -286,7 +314,8 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
         uniqueRows
       );
     });
-    // quirk เดิม: /upload/orders ไม่ markEdit
+    // FIX: ระบบเดิม /upload/orders ไม่ markEdit (quirk) ทำให้ import ออเดอร์ใหม่แล้วป้าย "แผนไม่เป็นปัจจุบัน" ยังเขียว
+    timestamps.markEdit();
     const verb = isReplace ? 'แทนที่ทั้งตาราง' : 'เพิ่มออเดอร์ใหม่';
     res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ` });
   } catch (err) {
@@ -299,9 +328,19 @@ router.post('/upload/calendar', verifyToken, writeRoles, uploadSingle, async (re
   try {
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'replace'); // 'replace' | 'upsert'
-    const parsed = parseUpload(req.file)
-      .filter((r) => (r.Machine || '').trim() !== '' && (r.Date || '').trim() !== '')
-      .map((r) => [(r.Machine || '').trim(), (r.Date || '').trim(), floatOr0(r.AvailableTime)]);
+    const rawRows = parseUpload(req.file);
+    // แถวที่ Machine หรือ Date ว่าง = ข้าม (พฤติกรรมเดิม) — ที่เหลือต้องเป็นวันที่ถูกรูป
+    const badDates = [];
+    const parsed = [];
+    rawRows.forEach((r, i) => {
+      const machine = (r.Machine || '').trim();
+      if (machine === '' || (r.Date || '').trim() === '') return;
+      const { Date: date } = normalizeRowDates(r, DATE_COLUMNS.calendar, i + 1, badDates);
+      if (date) parsed.push([machine, date, floatOr0(r.AvailableTime)]);
+    });
+    if (badDates.length > 0) {
+      return res.status(400).json({ message: invalidDateMessage(badDates) });
+    }
 
     if (mode === 'upsert') {
       // อัปเดตเฉพาะ machine+date ที่กรอก (ตัวอื่นในตารางไม่แตะ) — ยุบ key ซ้ำในไฟล์ (ค่าล่าสุดชนะ)
@@ -391,10 +430,12 @@ const clearExtraJigs = async (t, { mode, models }) => {
 };
 
 // ids เรียงตามลำดับที่แทรก ตรงกับ rows ทีละตัว (ดูหมายเหตุที่ insertedIds)
-const writeExtraJigs = async (t, ids, rows) => {
+// ⚠️ ตำแหน่งของจิ๊กเสริมในแถวไม่คงที่ — คอลัมน์ตัวเลือก (comments / handling_time) มีหรือไม่มี
+// ก็ได้ จึงต้องรับ index มาจากผู้เรียกที่เป็นคนประกอบ columns เอง ห้าม hardcode
+const writeExtraJigsAt = (extrasIdx) => async (t, ids, rows) => {
   const pairs = [];
   ids.forEach((id, i) => {
-    for (const jig of rows[i]?.[9] ?? []) pairs.push([id, jig]);
+    for (const jig of rows[i]?.[extrasIdx] ?? []) pairs.push([id, jig]);
   });
   if (pairs.length > 0) {
     await bulkInsert(t, 'machine_config_jig', ['machine_config_id', 'jig_id'], pairs);
@@ -405,31 +446,43 @@ const writeExtraJigs = async (t, ids, rows) => {
 router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
     if (!requireFile(req, res)) return;
+
+    // ⚠️ ต้องรู้ก่อนว่ามีคอลัมน์ตัวเลือกตัวไหนบ้าง **ก่อน** ประกอบแถว เพราะแถวเป็น array ตาม
+    // ตำแหน่ง และ bulkInsert อ่านแค่ columns.length ตัวแรก — พอมีคอลัมน์ตัวเลือกสองตัว
+    // (comments, handling_time) การ hardcode ตำแหน่งจะเพี้ยนทันทีเมื่อมีตัวหนึ่งแต่ไม่มีอีกตัว
+    // ทั้งคู่เป็นคอลัมน์ที่เพิ่มด้วย DDL รันมือ — ไม่มีก็แค่ไม่เขียนช่องนั้น ไฟล์ยัง import ได้ปกติ
+    // (ต่างจากจิ๊กเสริมข้างล่างที่ต้องปฏิเสธ เพราะข้อมูลจะหายไปแบบเงียบ ๆ ถ้าเขียนครึ่งเดียว)
+    const hasComments =
+      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
+    const hasHandling =
+      (await query("SELECT COL_LENGTH('machine_config','handling_time') AS c"))[0].c != null;
+    // ลำดับคอลัมน์กับตำแหน่งจิ๊กเสริมอยู่ที่ utils/machineImportRow.js (pure, มีเทสครบ 4 คู่)
+    const flags = { hasComments, hasHandling };
+    const columns = machineColumns(flags);
+    const extrasIdx = extrasIndexOf(flags);
+
     const parsed = parseUpload(req.file)
       .filter((r) => (r.Model || '').trim() !== '')
       .map((r) => {
         // ช่อง JigID ใส่หลายตัวคั่นจุลภาคได้ — ตัวแรกลง jig_id ที่เหลือลง machine_config_jig
         const { primary, extras } = parseJigCell(r.JigID);
-        return [
-          (r.Model || '').trim(),
-          Math.trunc(floatOr0(r.FlowIndex)),
-          Math.trunc(floatOr0(r.StepIndex)),
-          Math.trunc(floatOr0(r.AlternativeIndex)),
-          (r.Machine || '').trim(),
-          floatOr0(r.CycleTime),
-          floatOr0(r.SetupTime),
-          primary,
-          // ⚠️ ตำแหน่งที่ 9 (index 8) = comments — เขียนจริงเฉพาะเมื่อคอลัมน์มีอยู่ (ดู hasComments
-          // ข้างล่าง) ไม่มีคอลัมน์ = columns เหลือ 8 ตัว bulkInsert จึงข้ามช่องนี้ไปเอง
-          (r.Comments || '').trim(),
-          // ⚠️ ตำแหน่งที่ 10 (index 9) เกินจำนวน columns เสมอ — bulkInsert อ่านแค่ columns.length
-          // แรก จึงไม่ถูกเขียน แต่ dedupeExact (JSON.stringify ทั้งแถว) ยังนับมันด้วย ซึ่งถูกต้อง:
-          // สองแถวที่ต่างกันแค่จิ๊กเสริมคือคนละแถวจริง ๆ ไม่ควรถูกยุบ
-          extras,
-        ];
+        return machineRow({
+          model: (r.Model || '').trim(),
+          flow_index: Math.trunc(floatOr0(r.FlowIndex)),
+          step_index: Math.trunc(floatOr0(r.StepIndex)),
+          alternative_index: Math.trunc(floatOr0(r.AlternativeIndex)),
+          machine: (r.Machine || '').trim(),
+          cycle_time: floatOr0(r.CycleTime),
+          setup_time: floatOr0(r.SetupTime),
+          jig_id: primary,
+          comments: (r.Comments || '').trim(),
+          // เวลาหยิบจับ (นาที/ชิ้น) — ไฟล์เก่าที่ไม่มีคอลัมน์นี้ได้ 0 = พฤติกรรมเดิม
+          handling_time: floatOr0(r.HandlingTime),
+          extra_jigs: extras,
+        }, flags);
       });
 
-    const fileHasExtras = hasExtras(parsed.map((r) => r[9]));
+    const fileHasExtras = hasExtras(parsed.map((r) => r[extrasIdx]));
     const hasJigTable =
       (await query("SELECT OBJECT_ID('machine_config_jig') AS id"))[0].id != null;
     // ไฟล์ใส่หลายจิ๊กมาแต่ยังไม่ได้สร้างตาราง = บอกไปตรง ๆ ดีกว่าเขียนครึ่งเดียวเงียบ ๆ
@@ -439,22 +492,13 @@ router.post('/upload/machines', verifyToken, writeRoles, uploadSingle, async (re
       });
     }
 
-    // comments เป็นคอลัมน์ที่รัน DDL ด้วยมือ — ไม่มีก็แค่ไม่เขียนช่องนั้น ไฟล์ยัง import ได้ปกติ
-    // (ต่างจากจิ๊กเสริมข้างบนที่ต้องปฏิเสธ เพราะข้อมูลจะหายไปแบบเงียบ ๆ ถ้าเขียนครึ่งเดียว)
-    const hasComments =
-      (await query("SELECT COL_LENGTH('machine_config','comments') AS c"))[0].c != null;
-
     await writeConfigTable(req, res, {
       table: 'machine_config',
-      columns: [
-        'model', 'flow_index', 'step_index', 'alternative_index',
-        'machine', 'cycle_time', 'setup_time', 'jig_id',
-        ...(hasComments ? ['comments'] : []),
-      ],
+      columns,
       parsed,
       label: 'Machine Config',
       beforeDelete: hasJigTable ? clearExtraJigs : undefined,
-      afterInsert: hasJigTable ? writeExtraJigs : undefined,
+      afterInsert: hasJigTable ? writeExtraJigsAt(extrasIdx) : undefined,
     });
   } catch (err) {
     sendError(req, res, err);
@@ -491,6 +535,12 @@ router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, asyn
     if (!requireFile(req, res)) return;
     const mode = getMode(req, 'append'); // 'append' (กันซ้ำกับ DB) | 'append_all' (ไม่เช็คซ้ำ)
     const csvRows = parseUpload(req.file); // ทุกค่าเป็น string อยู่แล้ว (เทียบ dtype=str เดิม)
+
+    // ด่านวันที่ก่อน query แผน/records — ตอบ 400 ตรง ๆ ไม่ throw (catch ของ handler นี้คืน 500 เสมอ)
+    const { values: dateValues, bad: badDates } = checkFileDates(csvRows, DATE_COLUMNS.actual_result);
+    if (badDates.length > 0) {
+      return res.status(400).json({ message: invalidDateMessage(badDates) });
+    }
 
     const csvBatches = [
       ...new Set(csvRows.map((r) => String(r.batch ?? '').trim()).filter(Boolean)),
@@ -562,7 +612,8 @@ router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, asyn
     const seenInFile = new Set();
     // ORM เดิมใส่ timestamp default get_thai_time ฝั่ง client — DB ไม่มี default ต้องใส่เอง
     const ts = nowBangkokString();
-    for (const r of csvRows) {
+    for (let i = 0; i < csvRows.length; i += 1) {
+      const r = csvRows[i];
       const batch = String(r.batch ?? '').trim();
       if (!batch) continue;
       const processStep = String(r.process_step ?? '').trim();
@@ -580,7 +631,7 @@ router.post('/upload/actual_result', verifyToken, writeRoles, uploadSingle, asyn
         floatOr0(r.qty_ok),
         floatOr0(r.qty_ng),
         modeNg || null,
-        String(r.working_date ?? '').trim(),
+        dateValues[i].working_date ?? '',
         String(r.working_shift ?? '').trim(),
       ];
       const identity = rowKey(record, IDENTITY_IDX);
@@ -740,6 +791,82 @@ router.post('/upload/product_master', verifyToken, writeRoles, uploadSingle, asy
   } catch (err) {
     // FIX: เดิมคืน 200 พร้อมข้อความ error — คืน 500 ให้หน้าเว็บ catch ได้
     res.status(500).json({ message: `เกิดข้อผิดพลาดในการบันทึกข้อมูล: ${err.message}` });
+  }
+});
+
+// ========== POST /api/upload/issue_date_master — จำนวนวันปล่อยเอกสารล่วงหน้าต่อโมเดล ==========
+// ⚠️ **upsert รายแถว ไม่ใช่ delete-insert** ต่างจาก /upload/product_master โดยตั้งใจ:
+// ตารางนี้เป็นค่าที่ตั้งครั้งเดียวแล้วแก้ทีละตัว การล้างทั้งตารางเพราะอัปไฟล์ที่มี 2 แถว
+// คือการทำข้อมูลของโมเดลอื่นหายโดยที่ผู้ใช้ไม่ได้ตั้งใจ
+//
+// ⚠️ อ่านคอลัมน์ผ่าน getValueStrict (case-insensitive) ไม่ใช่ row.model ตรง ๆ —
+// handler รุ่นเก่าที่ index ตรง ๆ คือสาเหตุที่ template พิมพ์ case ไม่ตรงแล้ว import ได้ค่าว่างเงียบ ๆ
+router.post('/upload/issue_date_master', verifyToken, writeRoles, uploadSingle, async (req, res) => {
+  try {
+    if (!requireFile(req, res)) return;
+
+    const exists = await query("SELECT OBJECT_ID('issue_date_master') AS id");
+    if (exists[0]?.id == null) {
+      return res.status(503).json({
+        message: 'ยังไม่ได้สร้างตาราง issue_date_master ในฐานข้อมูล (คำสั่ง DDL อยู่ใน CHANGELOG.md)',
+      });
+    }
+
+    const parsed = [];
+    const invalid = [];
+    for (const r of parseUpload(req.file)) {
+      const model = String(getValueStrict(r, 'model') ?? '').trim().slice(0, 100);
+      if (!model) continue; // แถวว่าง = ข้าม (เหมือน handler อื่น)
+      const raw = getValueStrict(r, 'lead_days');
+      const n = Number(raw);
+      // ค่าที่ใช้ไม่ได้ต้อง "ไม่เขียน" และรายงานกลับ — เขียน 0 แทนจะกลายเป็นปล่อยเอกสารวันเดียวกับวันเริ่ม
+      if (String(raw ?? '').trim() === '' || !Number.isInteger(n) || n < 0 || n > 365) {
+        invalid.push(model);
+        continue;
+      }
+      const note = String(getValueStrict(r, 'note') ?? '').trim().slice(0, 255) || null;
+      parsed.push({ model, lead_days: n, note });
+    }
+
+    // ไฟล์เดียวมีโมเดลซ้ำ — เอาแถวหลังสุดชนะ (ตรงกับที่ผู้ใช้เห็นบนจอว่า "แก้ทีหลัง")
+    const byModel = new Map();
+    for (const row of parsed) byModel.set(row.model, row);
+    const rows = [...byModel.values()];
+
+    if (isDryRun(req)) {
+      const existing = await query('SELECT model FROM issue_date_master');
+      const known = new Set(existing.map((e) => String(e.model).trim()));
+      return res.json({
+        preview: {
+          mode: 'upsert',
+          total: parsed.length,
+          to_update: rows.filter((r) => known.has(r.model)).length,
+          to_insert: rows.filter((r) => !known.has(r.model)).length,
+          duplicates_in_file: parsed.length - rows.length,
+          invalid_rows: invalid.length,
+        },
+      });
+    }
+
+    const updatedBy = req.user && req.user.username ? String(req.user.username).slice(0, 100) : null;
+    await transaction(async (t) => {
+      for (const r of rows) {
+        await t.query(
+          `MERGE issue_date_master AS tgt
+           USING (SELECT @model AS model) AS src ON tgt.model = src.model
+           WHEN MATCHED THEN UPDATE SET lead_days = @lead, note = @note,
+                                        updated_at = SYSDATETIME(), updated_by = @by
+           WHEN NOT MATCHED THEN INSERT (model, lead_days, note, updated_by)
+                                 VALUES (@model, @lead, @note, @by);`,
+          { model: r.model, lead: r.lead_days, note: r.note, by: updatedBy },
+        );
+      }
+    });
+
+    const skipped = invalid.length ? ` (ข้าม ${invalid.length} แถวที่จำนวนวันไม่ถูกต้อง)` : '';
+    res.json({ message: `บันทึกจำนวนวันปล่อยเอกสาร ${rows.length} โมเดลสำเร็จ!${skipped}` });
+  } catch (err) {
+    sendError(req, res, err);
   }
 });
 

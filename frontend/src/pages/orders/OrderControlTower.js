@@ -23,12 +23,16 @@ import DateEditDialog from './DateEditDialog';
 import SettingsDialog from './SettingsDialog';
 import PlanPreviewDialog from './PlanPreviewDialog';
 import CalendarHorizonAlert from '../../components/shared/CalendarHorizonAlert';
+import LastRunAlert from './LastRunAlert';
+import PlanRunsDialog from './PlanRunsDialog';
 import { buildPlanDiff, computeSortByDueDate } from './planDiff';
 import { buildPlanDetail, buildMachineSchedule } from './planDetail';
 import OrderFilterPanel from './OrderFilterPanel';
 import {
   EMPTY_FILTERS, dateFilterActive, countActiveDateFilters, matchOrderDates,
 } from './orderFilters';
+import { exportXlsx, stampedFilename } from '../../utils/xlsxExport';
+import { effectiveArrived } from './planRules';
 
 // meta ของกล่องแก้วันที่ตามชนิด — endpoint / คีย์ body / label
 const DATE_EDIT_META = {
@@ -36,6 +40,9 @@ const DATE_EDIT_META = {
   material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam', logKinds: 'material,material_arrived' },
   confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
   release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
+  // ปกติระบบเติมวัน Issue ให้เองตอนรันแผน (start_date ถอยหลังตามจำนวนวันของโมเดล)
+  // กล่องนี้คือการแก้มือทับ ซึ่งตั้งธง issue_date_manual กันไม่ให้ replan รอบหน้าทับกลับ
+  issue: { endpoint: 'issue-date', bodyKey: 'issue_date', title: 'วัน Issue', label: 'เลือกวัน Issue', icon: 'bi-file-earmark-text' },
 };
 
 // ===== helpers =====
@@ -63,20 +70,14 @@ const formatWip = (wip) => {
 
 const shortDate = (v) => (v ? String(v).slice(0, 10) : '-');
 
+// issue_date_manual มาจาก DDL รันมือ — ไม่มีคอลัมน์ = undefined = อัตโนมัติ (ไม่ใช่แก้มือ)
+// DB คืน BIT เป็น true/false ส่วน JSON เก่า/ไฟล์เทสอาจเป็น 1/0 จึงรับทั้งสองแบบ
+const isManualIssueDate = (order) =>
+  order?.issue_date_manual === true || Number(order?.issue_date_manual) === 1;
+
 // วันนี้เป็น string 'YYYY-MM-DD' โซนกรุงเทพ (UTC+7 คงที่ ไม่มี DST) — ให้ตรงกับ backend nowBangkok()
 // ไม่ใช้เวลาเครื่อง (browser-local) กันเพี้ยนช่วงเที่ยงคืนถ้าเครื่องตั้ง timezone อื่น
 const todayDateStr = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
-
-// สถานะ "ของเข้า" ที่ใช้แสดง checkbox = override (material_arrived true/false) ?? default ตามวัน
-// auto: ไม่มี override → ถือว่าเข้าเมื่อถึง material_ready_date (ไม่มีวันคาด = ถือว่าเข้า ไม่มีอะไรต้องรอ)
-const effectiveArrived = (order, today) => {
-  const ov = order.material_arrived;
-  if (ov === true || ov === 1) return true;
-  if (ov === false || ov === 0) return false;
-  const mat = order.material_ready_date ? String(order.material_ready_date).slice(0, 10) : '';
-  if (!mat) return true;
-  return today >= mat;
-};
 
 // marker เล็ก ๆ บอกว่าช่องวันนี้มีประวัติการแก้/ไฟล์แนบกี่รายการ
 const logMarker = (n) =>
@@ -89,6 +90,28 @@ const logMarker = (n) =>
     />
   ) : null;
 
+// ⚠️ คอลัมน์ของไฟล์ export เขียนไว้ชัด ๆ ตรงนี้ **ห้าม derive จาก <th> ในตาราง** —
+// คอลัมน์ drag handle / Action / Priority เป็นตัวควบคุมบนจอ ไม่ใช่ข้อมูล ถ้าไปดึงจากหัวตาราง
+// ไฟล์จะมีคอลัมน์ว่างของปุ่มลากติดไปด้วย (ลำดับที่นี่คือลำดับที่ผู้ใช้เห็น ไม่ต้องตรงกับ <th> เป๊ะ)
+const EXPORT_COLUMNS = [
+  { key: 'batch', label: 'Batch ID' },
+  { key: 'model', label: 'Model' },
+  { key: 'description', label: 'Description' },
+  { key: 'wip', label: 'WIP', value: (o) => formatWip(o.wip) },
+  { key: 'planning_mode', label: 'Delivery mode', value: (o) => (o.planning_mode === 'backward' ? 'Backward' : 'Forward') },
+  { key: 'qty', label: 'Qty' },
+  { key: 'due_date', label: 'Due Date', value: (o) => shortDate(o.due_date) },
+  { key: 'release_date', label: 'Release Date', value: (o) => shortDate(o.release_date) },
+  { key: 'issue_date', label: 'Issue Date', value: (o) => shortDate(o.issue_date) },
+  { key: 'issue_date_manual', label: 'Issue แก้มือ', value: (o) => (isManualIssueDate(o) ? 'ใช่' : '') },
+  { key: 'material_ready_date', label: 'Material', value: (o) => shortDate(o.material_ready_date) },
+  { key: 'confirm_reply_date', label: 'Confirm', value: (o) => shortDate(o.confirm_reply_date) },
+  { key: 'start_date', label: 'Start', value: (o) => shortDate(o.start_date) },
+  { key: 'fg_date', label: 'FG', value: (o) => shortDate(o.fg_date) },
+  { key: 'program_notes', label: 'หมายเหตุ' },
+  { key: 'priority', label: 'Priority' },
+];
+
 // แผน "ค้าง" ถ้ามีการแก้ไขหลังวางแผนล่าสุด (เทียบ string 'YYYY-MM-DD HH:MM:SS')
 const isPlanOutdated = (lastPlan, lastEdit) => {
   if (lastEdit === '-') return false;
@@ -97,7 +120,7 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
 };
 
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate, onToggleArrived }) => {
+const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDates, canEditMaterial, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate, onToggleArrived }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -117,7 +140,7 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
         <span
           {...attributes}
           {...listeners}
-          title={dragLocked ? 'ล้างคำค้นหา/ตัวกรองก่อนจึงจะจัดลำดับได้' : 'ลากเพื่อจัดลำดับ'}
+          title={!canPlan ? 'ไม่มีสิทธิ์จัดลำดับ' : dragLocked ? 'ล้างคำค้นหา/ตัวกรองก่อนจึงจะจัดลำดับได้' : 'ลากเพื่อจัดลำดับ'}
           style={{
             cursor: dragLocked ? 'not-allowed' : 'grab',
             color: dragLocked ? 'var(--mse-border)' : 'var(--mse-muted)',
@@ -127,6 +150,7 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
         </span>
       </td>
       <td className="text-nowrap">
+        {canPlan && (<>
         <Button variant="link" size="sm" className="p-0 me-2 text-primary icon-btn" title="แก้ไข" aria-label="แก้ไข" onClick={() => onEdit(order)}>
           <i className="bi bi-pencil-square" aria-hidden="true" />
         </Button>
@@ -136,6 +160,7 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
         <Button variant="link" size="sm" className="p-0 text-danger icon-btn" title="ลบ" aria-label="ลบ" onClick={() => onDelete(order)}>
           <i className="bi bi-trash" aria-hidden="true" />
         </Button>
+        </>)}
       </td>
       <td>
         <Button
@@ -156,6 +181,8 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
               className="bi bi-envelope-check text-success ms-1"
               title="Engineer จัดทำ Master เรียบร้อยแล้ว"
             />
+          ) : !canPlan ? (
+            <i className="bi bi-question-circle-fill text-warning ms-1" title="ยังไม่มี Routing" aria-hidden="true" />
           ) : (
             <Button
               variant="link"
@@ -183,6 +210,29 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
         {due.icon === 'near' && <i className="bi bi-clock-fill me-1" title="ใกล้ถึงกำหนดส่ง" />}
         {String(order.due_date || '').slice(0, 10)}
       </td>
+       <td className="num">
+        <Button
+          variant="link"
+          size="sm"
+          className="p-0 text-decoration-none num"
+          disabled={datesLocked}
+          title={canEditMaterial ? 'แก้วัน Issue' : 'ดูประวัติวัน Issue'}
+          onClick={() => onEditDate('issue', order)}
+        >
+          {shortDate(order.issue_date)}
+        </Button>
+        {/* ⚠️ ต้องเทียบค่าให้ชัด ไม่ใช่ truthy — เครื่องที่ยังไม่ได้รัน DDL จะไม่มีคีย์นี้ (undefined)
+            ซึ่งต้องแปลว่า "อัตโนมัติ" ไม่ใช่ "แก้มือ" ไม่งั้นทุกแถวจะติดป้ายผิด */}
+        {isManualIssueDate(order) && (
+          <i
+            className="bi bi-pencil-fill ms-1 text-muted"
+            style={{ fontSize: '0.7em' }}
+            title="แก้ด้วยมือ — จัดแผนรอบหน้าจะไม่ทับค่านี้"
+            aria-hidden="true"
+          />
+        )}
+        {logMarker(order.date_log_counts?.issue)}
+      </td>
       <td className="num">
         <Button
           variant="link"
@@ -202,7 +252,7 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
           size="sm"
           className="p-0 text-decoration-none num"
           disabled={datesLocked}
-          title={canEditDates ? 'แก้วันMaterial เข้า (Material Ready)' : 'ดูประวัติวันMaterial เข้า'}
+          title={canEditMaterial ? 'แก้วันMaterial เข้า (Material Ready)' : 'ดูประวัติวันMaterial เข้า'}
           onClick={() => onEditDate('material', order)}
         >
           {shortDate(order.material_ready_date)}
@@ -233,8 +283,8 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canEditDates, onEd
             <Form.Select
               size="sm"
               value={ok ? 'ok' : 'notok'}
-              disabled={datesLocked || !canEditDates}
-              title={canEditDates
+              disabled={datesLocked || !canEditMaterial}
+              title={canEditMaterial
                 ? 'Mat\'l OK = ยืนยันของเข้า (ปลดการรอ เริ่มได้เลย) · ยังไม่เข้า/ผิดปกติ = คงรอวันวัตถุดิบ'
                 : 'ดูสถานะ Material เข้า'}
               aria-label="สถานะ Material เข้า"
@@ -278,6 +328,8 @@ const OrderControlTower = () => {
   const [showFilters, setShowFilters] = useState(false); // เปิด/ปิดแผงตัวกรอง
   const [timestamps, setTimestamps] = useState({ last_plan: '-', last_edit: '-' });
   const [horizon, setHorizon] = useState(null);
+  const [lastRun, setLastRun] = useState(null); // สรุปการรันแผนล่าสุดจาก plan_runs (null = ไม่มี/ยังไม่รัน DDL)
+  const [showRuns, setShowRuns] = useState(false); // ไดอะล็อกประวัติแผน
   const [settings, setSettings] = useState(null); // system_settings — ใช้ทำ legend ใน preview
 
   // snapshot สำหรับ Undo — เก็บก่อนยืนยัน Replan/เรียง/บันทึกลำดับ
@@ -309,6 +361,11 @@ const OrderControlTower = () => {
   const canManageSettings = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
   // PCMC (=PLANNER) หรือ ADMIN เท่านั้นที่แก้/แนบวันได้ — MFG เปิดดูประวัติ+ดาวน์โหลดได้อย่างเดียว
   const canEditDates = !!currentUser && ['ADMIN', 'PLANNER'].includes(currentUser.role);
+  // MC (Material Control) เข้าหน้านี้ได้แต่แก้ได้เฉพาะวัน material / Mat'l เข้า / วัน Issue (backend: orders.js materialRoles)
+  const canEditMaterial = !!currentUser && ['ADMIN', 'PLANNER', 'MC'].includes(currentUser.role);
+  // ปุ่มที่เปลี่ยนแผน/ออเดอร์ (เพิ่ม/แก้/ปิด/ลบ, ลากจัดลำดับ, Replan, เรียง Due, Undo) — backend guard ด้วย writeRoles อยู่แล้ว
+  // ซ่อนไว้ไม่ให้ MC กดแล้วเจอแค่ 403
+  const canPlan = canEditDates;
   const today = todayDateStr(); // คำนวณครั้งเดียวต่อ render แล้วส่งให้ทุกแถว (เลี่ยง Intl ต่อแถว)
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -344,6 +401,17 @@ const OrderControlTower = () => {
     }
   }, []);
 
+  // งานที่วางไม่ลงของแผนล่าสุด — เก็บใน plan_runs ฝั่ง backend จึงรอด refresh/คนอื่นเปิดหน้า
+  // เงียบถ้าดึงไม่ได้ (503 = ยังไม่ได้รัน DDL): เป็นคำเตือนเสริม เหมือน fetchHorizon
+  const fetchLastRun = useCallback(async () => {
+    try {
+      const runs = await apiCall('/schedule/runs?limit=1&detail=1');
+      setLastRun(Array.isArray(runs) && runs.length > 0 ? runs[0] : null);
+    } catch {
+      setLastRun(null);
+    }
+  }, []);
+
   const fetchTimestamps = useCallback(async () => {
     try {
       const data = await apiCall('/system/timestamps');
@@ -372,9 +440,10 @@ const OrderControlTower = () => {
     fetchOrders();
     fetchTimestamps();
     fetchHorizon();
+    fetchLastRun();
     // settings สำหรับ legend — เงียบถ้าดึงไม่ได้ (legend ใช้ค่า default แทน)
     apiCall('/system/settings').then(setSettings).catch(() => {});
-  }, [fetchOrders, fetchTimestamps, fetchHorizon]);
+  }, [fetchOrders, fetchTimestamps, fetchHorizon, fetchLastRun]);
 
   const filteredOrders = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -410,6 +479,7 @@ const OrderControlTower = () => {
   const handleDragEnd = (event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    if (!canPlan) return;
     if (filterActive) {
       showToast('กรุณาล้างคำค้นหา/ตัวกรองก่อนทำการจัดลำดับใหม่', 'warning');
       return;
@@ -561,6 +631,7 @@ const OrderControlTower = () => {
       await fetchOrders();
       await fetchTimestamps();
       await fetchHorizon(); // แผนใหม่กินปฏิทินไปอีก — เช็คว่ายังเหลือพอไหม
+      await fetchLastRun();
       setPreview(null);
       const cw = decoded.capacity_warning;
       if (cw) {
@@ -578,7 +649,67 @@ const OrderControlTower = () => {
     } finally {
       setIsPlanning(false);
     }
-  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, fetchHorizon, showToast, planErrorToast]);
+  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, fetchHorizon, fetchLastRun, showToast, planErrorToast]);
+
+  // ---- ย้อนกลับแผน: เลือกรุ่นในประวัติ → preview (ไม่ใช่ sim — แผนรุ่นนั้นถูกเก็บไว้แล้ว) → ยืนยัน → rollback ----
+  const doRollback = useCallback(async (runId) => {
+    setPreviousOrderList(JSON.parse(JSON.stringify(baselineRef.current ?? orders)));
+    setIsPlanning(true);
+    try {
+      const decoded = await apiCall(`/schedule/runs/${runId}/rollback`, { method: 'POST' });
+      setFromRunResponse(decoded.data ?? [], decoded.report ?? []);
+      baselineRef.current = null;
+      await fetchOrders();
+      await fetchTimestamps();
+      await fetchLastRun();
+      setPreview(null);
+      showToast(decoded.message || `ย้อนกลับไปแผนรุ่น #${runId} แล้ว`, 'success');
+    } catch (err) {
+      planErrorToast(err);
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [orders, setFromRunResponse, fetchOrders, fetchTimestamps, fetchLastRun, showToast, planErrorToast]);
+
+  const handlePickRun = useCallback(async (run) => {
+    setShowRuns(false);
+    setPreview({ mode: 'rollback', loading: true, diff: null, detail: null, onConfirm: () => doRollback(run.id) });
+    try {
+      const decoded = await apiCall(`/schedule/runs/${run.id}`);
+      // "ก่อน" = ออเดอร์ตอนนี้ · "หลัง" = FG ของแผนรุ่นนั้น — ใช้ buildPlanDiff ตัวเดียวกับ Replan
+      const diff = buildPlanDiff({ beforeRows: orders, afterReport: decoded.report ?? [] });
+      const cmp = decoded.compare || { closed: [], notInRun: [] };
+      const when = String(run.created_at ?? '').replace('T', ' ').slice(0, 16);
+      const notices = [
+        `แผนรุ่น #${run.id} — ยืนยันแล้วจะเขียนแผนนี้กลับเป็นแผนปัจจุบันทันที โดยไม่รัน engine ใหม่`,
+        // rollback ไม่ได้รัน engine → ยอดผลิตที่สแกนหลังจากรุ่นนั้นไม่ถูกนับ (แผนจะยังมีขั้นตอนที่ทำไปแล้ว)
+        `ยอดผลิตที่บันทึกหลัง ${when} ไม่ถูกนำมาคิดในแผนที่ย้อนกลับ — ควรกด Replan หลังย้อนกลับเพื่อให้แผนตรงกับหน้างาน`,
+      ];
+      if (cmp.notInRun.length > 0) {
+        // ออเดอร์กลุ่มนี้ไม่อยู่ใน order_dates ของรุ่นนั้น → rollback ไม่แตะวันของมัน (คงวันจากแผนปัจจุบัน) แต่ไม่มีแถวในแผน
+        notices.push(`ออเดอร์ ${cmp.notInRun.length} รายการไม่มีในแผนรุ่นนั้น (เพิ่มทีหลัง/หลุดแผน) — ตาราง Orders จะยังโชว์วันเริ่ม-เสร็จจากแผนปัจจุบัน แต่จะไม่อยู่ในคิวเครื่อง/หน้า Planning จนกว่าจะ Replan: ${cmp.notInRun.slice(0, 10).join(', ')}${cmp.notInRun.length > 10 ? ' …' : ''}`);
+      }
+      if (cmp.closed.length > 0) {
+        notices.push(`ออเดอร์ที่ปิด/ลบไปแล้ว ${cmp.closed.length} รายการจะถูกตัดออกจากแผนที่ย้อนกลับ`);
+      }
+      setPreview((p) => (p && p.mode === 'rollback'
+        ? {
+          ...p,
+          loading: false,
+          diff,
+          detail: buildPlanDetail(decoded.data ?? []),
+          machineSchedule: buildMachineSchedule(decoded.data ?? []),
+          capacityWarning: decoded.run?.capacity_warning ?? null,
+          blockedSteps: decoded.run?.blocked_steps ?? [],
+          unplanned: decoded.run?.unplanned ?? [],
+          notices,
+        }
+        : p));
+    } catch (err) {
+      setPreview(null);
+      showToast(err.message, 'danger');
+    }
+  }, [orders, doRollback, showToast]);
 
   const handleReplan = useCallback(() => {
     openPreview({ mode: 'replan', beforeRows: orders, onConfirm: doReplan });
@@ -691,6 +822,13 @@ const OrderControlTower = () => {
   };
 
   // Undo — restore snapshot แล้ว refetch (ไม่ replan อัตโนมัติ; ผู้ใช้กด Replan เอง)
+  // Export "ตามที่เห็นบนจอ" — filteredOrders คือผลหลังค้นหา/ตัวกรอง เรียงตามลำดับปัจจุบัน
+  const handleExport = useCallback(() => {
+    if (filteredOrders.length === 0) return;
+    exportXlsx(stampedFilename('orders', today), 'Orders', EXPORT_COLUMNS, filteredOrders);
+    showToast(`บันทึกไฟล์ Excel ${filteredOrders.length} รายการแล้ว`);
+  }, [filteredOrders, today, showToast]);
+
   const handleUndo = async () => {
     if (!previousOrderList) return;
     setIsPlanning(true);
@@ -754,6 +892,16 @@ const OrderControlTower = () => {
                 <i className="bi bi-sliders" aria-hidden="true" />
               </Button>
             )}
+            {canManageSettings && (
+              <Button
+                variant="outline-secondary"
+                title="ประวัติแผน (เทียบ / ย้อนกลับ)"
+                aria-label="ประวัติแผน"
+                onClick={() => setShowRuns(true)}
+              >
+                <i className="bi bi-layers-half" aria-hidden="true" />
+              </Button>
+            )}
             <Button
               variant="outline-secondary"
               title="ประวัติการผลิต"
@@ -779,6 +927,8 @@ const OrderControlTower = () => {
 
       {/* เตือนก่อนงานจะเริ่มหลุด — capacity_warning เห็นก็ต่อเมื่อหลุดไปแล้ว */}
       <CalendarHorizonAlert horizon={horizon} onGoToCalendar={() => navigate('/calendar')} />
+      {/* งานที่วางไม่ลงของแผนล่าสุด — เดิมหายไปพร้อม dialog ของ Replan */}
+      <LastRunAlert run={lastRun} />
 
       {/* ===== toolbar ===== */}
       <Toolbar>
@@ -810,9 +960,11 @@ const OrderControlTower = () => {
           )}
         </Button>
 
-        <Button className="btn-mse" onClick={() => setFormOrder(null)} disabled={reorderDirty}>
-          <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
-        </Button>
+        {canPlan && (
+          <Button className="btn-mse" onClick={() => setFormOrder(null)} disabled={reorderDirty}>
+            <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
+          </Button>
+        )}
 
         <Toolbar.End>
           {reorderDirty ? (
@@ -834,6 +986,7 @@ const OrderControlTower = () => {
             </>
           ) : (
             <>
+              {canPlan && (<>
               <Button
                 variant="warning"
                 disabled={!previousOrderList || busy}
@@ -851,6 +1004,15 @@ const OrderControlTower = () => {
               </Button>
               <Button variant="outline-primary" disabled={busy} onClick={handleSortByDueDate}>
                 <i className="bi bi-arrow-down-up me-1" aria-hidden="true" /> เรียงตาม Due Date
+              </Button>
+              </>)}
+              <Button
+                variant="outline-success"
+                disabled={busy || filteredOrders.length === 0}
+                onClick={handleExport}
+                title="บันทึกรายการที่เห็นอยู่เป็นไฟล์ Excel"
+              >
+                <i className="bi bi-file-earmark-excel me-1" aria-hidden="true" /> Export Excel
               </Button>
             </>
           )}
@@ -875,9 +1037,11 @@ const OrderControlTower = () => {
         <div className="empty-state">
           <i className="bi bi-inbox" aria-hidden="true" />
           <div>ยังไม่มีออเดอร์ในระบบ</div>
-          <Button className="btn-mse mt-3" onClick={() => setFormOrder(null)}>
-            <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
-          </Button>
+          {canPlan && (
+            <Button className="btn-mse mt-3" onClick={() => setFormOrder(null)}>
+              <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
+            </Button>
+          )}
         </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
@@ -898,6 +1062,7 @@ const OrderControlTower = () => {
                     <th>Delivery mode</th>
                     <th>Qty</th>
                     <th>Due Date</th>
+                    <th>Issue Date</th>
                     <th>Release Date</th>
                     <th>Material</th>
                     <th>Confirm</th>
@@ -913,9 +1078,11 @@ const OrderControlTower = () => {
                       key={order.batch}
                       order={order}
                       today={today}
-                      dragLocked={filterActive}
+                      dragLocked={filterActive || !canPlan}
                       datesLocked={reorderDirty}
+                      canPlan={canPlan}
                       canEditDates={canEditDates}
+                      canEditMaterial={canEditMaterial}
                       onEdit={(o) => setFormOrder(o)}
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
@@ -971,7 +1138,7 @@ const OrderControlTower = () => {
         icon={dateEdit ? DATE_EDIT_META[dateEdit.kind].icon : ''}
         batch={dateEdit ? dateEdit.order.batch : ''}
         currentValue={dateEdit ? dateEdit.order[DATE_EDIT_META[dateEdit.kind].bodyKey] : ''}
-        canEdit={canEditDates}
+        canEdit={dateEdit && ['material', 'issue'].includes(dateEdit.kind) ? canEditMaterial : canEditDates}
         onHide={closeDateEdit}
         onSubmit={submitDateEdit}
       />
@@ -983,6 +1150,13 @@ const OrderControlTower = () => {
         onError={showErrorToast}
       />
 
+      <PlanRunsDialog
+        show={showRuns}
+        onHide={() => setShowRuns(false)}
+        onPick={handlePickRun}
+        canRollback={canManageSettings}
+      />
+
       <PlanPreviewDialog
         show={!!preview}
         mode={preview ? preview.mode : 'replan'}
@@ -992,6 +1166,7 @@ const OrderControlTower = () => {
         capacityWarning={preview ? preview.capacityWarning : null}
         blockedSteps={preview ? preview.blockedSteps ?? [] : []}
         unplanned={preview ? preview.unplanned ?? [] : []}
+        notices={preview ? preview.notices ?? [] : []}
         loading={preview ? preview.loading : false}
         settings={settings}
         todayStr={today}

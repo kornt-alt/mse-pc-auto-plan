@@ -246,6 +246,23 @@ const RoutingEditTable = ({
             edits={edits}
             problems={problems}
             rowKey={rowKey}
+            field="handling_time"
+            original={m.handlingTime}
+            onEdit={onEdit}
+            type="number"
+            min="0"
+            step="any"
+            disabled={!canEdit}
+            className="num"
+            aria-label="เวลาหยิบจับ (นาที/ชิ้น)"
+          />
+        </td>
+
+        <td style={{ width: 120 }}>
+          <CellInput
+            edits={edits}
+            problems={problems}
+            rowKey={rowKey}
             field="setup_time"
             original={m.setupTime}
             onEdit={onEdit}
@@ -294,7 +311,8 @@ const RoutingEditTable = ({
       <tr>
         <th>ขั้นตอน</th>
         <th>เครื่องจักร</th>
-        <th>เวลาต่อชิ้น (นาที)</th>
+        <th title="เวลาเดินเครื่องต่อชิ้น">เวลาต่อชิ้น (นาที)</th>
+        <th title="เวลาหยิบจับต่อชิ้น — ระบบบวกเข้ากับเวลาต่อชิ้นตอนคำนวณแผน">เวลาหยิบจับ (นาที)</th>
         <th>เวลาตั้งเครื่อง (นาที)</th>
         <th style={{ minWidth: 190 }}>จิ๊กที่ต้องใช้</th>
         <th className="text-center">ใช้งาน</th>
@@ -313,7 +331,7 @@ const RoutingEditTable = ({
               <tbody>
                 {groups.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-muted small text-center py-3">
+                    <td colSpan={8} className="text-muted small text-center py-3">
                       Model นี้ยังไม่มีขั้นตอนการผลิต
                     </td>
                   </tr>
@@ -337,7 +355,7 @@ const RoutingEditTable = ({
                             aria-label={`ชื่อ${stepLabel(g.stepPos)}`}
                           />
                         </td>
-                        <td colSpan={6} className="text-muted small">
+                        <td colSpan={7} className="text-muted small">
                           ขั้นนี้ยังไม่มีเครื่องจักร — เพิ่มได้ในโหมดจัดการลำดับ
                         </td>
                       </tr>

@@ -1,0 +1,105 @@
+/* พิมพ์รายงาน / Save as PDF — A4 แนวนอน
+ * กดปุ่ม "พิมพ์" (ReportActions → window.print()) หรือ Ctrl+P ได้ผลเหมือนกัน: พิมพ์แท็บที่เปิดอยู่
+ * (react-bootstrap ซ่อนแท็บที่ไม่ active ด้วย display:none อยู่แล้ว)
+ *
+ * ⚠️ Chrome ไม่แบ่งตารางแนวนอนข้ามหน้า — ส่วนที่เกินขอบขวาถูกตัดทิ้ง
+ *    A4 แนวนอนขอบ 8mm กว้างพิมพ์ได้ราว 1050px จึงย่อฟอนต์/ระยะ และแต่ละ matrix จำกัดช่วงวันที่พิมพ์เอง
+ *    (ดู printWarning ของแต่ละหน้า)
+ */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ส่วนที่ไม่ใช่เนื้อรายงาน — ปุ่มทุกตัวอยู่ในกล่องเหล่านี้อยู่แล้ว
+   * ⚠️ ห้ามซ่อน .btn ทั้งหมด: ชื่อเครื่องในแท็บสรุปรายเครื่อง (Plan & Actual) เป็น btn-link — ซ่อนแล้วคอลัมน์ว่าง */
+  .navbar,
+  .nav-tabs,
+  .no-print,
+  .rpt-toolbar,
+  .page-header__actions,
+  .toast-container {
+    display: none !important;
+  }
+  .btn-link {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+
+  .print-only { display: block !important; }
+
+  .container,
+  .container-fluid {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .page-header { margin-bottom: 4px; }
+  .page-header__subtitle { display: none; }
+
+  .print-header {
+    border-bottom: 2px solid #000;
+    margin-bottom: 6px;
+    padding-bottom: 3px;
+  }
+  .print-header__title { font-size: 14px; font-weight: 700; }
+  .print-header__meta { font-size: 9px; display: flex; flex-wrap: wrap; gap: 12px; }
+
+  /* KPI เป็นแถวเดียวแบบกะทัดรัด */
+  .kpi-strip {
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .kpi-card { padding: 2px 6px; box-shadow: none !important; }
+  .kpi-value { font-size: 13px; }
+  .kpi-label,
+  .kpi-sub { font-size: 8px; }
+
+  /* ตาราง: เลิก scroll/sticky ให้ยาวลงหลายหน้า หัวตารางซ้ำทุกหน้า */
+  .rpt-wrap,
+  .matrix-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    border: none !important;
+  }
+  .rpt-table,
+  .rpt-wrap table {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 9px !important;
+  }
+  .rpt-table th,
+  .rpt-table td {
+    padding: 1px 3px !important;
+    height: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+  .rpt-table .frozen,
+  .rpt-table thead th {
+    position: static !important;
+  }
+  .rpt-table .col-date { min-width: 0 !important; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  .cell-job { font-size: 8px; line-height: 12px; padding: 0 1px; }
+  .rpt-table tbody tr:hover td { background-color: inherit; }
+
+  /* Dispatch List: 1 เครื่องต่อหน้า */
+  .print-page-group + .print-page-group { break-before: page; }
+
+  /* Daily Result พิมพ์แยก 2 ครึ่งเดือน — ครึ่งบนจอซ่อนไว้ ใช้ matrix เต็มแทน */
+  .print-split { display: block !important; }
+  .screen-only { display: none !important; }
+}

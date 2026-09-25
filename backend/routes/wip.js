@@ -8,7 +8,8 @@ const { sendError } = require('../middleware/errorHandler');
 const { buildWipData, buildWipSummary } = require('../services/wipCalc');
 
 const router = express.Router();
-const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
+// MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
+const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'MC');
 
 const ACTIVE_ORDERS_WHERE = "plan_mode != 'COMPLETED' AND is_deleted = 0";
 // quirk เดิม: != ตัดแถว plan_mode NULL ออกด้วย (ต่างจาก orders list ที่มี OR IS NULL — ห้าม harmonize)

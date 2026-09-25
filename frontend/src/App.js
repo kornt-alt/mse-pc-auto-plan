@@ -21,6 +21,7 @@ import WipPage from './pages/wip/WipPage';
 import PlanActualPage from './pages/planActual/PlanActualPage';
 import RoutingConfigPage from './pages/routingConfig/RoutingConfigPage';
 import JigMasterPage from './pages/jig/JigMasterPage';
+import IssueDateMasterPage from './pages/issueDateMaster/IssueDateMasterPage';
 import AlertSettingsPage from './pages/alertSettings/AlertSettingsPage';
 
 // เมนูตาม role (ตาม AppDrawer ของระบบเดิม)
@@ -34,15 +35,16 @@ const MENU = [
     icon: 'bi-hdd-stack',
     roles: ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'],
   },
-  { path: '/orders', label: 'Orders', icon: 'bi-list-check', roles: ['ADMIN', 'PLANNER'] },
+  // MC (Material Control) เข้า Orders ได้เพื่อแก้วัน material / Mat'l / Issue — ปุ่มวางแผนถูกซ่อนในหน้าเพจ (canPlan)
+  { path: '/orders', label: 'Orders', icon: 'bi-list-check', roles: ['ADMIN', 'PLANNER', 'MC'] },
   {
     label: 'แผนการผลิต',
     icon: 'bi-calendar3-week',
     items: [
-      { path: '/planning', label: 'Planning View', icon: 'bi-grid-3x3', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-      { path: '/plan-actual', label: 'Plan & Actual', icon: 'bi-bar-chart-line', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-      { path: '/wip', label: 'WIP', icon: 'bi-box-seam', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-      { path: '/daily-result', label: 'Daily Result', icon: 'bi-clipboard-data', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+      { path: '/planning', label: 'Planning View', icon: 'bi-grid-3x3', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
+      { path: '/plan-actual', label: 'Plan & Actual', icon: 'bi-bar-chart-line', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
+      { path: '/wip', label: 'WIP', icon: 'bi-box-seam', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
+      { path: '/daily-result', label: 'Daily Result', icon: 'bi-clipboard-data', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
     ],
   },
   {
@@ -53,6 +55,7 @@ const MENU = [
       { path: '/calendar', label: 'Calendar', icon: 'bi-calendar-range', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/routing-config', label: 'Routing Config', icon: 'bi-signpost-split', roles: ['ADMIN', 'PLANNER', 'MFG'] },
       { path: '/jig', label: 'Jig Master', icon: 'bi-tools', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+      { path: '/issue-date-master', label: 'Issue Date Master', icon: 'bi-file-earmark-text', roles: ['ADMIN', 'PLANNER'] },
       // Import Data เหลือ ADMIN/PLANNER — seed/upload ถูก guard role เดียวกันแล้ว (Phase 3)
       { path: '/settings', label: 'Import Data', icon: 'bi-database-up', roles: ['ADMIN', 'PLANNER'] },
       { divider: true },
@@ -243,7 +246,7 @@ const App = () => (
       <Route
         path="/orders"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MC']}>
             <OrderControlTower />
           </ProtectedRoute>
         }
@@ -251,7 +254,7 @@ const App = () => (
       <Route
         path="/planning"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <PlanningView />
           </ProtectedRoute>
         }
@@ -259,7 +262,7 @@ const App = () => (
       <Route
         path="/plan-actual"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <PlanActualPage />
           </ProtectedRoute>
         }
@@ -267,7 +270,7 @@ const App = () => (
       <Route
         path="/wip"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <WipPage />
           </ProtectedRoute>
         }
@@ -275,7 +278,7 @@ const App = () => (
       <Route
         path="/daily-result"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <DailyResultPage />
           </ProtectedRoute>
         }
@@ -301,6 +304,14 @@ const App = () => (
         element={
           <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
             <JigMasterPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/issue-date-master"
+        element={
+          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+            <IssueDateMasterPage />
           </ProtectedRoute>
         }
       />

@@ -28,3 +28,5 @@ CHANGELOG.md
 Thumbs.db
 
 backend/order_attachments/
+
+.claude/

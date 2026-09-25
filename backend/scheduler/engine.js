@@ -47,6 +47,18 @@ const {
 } = require('../utils/dates');
 const { isDayUnitMachine } = require('./dayUnit');
 const { isBlockedOn, isAnyJigBlocked } = require('./jigBlocks');
+const { pickFlowByActuals } = require('./flowPick');
+
+// ตัดตัวเลือกของ step ให้เหลือเครื่องเดียว โดยเก็บ cycle/setup ของ **index เดียวกัน** ไว้คู่กัน
+// mOpts[j] / cOpts[j] / sOpts[j] จับคู่กันด้วยตำแหน่ง (ดู scheduler/machineFilter.js) — ตัดแค่ mOpts
+// จะทำให้เครื่องที่เลือกได้เวลาของเครื่องอื่น · ไม่มีเครื่องนั้นในตัวเลือก = คืนของเดิม (engine เลือกเอง)
+// เครื่องที่ล็อกเป็น alternative 0 → ผลเหมือนการตัดแบบเดิมทุกบิต (ลูปใช้ j = 0 อยู่แล้ว)
+function narrowToMachine(mOpts, cOpts, sOpts, mac) {
+  const idx = mOpts.indexOf(mac);
+  if (!mac || idx < 0) return { mOpts, cOpts, sOpts };
+  const pick = (opts) => (idx < opts.length ? [opts[idx]] : opts.length ? [opts[0]] : opts);
+  return { mOpts: [mOpts[idx]], cOpts: pick(cOpts), sOpts: pick(sOpts) };
+}
 const { pyInt, pyFloat, sortedNumericKeys } = require('./pyUtils');
 
 // clean_text (L426/L676): upper + ตัด space - _ –
@@ -224,6 +236,7 @@ class SchedulerEngine {
     flowIdx,
     originalBatches = null,
     machineMemory = null,
+    firstMachine = null,
   ) {
     const steps = orderConfig.steps;
     const machineOptions = orderConfig.machineOptions;
@@ -268,6 +281,11 @@ class SchedulerEngine {
       }
 
       let mOpts = Array.isArray(machineOptions[i]) ? machineOptions[i] : [machineOptions[i]];
+      // FIX: สร้าง cOpts/sOpts ก่อนล็อกเครื่อง แล้วตัดทั้งสามชุดด้วย index เดียวกัน (narrowToMachine)
+      //   เดิมตัดแค่ mOpts = [lockMac] แต่ cOpts/sOpts ยังเต็ม → ลูปข้างล่างจับคู่ j = 0 ได้ cycle/setup/jig
+      //   ของเครื่องทางเลือกตัวแรก ไม่ใช่ของเครื่องที่ล็อก (ผิดเมื่อเครื่องที่ล็อกไม่ใช่ alternative 0)
+      let cOpts = Array.isArray(cycleTimeOpts[i]) ? cycleTimeOpts[i] : [cycleTimeOpts[i]];
+      let sOpts = Array.isArray(setupTimeOpts[i]) ? setupTimeOpts[i] : [setupTimeOpts[i]];
 
       // HYBRID: ล็อกเครื่องถ้างานคาเครื่อง (L381-406)
       let isWipStep = false;
@@ -297,11 +315,10 @@ class SchedulerEngine {
             }
           }
         }
-        if (lockMac && mOpts.includes(lockMac)) mOpts = [lockMac];
+        if (lockMac) ({ mOpts, cOpts, sOpts } = narrowToMachine(mOpts, cOpts, sOpts, lockMac));
       }
-
-      const cOpts = Array.isArray(cycleTimeOpts[i]) ? cycleTimeOpts[i] : [cycleTimeOpts[i]];
-      const sOpts = Array.isArray(setupTimeOpts[i]) ? setupTimeOpts[i] : [setupTimeOpts[i]];
+      // manual flow: เครื่องของขั้นตอนแรกที่ผู้ใช้เลือกเอง (orders.wip_machine) — ล็อกเครื่องเดียว
+      if (i === 0 && firstMachine) ({ mOpts, cOpts, sOpts } = narrowToMachine(mOpts, cOpts, sOpts, firstMachine));
 
       let bestMachineRes = null;
       let bestMachineStartStr = '1970-01-01';
@@ -368,13 +385,19 @@ class SchedulerEngine {
         let s = 0;
         let jig = '-';
         let jigs = [];
+        let handling = 0;
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
           jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
+          handling = 'handling' in rawS ? pyFloat(rawS.handling) : 0;
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
+
+        // เวลาต่อชิ้นจริง = cycle + handling (นาที/ชิ้น ทั้งคู่) — handling = 0 คือของเดิมเป๊ะ
+        // บวกที่นี่ ไม่ใช่ที่ configProcessor เพราะสาขา day-unit ข้างบนอ่าน ct ดิบเป็น "จำนวนวัน"
+        const ctEff = ct + handling;
 
         // HYBRID RULE: คาเครื่องอยู่ setup = 0 (L464-465)
         if (isWipStep) s = 0;
@@ -391,10 +414,10 @@ class SchedulerEngine {
           if (av < this.MIN_FRAGMENT_TIME) av = 0;
           if (av > 0) {
             assertDivisibleCt(ct, model, step, machine);
-            const canQty = Math.floor(av / ct);
+            const canQty = Math.floor(av / ctEff);
             const doNow = Math.min(canQty, qtyRem);
             if (doNow > 0) {
-              const timeUsed = doNow * ct;
+              const timeUsed = doNow * ctEff;
               qtyRem -= doNow;
               runDatesFound.push({ date: d, qty: doNow, timeUsed });
             }
@@ -620,6 +643,10 @@ class SchedulerEngine {
       }
 
       let mOpts = Array.isArray(machineOptions[i]) ? machineOptions[i] : [machineOptions[i]];
+      // FIX: สร้าง cOpts/sOpts ก่อนล็อกเครื่อง แล้วตัดทั้งสามชุดด้วย index เดียวกัน (narrowToMachine)
+      //   — บั๊กเดียวกับสายถอยหลัง: เดิมเครื่องที่ล็อกได้ cycle/setup/jig ของ alternative ตัวแรก
+      let cOpts = Array.isArray(cycleTimeOpts[i]) ? cycleTimeOpts[i] : [cycleTimeOpts[i]];
+      let sOpts = Array.isArray(setupTimeOpts[i]) ? setupTimeOpts[i] : [setupTimeOpts[i]];
 
       // HYBRID: ล็อกเครื่องเดิมถ้า step เริ่มทำแล้ว (L628-654)
       let isWipStep = false;
@@ -649,11 +676,12 @@ class SchedulerEngine {
             }
           }
         }
-        if (lockMac && mOpts.includes(lockMac)) mOpts = [lockMac];
+        if (lockMac) ({ mOpts, cOpts, sOpts } = narrowToMachine(mOpts, cOpts, sOpts, lockMac));
       }
-
-      const cOpts = Array.isArray(cycleTimeOpts[i]) ? cycleTimeOpts[i] : [cycleTimeOpts[i]];
-      const sOpts = Array.isArray(setupTimeOpts[i]) ? setupTimeOpts[i] : [setupTimeOpts[i]];
+      // manual flow: เครื่องของขั้นตอนแรกที่ผู้ใช้เลือกเอง (orders.wip_machine) — ล็อกเครื่องเดียว
+      if (i === 0 && wip.firstMachine) {
+        ({ mOpts, cOpts, sOpts } = narrowToMachine(mOpts, cOpts, sOpts, wip.firstMachine));
+      }
 
       if (!prevD || prevD === SENTINEL_FAR_DATE) {
         stepFailed = true;
@@ -710,13 +738,19 @@ class SchedulerEngine {
         let s = 0;
         let jig = '-';
         let jigs = [];
+        let handling = 0;
         if (rawS && typeof rawS === 'object' && !Array.isArray(rawS)) {
           s = pyFloat('time' in rawS ? rawS.time : 0);
           jig = 'jig' in rawS ? rawS.jig : '-';
           jigs = Array.isArray(rawS.jigs) ? rawS.jigs : [];
+          handling = 'handling' in rawS ? pyFloat(rawS.handling) : 0;
         } else {
           s = rawS ? pyFloat(rawS) : 0;
         }
+
+        // เวลาต่อชิ้นจริง = cycle + handling — ⚠️ อยู่นอกบล็อก HYBRID RULE 3 ข้างล่างโดยตั้งใจ:
+        // งาน WIP ตัด setup เป็น 0 ได้ แต่การหยิบจับยังเสียเวลาต่อชิ้นอยู่ ห้ามย้ายเข้าไปในนั้น
+        const ctEff = ct + handling;
 
         // HYBRID RULE 3 (L720-745): มี actual / เป็น WIP / uploaded-WIP → setup 0
         const stepClean = String(step).trim().toUpperCase();
@@ -818,10 +852,10 @@ class SchedulerEngine {
 
             if (sDone && av > 0) {
               assertDivisibleCt(ct, model, step, m);
-              const can = Math.floor(av / ct);
+              const can = Math.floor(av / ctEff);
               const doNow = Math.min(can, stepQtyRem - curQty);
               if (doNow > 0) {
-                const timeUsed = doNow * ct;
+                const timeUsed = doNow * ctEff;
                 if (!isSimulation) {
                   runItemsTemp.push({
                     date: d,
@@ -1102,7 +1136,12 @@ class SchedulerEngine {
       }
 
       const rawWipFlow = o.WIP_FlowIndex;
+      // FIX: manual flow (orders.flow_locked + เริ่มขั้นตอนแรก) = ผู้ใช้แค่เลือกเส้นทาง ยังไม่ได้ผลิต
+      //   ไม่ใช่ WIP — คง priority และ forward/backward ตามที่ตั้งไว้ (ของเดิม flow > 0 = WIP เสมอ
+      //   → -999 + บังคับเดินหน้า) · ไม่มี flow_locked = key ไม่มี = พฤติกรรมเดิมทุกบิต
+      const isManualFlow = o.WIP_FlowLocked === true && pyInt(pyFloat(o.WIP_StartStepIndex ?? 0)) <= 0;
       const hasWipFlow =
+        !isManualFlow &&
         rawWipFlow !== null && rawWipFlow !== undefined && pyInt(pyFloat(rawWipFlow)) > 0;
 
       if (isRunning || hasWipFlow) {
@@ -1134,7 +1173,12 @@ class SchedulerEngine {
       let bestResult = null;
       let bestFlowIdx = 0;
 
-      for (const fIdx of availableFlows.keys()) {
+      // FIX: เส้นทางที่ผู้ใช้ล็อก (orders.flow_locked) — จำลองเฉพาะ flow นั้น ไม่เลือกเองจากทุก flow
+      const lockedFlow = order.WIP_FlowLocked === true ? pyInt(pyFloat(order.WIP_FlowIndex ?? 0)) : null;
+      const backwardFlowKeys =
+        lockedFlow !== null && availableFlows.has(lockedFlow) ? [lockedFlow] : [...availableFlows.keys()];
+
+      for (const fIdx of backwardFlowKeys) {
         try {
           const simCalendar = structuredClone(this.workingCalendar);
           const simConfig = this.buildFlowConfig(model, availableFlows, fIdx);
@@ -1149,6 +1193,10 @@ class SchedulerEngine {
             fIdx,
             'original_batches' in order ? order.original_batches : null,
             machineMemory,
+            // manual flow: เครื่องของขั้นตอนแรกที่ผู้ใช้เลือก (ใช้เฉพาะตอนล็อกเส้นทาง + เริ่มขั้นตอนแรก)
+            lockedFlow !== null && pyInt(pyFloat(order.WIP_StartStepIndex ?? 0)) <= 0
+              ? order.WIP_Machine || null
+              : null,
           );
 
           if (!res.failed) {
@@ -1213,6 +1261,10 @@ class SchedulerEngine {
         startStep: stepVal,
         finishDate: order.WIP_FinishDate ?? null,
         machine: order.WIP_Machine ?? null,
+        // manual flow (ล็อกเส้นทาง + เริ่มขั้นตอนแรก): wip_machine = เครื่องของขั้นตอนแรกที่ผู้ใช้เลือก
+        // (WIP จริงใช้ช่องเดียวกันเป็น "เครื่องของขั้นตอนก่อนหน้า" ซึ่งมีความหมายเฉพาะ startStep > 0)
+        firstMachine:
+          order.WIP_FlowLocked === true && stepVal === 0 ? order.WIP_Machine || null : null,
       };
       // Mat'l: บังคับเริ่มหาคิวตาม effectiveReadyDate (fallback releaseDate/earliest) — L1183-1191
       let effectiveStartDate = earliestDate;
@@ -1239,9 +1291,11 @@ class SchedulerEngine {
       }
 
       const isWipStep = wip.startStep > 0;
+      // FIX: orders.flow_locked = ผู้ใช้เลือกเส้นทางเอง (รวม Flow 0) — ไม่จำลองหา flow และไม่เลือกตามยอดจริง
+      const flowLocked = order.WIP_FlowLocked === true;
 
       // จำลองหา flow เฉพาะงานใหม่เอี่ยมที่ไม่ได้บังคับ flow (L1208-1246)
-      if (!isWipStep && availableFlows.size > 1 && !hasActuals && wip.flow === 0) {
+      if (!isWipStep && !flowLocked && availableFlows.size > 1 && !hasActuals && wip.flow === 0) {
         let bestTime = Infinity;
         let winner = 0;
         for (const fIdx of availableFlows.keys()) {
@@ -1283,19 +1337,34 @@ class SchedulerEngine {
           }
         }
         bestFlowIdx = winner;
-      } else if (bestFlowIdx === 0 && availableFlows.size > 1 && hasActuals) {
-        // โหมดห้ามเปลี่ยน flow (WIP / มี actuals): เลือก flow ที่มีสเต็ปตรงกับที่ทำไปแล้ว (L1248-1256)
-        for (const [fIdx, stepsObj] of availableFlows) {
-          const flowSteps = Object.values(stepsObj).map((st) => String(st).trim().toUpperCase());
-          if ([...actualStepNames].some((act) => flowSteps.includes(act))) {
-            bestFlowIdx = fIdx;
-            break;
-          }
+      } else if (bestFlowIdx === 0 && availableFlows.size > 1 && hasActuals && !isWipStep && !flowLocked) {
+        // โหมดห้ามเปลี่ยน flow (มี actuals): เลือก flow ที่ตรงกับของที่ทำไปแล้วจริง (L1248-1256)
+        // FIX: เดิมหยิบ flow แรกที่มีชื่อ step ตรงแค่ตัวเดียว → step ที่มีทุก flow (HEAT-TREATMENT)
+        //   ลากไป flow 0 แล้ววาง step ที่ผลิตเสร็จแล้วซ้ำ — ให้คะแนนแบบใน scheduler/flowPick.js แทน
+        //   และไม่เข้าสาขานี้เมื่อผู้ใช้ระบุ WIP step เอง (isWipStep) แม้จะเป็น flow 0
+        const batchActualMachines = {};
+        const existingStepNames = new Set();
+        for (const sub of obList) {
+          const subB = 'batch' in sub ? sub.batch : batch;
+          Object.assign(batchActualMachines, this.actualMachines[subB] ?? {});
+          for (const st of Object.keys(machineMemory[subB] ?? {})) existingStepNames.add(st);
         }
+        for (const st of Object.keys(machineMemory[batch] ?? {})) existingStepNames.add(st);
+        const picked = pickFlowByActuals({
+          availableFlows,
+          actualStepNames,
+          actualMachines: batchActualMachines,
+          fixedMachineForModel: this.fixedMachine[model],
+          existingStepNames,
+        });
+        if (picked !== undefined) bestFlowIdx = picked;
       }
 
       // ฟางเส้นสุดท้าย (L1259-1260) — Python ทำซ้ำ 2 ครั้ง idempotent, ครั้งเดียวพอ
-      if (bestFlowIdx === 0 || !availableFlows.has(bestFlowIdx)) {
+      // FIX: flow 0 ที่ได้มาจาก WIP ที่ผู้ใช้ระบุ step หรือจาก pickFlowByActuals เป็นการเลือกจริง
+      //   ไม่ใช่ "ยังไม่เลือก" — อย่าให้บรรทัดนี้เปลี่ยนทับ (เดิม 0 ถูกตีความเป็นค่าว่างเสมอ)
+      const flowIsChosen = (isWipStep || hasActuals || flowLocked) && availableFlows.has(bestFlowIdx);
+      if (!flowIsChosen && (bestFlowIdx === 0 || !availableFlows.has(bestFlowIdx))) {
         bestFlowIdx = availableFlows.keys().next().value;
       }
 

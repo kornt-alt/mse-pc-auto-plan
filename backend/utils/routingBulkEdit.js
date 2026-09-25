@@ -4,7 +4,7 @@
 // งานที่ endpoint นี้ทำคือ "แก้หลายแถวของ model เดียวในทีเดียว" จากตารางแก้ในช่องได้เลย
 //   steps    = [{ id, step_name, setup_group }]                    → UPDATE routing_config
 //   machines = [{ id, machine, cycle_time, setup_time, jig_ids?,   → UPDATE machine_config
-//                 is_active? }]                                       (+ machine_config_jig)
+//                 handling_time?, is_active? }]                        (+ machine_config_jig)
 //
 // ⚠️ **ไม่รับเลข flow_index / step_index / alternative_index** โดยตั้งใจ
 // ลำดับขั้นถูกจัดการด้วย /routing_config/move และ insert_step/insert_alt ซึ่งขยับเลขของ
@@ -87,6 +87,15 @@ function parseBulkEdit(body) {
     if (setupTime === null) return err(`เวลาตั้งเครื่องของ ${machine} ต้องเป็นตัวเลขไม่ติดลบ`);
 
     const row = { id, machine, cycle_time: cycleTime, setup_time: setupTime };
+
+    // ⚠️ handling_time เป็น optional ด้วยเหตุผลเดียวกับ is_active ข้างล่าง — คอลัมน์นี้เพิ่มด้วย
+    // DDL รันมือ เครื่องที่ยังไม่ได้รันต้องแก้เวลา/จิ๊กได้ตามปกติ หน้าเว็บจึงส่งมาเฉพาะแถวที่
+    // ผู้ใช้แตะช่องนี้จริง แล้ว route ถึงจะตอบ 503 เมื่อไม่มีคอลัมน์
+    if (item.handling_time !== undefined) {
+      const handlingTime = toTime(item.handling_time);
+      if (handlingTime === null) return err(`เวลาหยิบจับของ ${machine} ต้องเป็นตัวเลขไม่ติดลบ`);
+      row.handling_time = handlingTime;
+    }
 
     // ⚠️ jig_ids เป็น optional และต้องเป็น optional — ส่งมาเฉพาะแถวที่ผู้ใช้แตะช่องจิ๊กจริง
     // machine_config.jig_id ว่างเป็นเรื่องปกติ (sentinel '-' มีไว้รองรับเคสนี้) ถ้าบังคับให้ทุกแถว
