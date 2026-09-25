@@ -14,7 +14,8 @@ const { sendError } = require('../middleware/errorHandler');
 const { addDays, pad2 } = require('../utils/dates');
 
 const router = express.Router();
-const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
+// MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
+const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'MC');
 
 // ========== GET /api/daily-result/machines (L2342-2344) ==========
 router.get('/machines', verifyToken, readRoles, async (req, res) => {

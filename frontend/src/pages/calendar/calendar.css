@@ -1,5 +1,5 @@
 /* calendar.css — grid ปฏิทิน เครื่อง × วัน (import จาก CalendarPage.js เท่านั้น)
-   โครง frozen column + sticky header ลอกจาก pages/planning/planning.css แต่ตรึงคอลัมน์เดียว
+   โครง frozen column + sticky header เดิมลอกจาก pages/planning/planning.css (ลบแล้ว 2026-09-25 — หน้ารายงานใช้ theme/report.css แทน) แต่ตรึงคอลัมน์เดียว
    ใช้เฉพาะ token --mse-* ที่มีอยู่แล้วใน theme/theme.css ห้ามเพิ่มเฉดใหม่ */
 
 .cal-matrix-wrap {

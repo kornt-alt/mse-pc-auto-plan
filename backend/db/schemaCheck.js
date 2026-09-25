@@ -89,6 +89,37 @@ const OPTIONAL_OBJECTS = [
     column: 'issue_date_manual',
     impact: 'แก้วัน Issue ด้วยมือแล้วรันแผนรอบหน้าจะทับค่าที่แก้ไว้ (ธงกันทับหายไป)',
   },
+  {
+    name: 'orders.flow_locked',
+    kind: 'column',
+    table: 'orders',
+    column: 'flow_locked',
+    impact: 'เลือกเส้นทางเอง (manual flow) ที่ขั้นตอนแรกไม่ได้ผล — Flow 0 ไม่ล็อก และ flow อื่นโดดคิวแบบ WIP เหมือนเดิม',
+  },
+  {
+    name: 'system_settings.last_plan_at',
+    kind: 'column',
+    table: 'system_settings',
+    column: 'last_plan_at',
+    impact: 'ป้าย "แผนไม่เป็นปัจจุบัน" หายเมื่อ restart server (เวลาวางแผนล่าสุดอยู่ใน memory อย่างเดียว)',
+  },
+  {
+    name: 'system_settings.last_edit_at',
+    kind: 'column',
+    table: 'system_settings',
+    column: 'last_edit_at',
+    impact: 'restart แล้วป้ายกลับเป็น "แผนเป็นปัจจุบัน" ทั้งที่มีการแก้ค้างอยู่ (เวลาแก้ไขล่าสุดอยู่ใน memory อย่างเดียว)',
+  },
+  {
+    name: 'plan_runs',
+    kind: 'table',
+    impact: 'ไม่มีประวัติแผน/ย้อนกลับแผนไม่ได้ และรายการงานที่วางไม่ลงหายเมื่อ refresh (services/planRunService.js)',
+  },
+  {
+    name: 'plan_run_rows',
+    kind: 'table',
+    impact: 'ไม่มีประวัติแผน/ย้อนกลับแผนไม่ได้ (ต้องมีคู่กับ plan_runs)',
+  },
 ];
 
 // ---- ส่วน pure (เทสได้ ไม่แตะ DB) ----

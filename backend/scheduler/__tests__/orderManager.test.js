@@ -78,6 +78,36 @@ test('packOrders: merge ภายใน 30 วัน + ชื่อ PACK-{setup_
   ]);
 });
 
+test('packOrders: order ที่ล็อกเส้นทาง (manual flow) ไม่ถูกมัดรวมกับ order ที่ไม่ล็อก', () => {
+  const om = new OrderManager(true, { pack_window_days: 30 });
+  const [finals] = om.processOrders([
+    order({ Batch: 'A', dueDate: '2026-08-01' }),
+    order({ Batch: 'B', dueDate: '2026-08-02', WIP_FlowIndex: 0, WIP_FlowLocked: true }),
+    order({ Batch: 'C', dueDate: '2026-08-03', WIP_FlowIndex: 2, WIP_FlowLocked: true }),
+    order({ Batch: 'D', dueDate: '2026-08-04', WIP_FlowIndex: 2, WIP_FlowLocked: true }),
+  ]);
+  const groups = finals.map((o) => (o.original_batches || []).map((s) => s.batch).sort().join(','));
+  assert.deepEqual(groups.sort(), ['A', 'B', 'C,D']);
+});
+
+test('packOrders: ล็อกเส้นทางเดียวกันแต่คนละเครื่องขั้นตอนแรก → ไม่ถูกมัดรวม', () => {
+  const om = new OrderManager(true, { pack_window_days: 30 });
+  const lock = { WIP_FlowIndex: 1, WIP_FlowLocked: true };
+  const [finals] = om.processOrders([
+    order({ Batch: 'E', dueDate: '2026-08-01', ...lock, WIP_Machine: 'NL9' }),
+    order({ Batch: 'F', dueDate: '2026-08-02', ...lock, WIP_Machine: 'NL11' }),
+    order({ Batch: 'G', dueDate: '2026-08-03', ...lock, WIP_Machine: 'NL9' }),
+  ]);
+  const groups = finals.map((o) => (o.original_batches || []).map((s) => s.batch).sort().join(','));
+  assert.deepEqual(groups.sort(), ['E,G', 'F']);
+});
+
+test('parseRawInput: WIP_FlowLocked มี key เฉพาะตอนล็อก (total_plan_map ของ parity ต้องไม่เปลี่ยน)', () => {
+  const om = new OrderManager(false);
+  assert.equal('WIP_FlowLocked' in om.parseRawInput({ Batch: 'X' }), false);
+  assert.equal(om.parseRawInput({ Batch: 'X', WIP_FlowLocked: true }).WIP_FlowLocked, true);
+});
+
 test('packOrders: ขอบ window — gap 31 วันไม่ merge', () => {
   const om = new OrderManager(true, { pack_window_days: 30 });
   const [finals] = om.processOrders([

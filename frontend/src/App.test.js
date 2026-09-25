@@ -42,3 +42,16 @@ test('OPERATOR เห็นเฉพาะ Shop Floor ไม่มี dropdown',
   expect(screen.queryByText('แผนการผลิต')).not.toBeInTheDocument();
   expect(screen.queryByText('ตั้งค่า')).not.toBeInTheDocument();
 });
+
+test('MC เห็น Orders + กลุ่มแผนการผลิต แต่ไม่เห็นกลุ่มตั้งค่า', () => {
+  loginAs('MC');
+  render(<App />);
+  expect(screen.getByText('Orders')).toBeInTheDocument();
+  expect(screen.queryByText('Shop Floor')).not.toBeInTheDocument();
+  // ไม่มีเมนูไหนในกลุ่มตั้งค่าที่ MC เข้าได้ → กลุ่มหายทั้งกลุ่ม
+  expect(screen.queryByText('ตั้งค่า')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText('แผนการผลิต'));
+  expect(screen.getByText('Planning View')).toBeInTheDocument();
+  expect(screen.getByText('Plan & Actual')).toBeInTheDocument();
+});

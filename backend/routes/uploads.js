@@ -314,7 +314,8 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
         uniqueRows
       );
     });
-    // quirk เดิม: /upload/orders ไม่ markEdit
+    // FIX: ระบบเดิม /upload/orders ไม่ markEdit (quirk) ทำให้ import ออเดอร์ใหม่แล้วป้าย "แผนไม่เป็นปัจจุบัน" ยังเขียว
+    timestamps.markEdit();
     const verb = isReplace ? 'แทนที่ทั้งตาราง' : 'เพิ่มออเดอร์ใหม่';
     res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ` });
   } catch (err) {

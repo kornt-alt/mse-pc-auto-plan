@@ -162,8 +162,10 @@ function machineHorizons(calendar) {
 // args: { flowIndex, startStepIndex, qty, anchorDate, today }
 export function estimateFlow(info, args) {
   const { flowIndex, startStepIndex, qty, anchorDate, today } = args || {};
+  // FIX: เดิมกรอง step_index > 0 ทิ้ง ทั้งที่ routing จริงเริ่มที่ 0 และ engine วาง step 0 ด้วย
+  //   เวลารวมต่อ flow (label ใน dropdown) จึงขาด step แรกไปทั้ง step
   const allSteps = (info.steps || [])
-    .filter((s) => s.flow_index === flowIndex && s.step_index > 0)
+    .filter((s) => s.flow_index === flowIndex && s.step_index >= 0)
     .sort((a, b) => a.step_index - b.step_index);
   const startIdx = startStepIndex == null ? (allSteps[0] ? allSteps[0].step_index : 0) : startStepIndex;
   const ordered = allSteps.filter((s) => s.step_index >= startIdx);
@@ -185,7 +187,9 @@ export function estimateFlow(info, args) {
     const est = estimateStep(step, {
       ...baseOpts,
       horizon: (step.machine && horizons[step.machine]) || info.calendar_horizon || null,
-      isWipStart: step.step_index === startIdx && startStepIndex != null,
+      // step แรกสุด (manual flow ที่ยังไม่ผลิต) ไม่ใช่ WIP → คิด setup เต็ม — ตรงกับ isUploadedWip
+      // ของ engine ที่ต้องการ startStep > 0
+      isWipStart: step.step_index === startIdx && startStepIndex != null && startStepIndex > 0,
       fromDate,
       prevIsDayUnit,
     });
@@ -232,4 +236,32 @@ export function formatDays(days) {
   if (days == null) return '-';
   if (days < 1) return '<1 วัน';
   return `~${Math.round(days * 10) / 10} วัน`;
+}
+
+// เครื่องทางเลือกของ step นั้นเอง (จาก model-info: alternatives เรียงตาม alternative_index)
+// ใช้เป็นตัวเลือก "เครื่องของขั้นตอนแรก" ตอนเลือกเส้นทางเอง (manual flow)
+export function ownMachinesOf(step) {
+  const alts = (step && step.alternatives) || [];
+  return [...new Set(alts.map((a) => a.machine).filter(Boolean))];
+}
+
+// สลับค่าเวลาของขั้นตอนแรกของ flow เป็นของเครื่องที่ผู้ใช้เลือก — ให้ประมาณการตรงกับที่ engine
+// ล็อกเครื่องนั้น (engine.js narrowToMachine) · ไม่เจอเครื่องในตัวเลือก = คืนของเดิม
+export function withFirstMachine(steps, flowIndex, machine) {
+  const list = steps || [];
+  const flowSteps = list.filter((s) => s.flow_index === flowIndex);
+  if (!machine || flowSteps.length === 0) return list;
+  const firstIdx = Math.min(...flowSteps.map((s) => s.step_index));
+  return list.map((s) => {
+    if (s.flow_index !== flowIndex || s.step_index !== firstIdx) return s;
+    const alt = (s.alternatives || []).find((a) => a.machine === machine);
+    if (!alt) return s;
+    return {
+      ...s,
+      machine: alt.machine,
+      cycle_time: alt.cycle_time,
+      setup_time: alt.setup_time,
+      handling_time: alt.handling_time ?? 0,
+    };
+  });
 }

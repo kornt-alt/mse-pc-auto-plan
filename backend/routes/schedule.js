@@ -4,6 +4,8 @@
 //   - mutex in-memory กัน run/replan ซ้อน -> 409 (ของเก่าปล่อยรันซ้อนได้)
 //   - GET /latest ต่อท้ายแถว _META_CAPACITY_ จาก calendar_config (ของเก่าไม่ส่ง
 //     ทำให้ capacity header ในหน้า Planning ตกเป็น default 1240 หลัง refresh)
+//   - ใหม่ (ไม่มีใน Python): GET /runs, GET /runs/:id, POST /runs/:id/rollback — ประวัติแผน (services/planRunService.js)
+//     และ GET /latest แนบ run = สรุปการรันล่าสุด (งานที่วางไม่ลง ฯลฯ) ที่เดิมหายไปพร้อม response
 const express = require('express');
 const { query, transaction } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
@@ -11,11 +13,15 @@ const { sendError } = require('../middleware/errorHandler');
 const schedulerService = require('../services/schedulerService');
 const planLock = require('../state/planLock');
 const timestamps = require('../state/timestamps');
-const { DROP_DATES } = require('../config/constants');
+const { PLAN_RUN_KEEP } = require('../config/constants');
+const { buildLatestPayload } = require('../utils/latestPayload');
+const { toRunSummary, compareRunToOpenOrders } = require('../utils/planRuns');
+const planRuns = require('../services/planRunService');
 
 const router = express.Router();
 
-const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
+// MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
+const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'MC');
 const writeRoles = requireRole('ADMIN', 'PLANNER');
 
 const LOCK_MESSAGE = 'มีการวางแผนกำลังทำงานอยู่ กรุณารอสักครู่แล้วลองใหม่';
@@ -76,7 +82,9 @@ router.post('/run', verifyToken, writeRoles, async (req, res) => {
     const planModeOverrides = isSimulation ? cleanPlanModeOverrides(req.body && req.body.plan_mode_overrides) : {};
     const jigOverrides = isSimulation ? cleanJigOverrides(req.body && req.body.jig_overrides) : [];
 
-    const result = await schedulerService.run(false, { isSimulation, priorityOverrides, planModeOverrides, jigOverrides });
+    const result = await schedulerService.run(false, {
+      isSimulation, priorityOverrides, planModeOverrides, jigOverrides, actor: req.user?.username ?? null,
+    });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L333-347: ล้างป้าย ❓ เฉพาะ order ใหม่ -> ประทับตัวที่หา routing ไม่เจอ -> ปลดป้าย New
@@ -124,7 +132,9 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
 
     if (!isSimulation) timestamps.markEdit(); // = api.py L379 (GLOBAL_LAST_EDIT_TIME ก่อนรัน)
 
-    const result = await schedulerService.run(true, { isSimulation, priorityOverrides, planModeOverrides, jigOverrides });
+    const result = await schedulerService.run(true, {
+      isSimulation, priorityOverrides, planModeOverrides, jigOverrides, actor: req.user?.username ?? null,
+    });
     const totalPlanMap = result.total_plan_map || {};
 
     // api.py L393-426: ล้างป้าย ❓ ทุก order (ไม่ลบ) -> ประทับใหม่ (PACK แตก original_batches) -> ปลดป้าย New
@@ -167,88 +177,103 @@ router.post('/replan', verifyToken, writeRoles, async (req, res) => {
 });
 
 // ========== GET /api/schedule/latest — โหลดแผนล่าสุดจาก schedule_results ==========
+// shape เดิม { data, report } สร้างโดย utils/latestPayload.js (ตัวเดียวกับ GET /runs/:id)
+// + run: สรุปของการรันล่าสุดจาก plan_runs (งานที่วางไม่ลง / blocked / capacity warning) — ไม่มีตาราง = null
 router.get('/latest', verifyToken, readRoles, async (req, res) => {
   try {
     const results = await query('SELECT * FROM schedule_results ORDER BY id');
-
-    const cleanedData = [];
-    const batchFinishMap = {};
-
-    for (const r of results) {
-      const subBatchName = r.sub_batches ? r.sub_batches : r.batch;
-      cleanedData.push({
-        date: r.date_plan,
-        machine: r.machine,
-        batch: subBatchName,
-        model: r.model,
-        step: r.step,
-        qty: r.qty_plan ? `${Math.trunc(r.qty_plan)} pcs` : '0 pcs',
-        timeUsed_min: r.time_used_min,
-        isSetup: !!r.is_setup,
-        step_index: r.step_index,
-        parent_batch: r.batch,
-      });
-
-      if (!r.is_setup && r.date_plan && !DROP_DATES.includes(r.date_plan)) {
-        if (!(r.batch in batchFinishMap)) batchFinishMap[r.batch] = r.date_plan;
-        else if (r.date_plan > batchFinishMap[r.batch]) batchFinishMap[r.batch] = r.date_plan;
-      }
-    }
-
-    // Map คง insertion order (batch เป็นเลขล้วน — object ธรรมดาจะ reorder)
-    const subToParent = new Map();
-    for (const r of results) {
-      const sub = r.sub_batches ? r.sub_batches : r.batch;
-      if (!subToParent.has(sub)) subToParent.set(sub, r.batch);
-    }
-
     // lookup สดจากตาราง orders (ของเก่า query ต่อ batch — รวบเป็น query เดียว ผลเท่ากัน)
     const orderRows = await query('SELECT batch, model, qty, due_date FROM orders ORDER BY id');
-    const orderMap = new Map();
-    for (const o of orderRows) {
-      if (!orderMap.has(o.batch)) orderMap.set(o.batch, o);
+    const calendarRows = await query('SELECT machine, date, available_time FROM calendar_config ORDER BY id');
+    const payload = buildLatestPayload(results, orderRows, calendarRows);
+
+    let run = null;
+    if (await planRuns.hasPlanRunTables()) {
+      run = (await planRuns.listRuns(1, true))[0] ?? null;
     }
-
-    const shipmentReport = [];
-    for (const [subBatch, parentBatch] of subToParent) {
-      if (String(subBatch).startsWith('PACK-')) continue; // ไม่โชว์แถวมัด PACK
-
-      const order = orderMap.get(subBatch);
-      const dueDate = order && order.due_date ? order.due_date : '2099-12-31';
-      const qty = order ? order.qty : 0;
-      const model = order ? order.model : '-';
-      const actualFinish = batchFinishMap[parentBatch] ?? '-';
-
-      let delay = 'Unknown';
-      if (actualFinish !== '-' && actualFinish !== '9999-12-31') {
-        delay = actualFinish > dueDate ? 'Yes' : 'No';
-      }
-
-      shipmentReport.push({
-        Batch: subBatch, Model: model, Qty: qty,
-        DueDate: dueDate, FinishDate: actualFinish, Delay: delay,
-      });
-    }
-
-    shipmentReport.sort((a, b) => (a.DueDate < b.DueDate ? -1 : a.DueDate > b.DueDate ? 1 : 0));
-
-    // FIX: ต่อท้ายแถว _META_CAPACITY_ จาก calendar_config — shape เดียวกับ response ของ /run
-    // (ของเก่าไม่ส่ง ทำให้ capacity header เพี้ยนเป็น default หลัง refresh หน้า)
-    const calendarRows = await query(
-      'SELECT machine, date, available_time FROM calendar_config ORDER BY id',
-    );
-    for (const c of calendarRows) {
-      cleanedData.push({
-        date: c.date, machine: c.machine, batch: '_META_CAPACITY_',
-        step: 'META', qty: '0 pcs', timeUsed_min: 0,
-        isSetup: false, step_index: -1, parent_batch: '_META_CAPACITY_',
-        available_min: c.available_time,
-      });
-    }
-
-    res.json({ data: cleanedData, report: shipmentReport });
+    res.json({ ...payload, run });
   } catch (err) {
     sendError(req, res, err);
+  }
+});
+
+// ========== ประวัติแผน (plan_runs + plan_run_rows, DDL รันมือ) ==========
+// ไม่มีตาราง → 503 พร้อมข้อความชี้ไปที่ DDL (แบบเดียวกับ routes/jig.js ensureTable)
+const ensurePlanRunTables = async (res) => {
+  if (await planRuns.hasPlanRunTables()) return true;
+  res.status(503).json({ message: 'ยังไม่ได้สร้างตาราง plan_runs / plan_run_rows ในฐานข้อมูล (คำสั่ง DDL อยู่ใน CHANGELOG.md)' });
+  return false;
+};
+
+const parseRunId = (raw) => {
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+};
+
+// GET /api/schedule/runs?limit=&detail=1 — รายการรุ่น ใหม่สุดก่อน · detail=1 แนบ unplanned/blocked_steps
+router.get('/runs', verifyToken, readRoles, async (req, res) => {
+  try {
+    if (!(await ensurePlanRunTables(res))) return;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || PLAN_RUN_KEEP, 1), PLAN_RUN_KEEP);
+    res.json(await planRuns.listRuns(limit, truthy(req.query.detail) || req.query.detail === '1'));
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+// GET /api/schedule/runs/:id — แผนของรุ่นนั้นใน shape เดียวกับ /latest + สรุป + สิ่งที่ต่างจากออเดอร์ตอนนี้
+router.get('/runs/:id', verifyToken, readRoles, async (req, res) => {
+  try {
+    if (!(await ensurePlanRunTables(res))) return;
+    const id = parseRunId(req.params.id);
+    if (!id) return res.status(400).json({ message: 'รหัสรุ่นแผนไม่ถูกต้อง' });
+    const header = await planRuns.getRunHeader(id);
+    if (!header) return res.status(404).json({ message: 'ไม่พบแผนรุ่นนี้ (อาจถูกลบไปตามจำนวนรุ่นที่เก็บ)' });
+
+    const rows = await planRuns.getRunRows(id);
+    const orderRows = await query('SELECT batch, model, qty, due_date FROM orders ORDER BY id');
+    const calendarRows = await query('SELECT machine, date, available_time FROM calendar_config ORDER BY id');
+    const openMap = await planRuns.loadOpenOrders();
+    res.json({
+      ...buildLatestPayload(rows, orderRows, calendarRows),
+      run: toRunSummary(header, true),
+      compare: compareRunToOpenOrders(rows, new Set(openMap.keys())),
+    });
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+// POST /api/schedule/runs/:id/rollback — เขียนแผนรุ่นนั้นกลับเป็นแผนปัจจุบัน (ไม่รัน engine)
+// ถือ planLock กันชนกับ run/replan · ออเดอร์ที่ปิดไปแล้วถูกตัดออก · is_new / is_missing_routing ไม่ย้อน
+router.post('/runs/:id/rollback', verifyToken, writeRoles, async (req, res) => {
+  if (!planLock.tryAcquire()) {
+    return res.status(409).json({ message: LOCK_MESSAGE });
+  }
+  try {
+    if (!(await ensurePlanRunTables(res))) return;
+    const id = parseRunId(req.params.id);
+    if (!id) return res.status(400).json({ message: 'รหัสรุ่นแผนไม่ถูกต้อง' });
+
+    const out = await planRuns.rollbackTo(id, req.user?.username ?? null);
+    if (!out) return res.status(404).json({ message: 'ไม่พบแผนรุ่นนี้ (อาจถูกลบไปตามจำนวนรุ่นที่เก็บ)' });
+    timestamps.markPlan();
+
+    res.locals.auditDetail = {
+      rollback: { from: id, new_run: out.runId, rows: out.rows.length, dropped_rows: out.dropped, orders_updated: out.ordersUpdated },
+    };
+
+    const orderRows = await query('SELECT batch, model, qty, due_date FROM orders ORDER BY id');
+    const calendarRows = await query('SELECT machine, date, available_time FROM calendar_config ORDER BY id');
+    res.json({
+      message: `ย้อนกลับไปแผนรุ่น #${id} แล้ว`,
+      ...buildLatestPayload(out.rows, orderRows, calendarRows),
+      run_id: out.runId,
+    });
+  } catch (err) {
+    sendError(req, res, err);
+  } finally {
+    planLock.release();
   }
 });
 

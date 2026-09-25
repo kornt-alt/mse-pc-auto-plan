@@ -165,7 +165,8 @@ const TABLES = [
   program_notes        NVARCHAR(255) NULL,
   material_arrived     BIT           NULL,
   issue_date           NVARCHAR(50)  NULL,
-  issue_date_manual    BIT           NOT NULL DEFAULT 0
+  issue_date_manual    BIT           NOT NULL DEFAULT 0,
+  flow_locked          BIT           NOT NULL DEFAULT 0
 )`,
     columns: [
       { name: 'batch', definition: 'NVARCHAR(100) NULL' },
@@ -194,6 +195,9 @@ const TABLES = [
       { name: 'material_arrived', definition: 'BIT NULL', optional: true },
       { name: 'issue_date', definition: 'NVARCHAR(50) NULL', optional: true },
       { name: 'issue_date_manual', definition: 'BIT NOT NULL DEFAULT 0', optional: true },
+      // 1 = ผู้ใช้เลือกเส้นทาง (wip_flow_index) เอง — ทำให้ Flow 0 ล็อกได้ และ manual flow ที่
+      // เริ่มขั้นตอนแรกไม่ถูกนับเป็น WIP (ไม่โดดคิว -999) ดู scheduler/engine.js
+      { name: 'flow_locked', definition: 'BIT NOT NULL DEFAULT 0', optional: true },
     ],
   },
   {
@@ -365,7 +369,9 @@ const TABLES = [
   min_fragment_time      INT   NOT NULL DEFAULT 120,
   switch_penalty_minutes INT   NOT NULL DEFAULT 60,
   minor_setup_time       INT   NOT NULL DEFAULT 40,
-  max_overlap_percentage FLOAT NOT NULL DEFAULT 1.0
+  max_overlap_percentage FLOAT NOT NULL DEFAULT 1.0,
+  last_plan_at           NVARCHAR(19) NULL,
+  last_edit_at           NVARCHAR(19) NULL
 )`,
     columns: [
       { name: 'pack_window_days', definition: 'INT NOT NULL DEFAULT 30' },
@@ -375,6 +381,9 @@ const TABLES = [
       { name: 'switch_penalty_minutes', definition: 'INT NOT NULL DEFAULT 60' },
       { name: 'minor_setup_time', definition: 'INT NOT NULL DEFAULT 40' },
       { name: 'max_overlap_percentage', definition: 'FLOAT NOT NULL DEFAULT 1.0' },
+      // เวลาวางแผน/แก้ไขล่าสุดของป้าย stale (state/timestamps.js) — 'YYYY-MM-DD HH:mm:ss' แบบ nowBangkokString()
+      { name: 'last_plan_at', definition: 'NVARCHAR(19) NULL' },
+      { name: 'last_edit_at', definition: 'NVARCHAR(19) NULL' },
     ],
     // ⚠️ ตารางนี้เป็นตารางเดียวที่โค้ดอ่านโดย **ไม่มี** OBJECT_ID guard — ไม่มีแถว id=1
     // ก็ยังใช้ default ได้ แต่ไม่มีตารางเลยคือ 500 ทุกครั้งที่วางแผน (ดู SCHEDULER_FLOW.md)
@@ -521,6 +530,68 @@ WHERE jig_id IS NOT NULL AND LTRIM(RTRIM(jig_id)) NOT IN ('', '-')`,
     ],
     indexes: [
       { name: 'IX_order_date_log_batch_kind', sql: 'CREATE INDEX IX_order_date_log_batch_kind ON order_date_log (batch, date_kind, id)' },
+    ],
+  },
+  {
+    table: 'plan_runs',
+    optional: true,
+    note: 'ประวัติแผนที่เขียนลง schedule_results จริง (RUN/REPLAN/ROLLBACK) + รายงานของการรัน — เก็บ 30 รุ่นล่าสุด (services/planRunService.js)',
+    createSql: `CREATE TABLE plan_runs (
+  id                  INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+  created_at          DATETIME2(0)  NOT NULL CONSTRAINT DF_plan_runs_created DEFAULT SYSDATETIME(),
+  created_by          NVARCHAR(100) NULL,
+  kind                NVARCHAR(20)  NOT NULL,
+  restored_from       INT           NULL,
+  message             NVARCHAR(500) NULL,
+  total_planned_steps INT           NULL,
+  report_json         NVARCHAR(MAX) NULL,
+  order_dates_json    NVARCHAR(MAX) NULL
+)`,
+    columns: [
+      { name: 'created_at', definition: 'DATETIME2(0) NULL' },
+      { name: 'created_by', definition: 'NVARCHAR(100) NULL' },
+      { name: 'kind', definition: 'NVARCHAR(20) NULL' },
+      { name: 'restored_from', definition: 'INT NULL' },
+      { name: 'message', definition: 'NVARCHAR(500) NULL' },
+      { name: 'total_planned_steps', definition: 'INT NULL' },
+      { name: 'report_json', definition: 'NVARCHAR(MAX) NULL' },
+      { name: 'order_dates_json', definition: 'NVARCHAR(MAX) NULL' },
+    ],
+  },
+  {
+    table: 'plan_run_rows',
+    optional: true,
+    note: 'แถวแผนของแต่ละ run — คอลัมน์ชื่อเดียวกับ schedule_results, seq = ลำดับเดิม (ORDER BY id)',
+    createSql: `CREATE TABLE plan_run_rows (
+  run_id        INT           NOT NULL,
+  seq           INT           NOT NULL,
+  batch         NVARCHAR(100) NULL,
+  sub_batches   NVARCHAR(255) NULL,
+  model         NVARCHAR(255) NULL,
+  step          NVARCHAR(100) NULL,
+  step_index    INT           NULL,
+  machine       NVARCHAR(100) NULL,
+  date_plan     NVARCHAR(50)  NULL,
+  time_used_min FLOAT         NULL,
+  qty_plan      FLOAT         NULL,
+  is_setup      BIT           NULL
+)`,
+    columns: [
+      { name: 'run_id', definition: 'INT NULL' },
+      { name: 'seq', definition: 'INT NULL' },
+      { name: 'batch', definition: 'NVARCHAR(100) NULL' },
+      { name: 'sub_batches', definition: 'NVARCHAR(255) NULL' },
+      { name: 'model', definition: 'NVARCHAR(255) NULL' },
+      { name: 'step', definition: 'NVARCHAR(100) NULL' },
+      { name: 'step_index', definition: 'INT NULL' },
+      { name: 'machine', definition: 'NVARCHAR(100) NULL' },
+      { name: 'date_plan', definition: 'NVARCHAR(50) NULL' },
+      { name: 'time_used_min', definition: 'FLOAT NULL' },
+      { name: 'qty_plan', definition: 'FLOAT NULL' },
+      { name: 'is_setup', definition: 'BIT NULL' },
+    ],
+    indexes: [
+      { name: 'IX_plan_run_rows_run', sql: 'CREATE INDEX IX_plan_run_rows_run ON plan_run_rows (run_id, seq)' },
     ],
   },
 ];

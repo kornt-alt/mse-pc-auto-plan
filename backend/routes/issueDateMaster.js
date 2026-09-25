@@ -17,6 +17,7 @@ const express = require('express');
 const { query, execute } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
+const { markEditOnSuccess } = require('../middleware/markEdit');
 const { DEFAULT_ISSUE_LEAD_DAYS } = require('../utils/issueDate');
 
 const router = express.Router();
@@ -76,7 +77,7 @@ router.get('/issue-date-master', verifyToken, readRoles, async (req, res) => {
 // PUT /api/issue-date-master/:model — upsert หนึ่งโมเดล
 // upsert เพราะหน้าเว็บใช้ปุ่มเดียวทั้ง "เพิ่ม" และ "แก้" — ไม่ต้องแยก POST/PUT ให้ผู้ใช้สับสน
 // ================================================================
-router.put('/issue-date-master/:model', verifyToken, writeRoles, async (req, res) => {
+router.put('/issue-date-master/:model', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     if (!(await ensureTable(res))) return;
     const model = cleanModel(req.params.model);
@@ -106,7 +107,7 @@ router.put('/issue-date-master/:model', verifyToken, writeRoles, async (req, res
 // ================================================================
 // DELETE /api/issue-date-master/:model — ลบแถว = โมเดลนั้นกลับไปใช้ค่า default
 // ================================================================
-router.delete('/issue-date-master/:model', verifyToken, writeRoles, async (req, res) => {
+router.delete('/issue-date-master/:model', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     if (!(await ensureTable(res))) return;
     const model = cleanModel(req.params.model);

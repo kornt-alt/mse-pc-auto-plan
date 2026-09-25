@@ -33,6 +33,19 @@ export function effectiveReadyDate({ releaseDate, materialDate, materialArrived 
   return { date, source, waiting: !!(today && date > today) };
 }
 
+// สถานะ "ของเข้า" ที่หน้าจอใช้ = override (material_arrived true/false) ?? default ตามวัน
+// auto: ไม่มี override → ถือว่าเข้าเมื่อถึง material_ready_date (ไม่มีวันคาด = ถือว่าเข้า ไม่มีอะไรต้องรอ)
+// นิยามเดียวของทั้งแอป — dropdown Mat'l บนหน้า Orders และแท็บ Material ของหน้า Planning ใช้ตัวนี้
+// (ต่างจาก effectiveReadyDate ข้างบนที่เลียนแบบ engine: engine ปลด floor เฉพาะ override === true)
+export function effectiveArrived(order, today) {
+  const ov = order?.material_arrived;
+  if (ov === true || ov === 1) return true;
+  if (ov === false || ov === 0) return false;
+  const mat = order?.material_ready_date ? String(order.material_ready_date).slice(0, 10) : '';
+  if (!mat) return true;
+  return today >= mat;
+}
+
 // buildOrderRules(inputs, { todayStr, settings, model, blockedSteps }) → [{ id, label, value, tone, detail }]
 //   inputs       = diff row.inputs จาก planDiff.buildPlanDiff
 //   tone         = 'ok' | 'warn' | 'ng' | 'info' (map ตรงกับ .chip-* ใน theme.css)

@@ -58,6 +58,8 @@ class OrderManager {
     clean.WIP_StartStepIndex = pyFloat('WIP_StartStepIndex' in o ? o.WIP_StartStepIndex : 0);
     clean.WIP_Machine = 'WIP_Machine' in o ? o.WIP_Machine : null;
     clean.WIP_FinishDate = 'WIP_FinishDate' in o ? o.WIP_FinishDate : null;
+    // manual flow (orders.flow_locked) — key มีเฉพาะตอนล็อก ไม่งั้น total_plan_map ของ parity เปลี่ยน
+    if (o.WIP_FlowLocked === true) clean.WIP_FlowLocked = true;
 
     // ประทับตราส่งไปตอน pack/sort (scheduler_core.py L285-288)
     clean.confirm_reply_date = confDate;
@@ -85,10 +87,15 @@ class OrderManager {
     for (const o of orders) {
       const setupKey = o.setup_group;
       const stepKey = o.WIP_StartStepIndex;
-      const flowKey =
+      // FIX: order ที่ผู้ใช้ล็อกเส้นทาง (manual flow ที่ขั้นตอนแรก) ต้องแยกถุงตาม flow ที่ล็อก
+      //   ไม่งั้นจะถูกมัดรวมกับ order ที่ไม่ล็อก แล้ว PACK ใช้เส้นทางของตัวแรกไปทั้งถุง
+      //   order ที่ไม่ล็อกได้ key เดิมทุกตัวอักษร (parity เหมือนเดิม)
+      let flowKey =
         stepKey > 0 && o.WIP_FlowIndex !== null && o.WIP_FlowIndex !== undefined
           ? o.WIP_FlowIndex
           : 'NEW';
+      // เครื่องของขั้นตอนแรกที่ผู้ใช้ล็อก (WIP_Machine) ต้องอยู่ใน key ด้วย — ล็อกคนละเครื่อง = คนละถุง
+      if (o.WIP_FlowLocked && stepKey <= 0) flowKey = `LOCK${o.WIP_FlowIndex ?? 0}@${o.WIP_Machine || ''}`;
       const modeKey = String(o.planningMode).toUpperCase();
       // Mat'l: วันพร้อมต่างกันแยกถุง (scheduler_core.py L316)
       const effDateKey = String(o.effectiveReadyDate ?? '1970-01-01');

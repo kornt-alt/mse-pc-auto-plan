@@ -23,6 +23,8 @@ const {
 
 const router = express.Router();
 const allRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'OPERATOR');
+// รายชื่อเครื่องอย่างเดียว — หน้า Plan & Actual (ByMachineTab) ของ MC ต้องใช้ แต่ MC ห้ามบันทึก/แก้ยอดผลิต (allRoles)
+const machineListRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'OPERATOR', 'MC');
 // เฉพาะตัวช่วยสร้าง template หน้า Import (ADMIN/PLANNER only) — ไม่ขยาย reach ของ OPERATOR/guest
 const planRoles = requireRole('ADMIN', 'PLANNER');
 
@@ -72,7 +74,7 @@ const inClause = (items, prefix, params) =>
 
 // ========== GET /api/production/machines ==========
 // FIX: endpoint ใหม่ — dropdown Machine Queue เดิม hardcode ฝั่ง Flutter
-router.get('/machines', verifyToken, allRoles, async (req, res) => {
+router.get('/machines', verifyToken, machineListRoles, async (req, res) => {
   try {
     const rows = await query('SELECT DISTINCT machine FROM machine_config');
     const data = rows

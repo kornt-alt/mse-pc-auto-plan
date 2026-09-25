@@ -1,73 +1,45 @@
 import React from 'react';
+import PropTypes from 'prop-types';
+import { attainmentPct, attainmentTone } from './planActual';
 
-// ส่วนแชร์ของ matrix Plan & Actual (port จาก dashboard_plan_actual_batch.dart /
-// dashboard_plan_actual_machine.dart) — แต่ละแท็บถือ markup ตารางเอง
-
-export const ROW_HEIGHT = 85;
-export const HEADER_BG = '#ECEFF1'; // blueGrey[50]
-
-// สไตล์ cell ตรึงซ้าย (แทน scroll-sync 3 ทางของ Flutter — FIX: ใช้ CSS sticky)
-export const stickyStyle = (left, width, { header = false } = {}) => ({
-  position: 'sticky',
-  left,
-  minWidth: width,
-  maxWidth: width,
-  backgroundColor: header ? HEADER_BG : '#fff',
-  border: '1px solid #dee2e6',
-  padding: '4px 6px',
-  fontSize: 13,
-  zIndex: header ? 4 : 2,
-  ...(header ? { top: 0, fontWeight: 'bold', color: '#37474F' } : {}),
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-});
-
-export const dateCellStyle = (width, { header = false } = {}) => ({
-  minWidth: width,
-  maxWidth: width,
-  border: '1px solid #dee2e6',
-  padding: '4px 6px',
-  textAlign: 'center',
-  fontSize: 12,
-  backgroundColor: header ? HEADER_BG : '#fff',
-  ...(header
-    ? { position: 'sticky', top: 0, zIndex: 3, fontWeight: 'bold', color: '#37474F' }
-    : {}),
-});
-
+// ช่อง Plan/Actual ต่อวันของ matrix By Batch / By Machine (แทน DateCell สองบรรทัดเดิมจาก Flutter —
+// ปรับให้กะทัดรัดรอบปรับหน้ารายงาน 2026-09-25: แถวสูง 85 → ราว 40px จึงเห็นงานบนจอได้มากขึ้น)
+// FIX (คงจากเดิม): คอลัมน์ซ้ายตรึงด้วย CSS sticky (.rpt-table .frozen) แทน scroll-sync 3 ทางของ Flutter
+//
+// แสดง "ok / plan" + NG (ถ้ามี) + แถบสี:
+//   วันที่ผ่านมาแล้ว/วันนี้ = สีตาม % ทำได้ (ATTAINMENT_TONE) · วันอนาคต = สีน้ำเงิน (ยังไม่ถึงกำหนด)
 const trunc = (v) => Math.trunc(Number(v) || 0);
 
-// Cell Plan/Actual ต่อวัน — ByBatch: actPrefix "Act : ", overLabel "(WIP/Over)"
-//                           ByMachine: actPrefix "Act: ", overLabel "(Over)" (spacing ตามเดิม)
-export const DateCell = ({ dayData, actPrefix, overLabel }) => {
+export const PlanCell = ({ dayData, date, today }) => {
   if (!dayData || !dayData.plan) return null;
   const plan = trunc(dayData.plan);
   const ok = trunc(dayData.ok);
   const ng = trunc(dayData.ng);
-  const ngText = ng > 0 ? ` (NG: ${ng})` : '';
-  const isOver = ok > plan;
-  const okPct = plan > 0 ? Math.min(ok / plan, 1) : 0;
-  const ngPct = plan > 0 ? Math.min(ng / plan, 1 - okPct) : 0;
-
+  const due = date <= today;
+  const pct = attainmentPct(plan, ok);
+  const tone = due ? attainmentTone(pct) : 'info';
+  const width = plan > 0 ? Math.min(ok / plan, 1) * 100 : 0;
   return (
-    <div>
-      <div style={{ fontSize: 12, fontWeight: 'bold', color: '#455A64' }}>Plan : {plan}</div>
-      <div style={{ height: 8, backgroundColor: '#1E88E5', borderRadius: 3, marginBottom: 3 }} />
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 'bold',
-          whiteSpace: 'nowrap',
-          color: isOver ? '#EF6C00' : '#455A64',
-        }}
-      >
-        {isOver ? `${actPrefix}${ok}${ngText} ${overLabel}` : `${actPrefix}${ok}${ngText} / ${plan}`}
+    <div title={`${date}\nแผน ${plan} · ได้ ${ok}${ng ? ` · NG ${ng}` : ''}${pct != null ? ` (${pct}%)` : ''}`}>
+      <div className="num">
+        <span className={due && ok < plan ? 'text-danger fw-bold' : 'fw-bold'}>{ok}</span>
+        <span className="text-muted">/{plan}</span>
+        {ng > 0 && <span className="text-danger ms-1">NG {ng}</span>}
+        {ok > plan && <span className="text-warning ms-1" title="ผลิตเกินแผนของวันนั้น (WIP/Over)">▲</span>}
       </div>
-      <div style={{ display: 'flex', height: 8, backgroundColor: '#e0e0e0', borderRadius: 3 }}>
-        <div style={{ flexGrow: okPct * 1000, backgroundColor: '#4CAF50', borderRadius: 3 }} />
-        <div style={{ flexGrow: ngPct * 1000, backgroundColor: '#F44336' }} />
-        <div style={{ flexGrow: Math.max(0, 1 - okPct - ngPct) * 1000 }} />
+      <div className={`mini-bar bar-${tone === 'muted' ? 'info' : tone}`}>
+        <span style={{ width: `${width}%` }} />
       </div>
     </div>
   );
 };
+
+PlanCell.propTypes = {
+  dayData: PropTypes.shape({ plan: PropTypes.number, ok: PropTypes.number, ng: PropTypes.number }),
+  date: PropTypes.string.isRequired,
+  today: PropTypes.string.isRequired,
+};
+
+// ชุดคลาสของคอลัมน์วัน (เสาร์-อาทิตย์ / วันนี้)
+export const dateColClass = (d, today, isWeekend) =>
+  ['col-date', isWeekend(d) ? 'col-weekend' : '', d === today ? 'col-today' : ''].filter(Boolean).join(' ');

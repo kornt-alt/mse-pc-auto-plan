@@ -13,9 +13,9 @@ import { buildPlanOptions, horizonWords } from './planOptions';
 //   เครื่องจักร : คิวของแต่ละเครื่อง เรียงตามวันที่เข้าเครื่อง (เก่า → ใหม่) และวันไหนหนาสุด
 //   กฎการคำนวณ : กฎที่ engine ใช้กับออเดอร์นี้จริง ๆ พร้อมค่าที่ป้อนเข้ากฎ
 //
-// props: show, mode('replan'|'sort'|'drag'|'lock'|'unlock'), diff({rows,summary}),
+// props: show, mode('replan'|'sort'|'drag'|'lock'|'unlock'|'jig'|'rollback'), diff({rows,summary}),
 //        detail(buildPlanDetail: {batches,machineLoad}), machineSchedule(buildMachineSchedule: []),
-//        capacityWarning({unplanned_count,last_calendar_date}|null),
+//        capacityWarning({unplanned_count,last_calendar_date}|null), notices([string] — คำเตือนเฉพาะครั้ง เหนือแท็บ),
 //        settings, todayStr, loading, onConfirm(() => Promise), onHide
 // diff/detail/machineSchedule มาจาก pure module — parent เป็นคนรัน sim + ยิง API จริงตอน onConfirm
 // todayStr ฉีดมาจาก parent (todayDateStr ใน OrderControlTower) — dialog ไม่แตะนาฬิกาเอง
@@ -42,6 +42,7 @@ const MODE_META = {
   drag: { title: 'ตรวจผลก่อนบันทึกลำดับ', icon: 'bi-grip-vertical', confirmLabel: 'บันทึกลำดับ', confirmVariant: 'primary' },
   lock: { title: 'ตรวจผลกระทบก่อนล็อกทั้งหมด (FIXED)', icon: 'bi-lock-fill', confirmLabel: 'ยืนยันล็อกทั้งหมด', confirmVariant: 'warning', note: 'FG ด้านล่างคือผลที่ Replan จะได้เมื่อทุกออเดอร์เป็น FIXED — การยืนยันจะเปลี่ยนแค่สถานะล็อก ยังไม่บันทึกแผน (กด Replan เองอีกที)' },
   unlock: { title: 'ตรวจผลกระทบก่อนปลดล็อกทั้งหมด (NEW)', icon: 'bi-unlock', confirmLabel: 'ยืนยันปลดล็อกทั้งหมด', confirmVariant: 'success', note: 'FG ด้านล่างคือผลที่ Replan จะได้เมื่อปลดล็อกทุกออเดอร์ — การยืนยันจะเปลี่ยนแค่สถานะล็อก ยังไม่บันทึกแผน (กด Replan เองอีกที)' },
+  rollback: { title: 'เทียบก่อนย้อนกลับแผน', icon: 'bi-arrow-counterclockwise', confirmLabel: 'ยืนยันย้อนกลับแผน', confirmVariant: 'warning', note: 'FG ด้านล่างคือแผนรุ่นที่เลือกไว้ (ไม่ใช่ผลจำลองใหม่) เทียบกับวันในตาราง Orders ตอนนี้' },
   jig: { title: 'ตรวจผลกระทบก่อนบันทึกสถานะ Jig', icon: 'bi-tools', confirmLabel: 'ยืนยันบันทึกสถานะ', confirmVariant: 'warning', note: 'FG ด้านล่างคือผลที่ Replan จะได้ถ้า jig อยู่ในสถานะนี้ — การยืนยันจะบันทึกแค่สถานะ jig ยังไม่บันทึกแผน (กด Replan ที่หน้า Orders อีกที)' },
 };
 
@@ -686,7 +687,7 @@ const OptionsTab = ({ options, lastCalendarDate }) => {
 };
 
 const PlanPreviewDialog = ({
-  show, mode = 'replan', diff, detail, machineSchedule, capacityWarning,
+  show, mode = 'replan', diff, detail, machineSchedule, capacityWarning, notices = [],
   // unplanned = decoded.unplanned — งานที่ engine วางไม่ลง พร้อมเหตุผล/เครื่องทางเลือก
   // ไม่ส่งมา = ไม่มีงานหลุด (หน้าที่เรียกก่อนฟีเจอร์นี้ยังทำงานเหมือนเดิม)
   unplanned = [],
@@ -790,6 +791,13 @@ const PlanPreviewDialog = ({
                 </span>
               </div>
             )}
+            {/* ข้อความเฉพาะครั้ง (เช่น rollback: ออเดอร์ที่จะไม่มีแผน/ถูกตัดออก) — อยู่เหนือแท็บเสมอ */}
+            {notices.map((n) => (
+              <div key={n} className="alert alert-warning py-2 d-flex align-items-start gap-2 mb-2 small" role="alert">
+                <i className="bi bi-exclamation-triangle-fill mt-1" aria-hidden="true" />
+                <span>{n}</span>
+              </div>
+            ))}
             {meta.note && (
               <div className="border rounded p-2 mb-2 small d-flex align-items-start gap-2" style={{ background: 'var(--mse-info-bg, #e7f1ff)' }}>
                 <i className="bi bi-info-circle-fill text-info mt-1" aria-hidden="true" />

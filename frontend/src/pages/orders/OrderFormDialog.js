@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Modal, Form, Button, Row, Col, Spinner, Alert, Table, Badge } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
-import { estimateFlow, estimateFlowTotal, formatDays, diffDays } from './wipEstimate';
+import {
+  estimateFlow, estimateFlowTotal, formatDays, diffDays, ownMachinesOf, withFirstMachine,
+} from './wipEstimate';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const todayStr = () => {
@@ -71,7 +73,8 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
         setWipFlow(flow);
         setWipStepIndex(stepIdx);
         const step = steps.find((s) => s.flow_index === flow && s.step_index === stepIdx);
-        const machines = step ? step.previous_machines : [];
+        // ขั้นตอนแรก (manual flow): wip_machine = เครื่องของขั้นตอนนั้นเอง ไม่ใช่เครื่องของขั้นตอนก่อนหน้า
+        const machines = !step ? [] : stepIdx === 0 ? ownMachinesOf(step) : step.previous_machines;
         setWipMachine(machines.includes(presetOrder.wip_machine) ? presetOrder.wip_machine : '');
       }
     } catch (err) {
@@ -107,8 +110,10 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
         release_date: (order.release_date || '').slice(0, 10),
         wip_finish_date: (order.wip_finish_date || '').slice(0, 10),
       });
+      // flow_locked = เคยเลือกเส้นทางเอง (รวม Flow 0 ที่ขั้นตอนแรก ซึ่งค่า index เป็น 0/0 เหมือนไม่ได้เลือก)
       const hasWip =
-        (order.wip_flow_index ?? 0) > 0 || (order.wip_start_step_index ?? 0) > 0;
+        (order.wip_flow_index ?? 0) > 0 || (order.wip_start_step_index ?? 0) > 0 ||
+        order.flow_locked === true || Number(order.flow_locked) === 1;
       setIsWip(hasWip);
       fetchModelInfo(order.model, order);
     } else {
@@ -133,13 +138,19 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
   const setField = (name, value) => setForm((prev) => ({ ...prev, [name]: value }));
 
   const flowOptions = [...new Set(modelSteps.map((s) => s.flow_index))].sort((a, b) => a - b);
-  const flowPreview = (f) => {
-    const names = modelSteps.filter((s) => s.flow_index === f).map((s) => s.step_name).join(' > ');
-    return names.length > 50 ? `${names.slice(0, 50)}...` : names;
-  };
-  const stepOptions = modelSteps.filter((s) => s.flow_index === wipFlow && s.step_index > 0);
+  // แสดงชื่อ step ทั้งหมดของ flow แบบเต็ม ไม่ตัด (ผู้ใช้ต้องเห็นครบทุก step ตอนเลือก)
+  const flowPreview = (f) =>
+    modelSteps.filter((s) => s.flow_index === f).map((s) => s.step_name).join(' > ');
+  // ขั้นตอนแรกสุด (step 0) = เลือกเส้นทางเอง (manual flow) ของ order ที่ยังไม่ผลิต — ไม่ใช่ WIP
+  // ไม่มีเครื่อง/วันจบของขั้นตอนก่อนหน้า และบันทึกเป็น flow_locked = 1 ให้ Flow 0 ล็อกได้ด้วย
+  const stepOptions = modelSteps.filter((s) => s.flow_index === wipFlow && s.step_index >= 0);
   const selectedStep = stepOptions.find((s) => s.step_index === wipStepIndex);
-  const machineOptions = selectedStep ? selectedStep.previous_machines : [];
+  const isManualStart = isWip && wipStepIndex === 0;
+  // WIP จริง: เลือก "เครื่องของขั้นตอนก่อนหน้า" · ขั้นตอนแรก: เลือก "เครื่องที่จะทำขั้นตอนนี้" (ไม่บังคับ)
+  // — engine ล็อกเครื่องนั้นเครื่องเดียว ว่าง = ให้ระบบเลือกเอง
+  const machineOptions = !selectedStep
+    ? []
+    : wipStepIndex === 0 ? ownMachinesOf(selectedStep) : selectedStep.previous_machines;
 
   const qtyNum = parseFloat(form.qty);
 
@@ -160,12 +171,19 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
   // ประมาณการ "เหลือกี่วัน" จาก process ที่เลือก (คิดงานตัวเดียวโดด ๆ)
   const estimate = useMemo(() => {
     if (!modelInfo || !isWip) return null;
-    if (wipFlow === null || wipStepIndex === null || !form.wip_finish_date || !(qtyNum > 0)) return null;
-    return estimateFlow(modelInfo, {
+    if (wipFlow === null || wipStepIndex === null || !(qtyNum > 0)) return null;
+    // manual flow ไม่มีวันจบ WIP → นับจากวัน Release หรือวันนี้
+    const anchorDate = wipStepIndex === 0 ? (form.release_date || todayStr()) : form.wip_finish_date;
+    if (!anchorDate) return null;
+    // เลือกเครื่องของขั้นตอนแรกไว้ → คิดเวลาด้วย cycle/setup/handling ของเครื่องนั้น ไม่ใช่เครื่องหลัก
+    const info = wipStepIndex === 0 && wipMachine
+      ? { ...modelInfo, steps: withFirstMachine(modelInfo.steps, wipFlow, wipMachine) }
+      : modelInfo;
+    return estimateFlow(info, {
       flowIndex: wipFlow, startStepIndex: wipStepIndex, qty: qtyNum,
-      anchorDate: form.wip_finish_date, today: todayStr(),
+      anchorDate, today: todayStr(),
     });
-  }, [modelInfo, isWip, wipFlow, wipStepIndex, form.wip_finish_date, qtyNum]);
+  }, [modelInfo, isWip, wipFlow, wipStepIndex, wipMachine, form.wip_finish_date, form.release_date, qtyNum]);
 
   // เทียบ finish vs due → ข้อความ/สี
   const dueCompare = (() => {
@@ -197,7 +215,8 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
   const handleSave = async () => {
     setValidated(true);
     if (!form.batch.trim() || !form.model.trim() || form.qty === '' || !form.due_date) return;
-    if (isWip && (wipFlow === null || wipStepIndex === null || !wipMachine || !form.wip_finish_date)) return;
+    if (isWip && (wipFlow === null || wipStepIndex === null)) return;
+    if (isWip && !isManualStart && (!wipMachine || !form.wip_finish_date)) return;
 
     const payload = {
       batch: form.batch.trim(),
@@ -211,8 +230,10 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
       release_date: form.release_date || null,
       wip_flow_index: isWip ? wipFlow : 0,
       wip_start_step_index: isWip ? wipStepIndex : 0,
-      wip_machine: isWip ? wipMachine : null,
-      wip_finish_date: isWip ? form.wip_finish_date : null,
+      // ขั้นตอนแรก: wip_machine = เครื่องของขั้นตอนแรกที่ล็อก (ว่าง = ให้ระบบเลือก)
+      wip_machine: isWip ? wipMachine || null : null,
+      wip_finish_date: isWip && !isManualStart ? form.wip_finish_date : null,
+      flow_locked: isWip ? 1 : 0,
     };
 
     setSaving(true);
@@ -419,6 +440,12 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                     ))}
                   </Form.Select>
                   <Form.Control.Feedback type="invalid">ระบุ Flow</Form.Control.Feedback>
+                  {wipFlow !== null && (
+                    <div className="text-muted small mt-1" style={{ wordBreak: 'break-word' }}>
+                      Flow {wipFlow}: {flowPreview(wipFlow)}
+                      {flowTotals[wipFlow] ? ` (${formatDays(flowTotals[wipFlow].days_from_today)})` : ''}
+                    </div>
+                  )}
                 </Form.Group>
               </Col>
               <Col md={4}>
@@ -438,6 +465,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                     {stepOptions.map((s) => (
                       <option key={`${s.flow_index}_${s.step_index}`} value={s.step_index}>
                         {s.step_name} (Step: {s.step_index})
+                        {s.step_index === 0 ? ' — เริ่มต้น ยังไม่ผลิต' : ''}
                       </option>
                     ))}
                   </Form.Select>
@@ -446,14 +474,16 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label>3. Last Machine</Form.Label>
+                  <Form.Label>
+                    {isManualStart ? '3. เครื่องของขั้นตอนแรก (ไม่บังคับ)' : '3. Last Machine'}
+                  </Form.Label>
                   <Form.Select
                     value={wipMachine}
                     onChange={(e) => setWipMachine(e.target.value)}
                     disabled={wipStepIndex === null}
-                    {...invalid(isWip && !wipMachine)}
+                    {...invalid(isWip && !isManualStart && !wipMachine)}
                   >
-                    <option value="">-- เลือกเครื่อง --</option>
+                    <option value="">{isManualStart ? '-- ให้ระบบเลือก --' : '-- เลือกเครื่อง --'}</option>
                     {machineOptions.map((m) => (
                       <option key={m} value={m}>
                         {m}
@@ -468,14 +498,24 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                   <Form.Label>WIP Finish Date</Form.Label>
                   <Form.Control
                     type="date"
-                    value={form.wip_finish_date || ''}
+                    value={isManualStart ? '' : form.wip_finish_date || ''}
                     onChange={(e) => setField('wip_finish_date', e.target.value)}
-                    {...invalid(isWip && !form.wip_finish_date)}
+                    disabled={isManualStart}
+                    {...invalid(isWip && !isManualStart && !form.wip_finish_date)}
                   />
                   <Form.Control.Feedback type="invalid">ระบุวันที่จบ</Form.Control.Feedback>
                 </Form.Group>
               </Col>
             </Row>
+
+            {isManualStart && (
+              <div className="text-muted small mt-2">
+                <i className="bi bi-signpost-split text-mse me-1" aria-hidden="true" />
+                ล็อกเส้นทาง Flow {wipFlow} ตั้งแต่ขั้นตอนแรก (ยังไม่ผลิต ไม่ใช่ WIP)
+                {wipMachine ? ` · ขั้นตอนแรกทำบน ${wipMachine} เท่านั้น` : ''}
+                {' '}— ลำดับคิวและ forward/backward เป็นไปตามที่ตั้งไว้
+              </div>
+            )}
 
             {estimate && (
               <div className="mt-3 p-2 rounded border bg-light position-relative">

@@ -15,6 +15,7 @@ const { query, execute, transaction } = require('../db/pool');
 const { bulkInsert } = require('../db/bulk');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
+const { markEditOnSuccess } = require('../middleware/markEdit');
 const { familyPrefix } = require('../services/routingSuggest');
 const { parseMoveRequest, neighborIndex, sortedIndicesFromRows } = require('../utils/routingOrder');
 const { parseBulkEdit, findEmptiedSteps } = require('../utils/routingBulkEdit');
@@ -140,7 +141,7 @@ router.get('/routing_machine_config/check_duplicate/:model', verifyToken, readRo
 // ================================================================
 // POST /api/routing_machine_config/bulk_create (L2830) — สร้าง model ใหม่ 3 ตาราง
 // ================================================================
-router.post('/routing_machine_config/bulk_create', verifyToken, writeRoles, async (req, res) => {
+router.post('/routing_machine_config/bulk_create', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { new_model, routing_list = [], machine_list = [] } = req.body;
     const dup = await query('SELECT TOP 1 id FROM routing_config WHERE model = @model', {
@@ -220,7 +221,7 @@ router.post('/routing_machine_config/bulk_create', verifyToken, writeRoles, asyn
 // ⚠️ ไม่รับเลข flow/step/alternative — ดูเหตุผลที่หัว utils/routingBulkEdit.js
 // (ลำดับขั้นแก้ผ่าน /routing_config/move ซึ่งขยับสองตารางพร้อมกัน)
 // ================================================================
-router.put('/routing_machine_config/bulk_edit', verifyToken, writeRoles, async (req, res) => {
+router.put('/routing_machine_config/bulk_edit', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { model, steps, machines, error } = parseBulkEdit(req.body);
     if (error) return res.status(400).json({ message: error });
@@ -347,7 +348,7 @@ router.put('/routing_machine_config/bulk_edit', verifyToken, writeRoles, async (
 // ================================================================
 // POST /api/routing_config/insert_step (L2672) — แทรก step เลื่อนที่เหลือ +1
 // ================================================================
-router.post('/routing_config/insert_step', verifyToken, writeRoles, async (req, res) => {
+router.post('/routing_config/insert_step', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { model, flow_index, step_index, step_name, setup_group, machine, cycle_time, setup_time, jig_id } =
       req.body;
@@ -396,7 +397,7 @@ router.post('/routing_config/insert_step', verifyToken, writeRoles, async (req, 
 // แทนที่ด้วยการให้ GET /routing_machine_config ส่ง wip_refs ไปให้ UI เตือนก่อนกด
 // ต้องมาก่อน /:item_id (เป็นคนละ method อยู่แล้ว แต่วางตามกติกา literal-ก่อน-param ของโปรเจกต์)
 // ================================================================
-router.post('/routing_config/move', verifyToken, writeRoles, async (req, res) => {
+router.post('/routing_config/move', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const parsed = parseMoveRequest(req.body);
     if (!parsed.ok) return res.status(400).json({ message: parsed.error });
@@ -447,7 +448,7 @@ router.post('/routing_config/move', verifyToken, writeRoles, async (req, res) =>
 // ================================================================
 // POST /api/routing_config/add_flow (L3401) — เพิ่ม flow ใหม่ (dummy step "1ST")
 // ================================================================
-router.post('/routing_config/add_flow', verifyToken, writeRoles, async (req, res) => {
+router.post('/routing_config/add_flow', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { model, machine } = req.body;
     await transaction(async (t) => {
@@ -483,7 +484,7 @@ router.post('/routing_config/add_flow', verifyToken, writeRoles, async (req, res
 // DELETE /api/routing_config/delete_flow (L3236) — ต้องมาก่อน /:item_id
 // FIX: อ่านจาก query params (schema DeleteFlowRequest เดิมไม่ถูกใช้), coerce เอง
 // ================================================================
-router.delete('/routing_config/delete_flow', verifyToken, writeRoles, async (req, res) => {
+router.delete('/routing_config/delete_flow', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const model = req.query.model;
     const flowIndex = parseInt(req.query.flow_index, 10);
@@ -537,7 +538,7 @@ router.delete('/routing_config/delete_flow', verifyToken, writeRoles, async (req
 // ================================================================
 // PUT /api/routing_config/:item_id (L2609) — แก้ routing step
 // ================================================================
-router.put('/routing_config/:item_id', verifyToken, writeRoles, async (req, res) => {
+router.put('/routing_config/:item_id', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { flow_index, step_index, step_name, setup_group } = req.body;
     const count = await execute(
@@ -556,7 +557,7 @@ router.put('/routing_config/:item_id', verifyToken, writeRoles, async (req, res)
 // ================================================================
 // DELETE /api/routing_config/:item_id (L3306) — ลบ step + machine flow/step เดียวกัน + ขยับ step -1
 // ================================================================
-router.delete('/routing_config/:item_id', verifyToken, writeRoles, async (req, res) => {
+router.delete('/routing_config/:item_id', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const id = parseInt(req.params.item_id, 10);
     const rows = await query('SELECT model, flow_index, step_index FROM routing_config WHERE id = @id', {
@@ -598,7 +599,7 @@ router.delete('/routing_config/:item_id', verifyToken, writeRoles, async (req, r
 // ================================================================
 // PUT /api/machine_config/:item_id (L2623) — แก้ machine config
 // ================================================================
-router.put('/machine_config/:item_id', verifyToken, writeRoles, async (req, res) => {
+router.put('/machine_config/:item_id', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { flow_index, step_index, alternative_index, machine, cycle_time, setup_time, jig_id } = req.body;
     const withHandling = await hasHandlingCol();
@@ -635,7 +636,7 @@ router.put('/machine_config/:item_id', verifyToken, writeRoles, async (req, res)
 // ไม่ได้ส่ง is_active มาด้วย — ถ้าใส่ไว้ในคำสั่งเดียวกัน การกดบันทึกธรรมดาจะเปิดเครื่องคืนเงียบ ๆ
 // (สองเซกเมนต์ จึงไม่ชนกับ /:item_id)
 // ================================================================
-router.put('/machine_config/:item_id/active', verifyToken, writeRoles, async (req, res) => {
+router.put('/machine_config/:item_id/active', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     // คอลัมน์เพิ่มด้วย DDL รันมือ — ไม่มีก็บอกไปตรง ๆ ดีกว่าปล่อย SQL error ดิบ
     const hasCol = (await query("SELECT COL_LENGTH('machine_config','is_active') AS c"))[0].c != null;
@@ -683,7 +684,7 @@ router.put('/machine_config/:item_id/active', verifyToken, writeRoles, async (re
 // ================================================================
 // POST /api/machine_config/insert_alt (L2771) — เพิ่มเครื่องทางเลือก (alt = max+1)
 // ================================================================
-router.post('/machine_config/insert_alt', verifyToken, writeRoles, async (req, res) => {
+router.post('/machine_config/insert_alt', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const { model, flow_index, step_index, machine, cycle_time, setup_time, jig_id } = req.body;
     const withHandling = await hasHandlingCol();
@@ -711,7 +712,7 @@ router.post('/machine_config/insert_alt', verifyToken, writeRoles, async (req, r
 // ================================================================
 // DELETE /api/machine_config/:item_id (L2723) — guard เครื่องสุดท้าย + ขยับ alt -1
 // ================================================================
-router.delete('/machine_config/:item_id', verifyToken, writeRoles, async (req, res) => {
+router.delete('/machine_config/:item_id', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const id = parseInt(req.params.item_id, 10);
     const rows = await query(
@@ -750,7 +751,7 @@ router.delete('/machine_config/:item_id', verifyToken, writeRoles, async (req, r
 // ================================================================
 // PUT /api/product_master/update_setup/:model (L2642) — แก้ setup_group ทุกแถวของ model
 // ================================================================
-router.put('/product_master/update_setup/:model', verifyToken, writeRoles, async (req, res) => {
+router.put('/product_master/update_setup/:model', verifyToken, writeRoles, markEditOnSuccess, async (req, res) => {
   try {
     const count = await execute(
       'UPDATE product_master SET setup_group = @setup WHERE model = @model',

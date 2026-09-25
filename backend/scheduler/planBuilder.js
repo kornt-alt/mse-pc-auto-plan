@@ -70,7 +70,7 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
     const simulatedPriority = hasOverride ? priorityOverrides[row.batch] : row.priority;
     const priorityVal = simulatedPriority !== null && simulatedPriority !== undefined ? Number(simulatedPriority) : 99;
 
-    rawOrders.push({
+    const raw = {
       Batch: row.batch, Model: row.model, dueDate: row.due_date,
       priority: priorityVal, qty: row.qty, planMode,
       WIP_FlowIndex: wFlowIdx, WIP_StartStepIndex: wStepIdx,
@@ -80,7 +80,11 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
       setup_group: setupGroupVal ? setupGroupVal : row.model, // falsy ('' / null) -> model
       confirm_reply_date: confDate,
       has_actuals: hasActuals,
-    });
+    };
+    // orders.flow_locked (DDL รันมือ) = ผู้ใช้เลือกเส้นทางเอง — ใส่ key เฉพาะตอนล็อกจริง
+    // ⚠️ อย่าใส่ false ทุกแถว: order object ไหลไปถึง total_plan_map ที่ parity เทียบ union ของ key
+    if (row.flow_locked === true || row.flow_locked === 1) raw.WIP_FlowLocked = true;
+    rawOrders.push(raw);
   }
   return rawOrders;
 }

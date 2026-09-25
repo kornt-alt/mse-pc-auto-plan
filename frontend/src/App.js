@@ -35,15 +35,16 @@ const MENU = [
     icon: 'bi-hdd-stack',
     roles: ['ADMIN', 'PLANNER', 'MFG', 'OPERATOR'],
   },
-  { path: '/orders', label: 'Orders', icon: 'bi-list-check', roles: ['ADMIN', 'PLANNER'] },
+  // MC (Material Control) เข้า Orders ได้เพื่อแก้วัน material / Mat'l / Issue — ปุ่มวางแผนถูกซ่อนในหน้าเพจ (canPlan)
+  { path: '/orders', label: 'Orders', icon: 'bi-list-check', roles: ['ADMIN', 'PLANNER', 'MC'] },
   {
     label: 'แผนการผลิต',
     icon: 'bi-calendar3-week',
     items: [
-      { path: '/planning', label: 'Planning View', icon: 'bi-grid-3x3', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-      { path: '/plan-actual', label: 'Plan & Actual', icon: 'bi-bar-chart-line', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-      { path: '/wip', label: 'WIP', icon: 'bi-box-seam', roles: ['ADMIN', 'PLANNER', 'MFG'] },
-      { path: '/daily-result', label: 'Daily Result', icon: 'bi-clipboard-data', roles: ['ADMIN', 'PLANNER', 'MFG'] },
+      { path: '/planning', label: 'Planning View', icon: 'bi-grid-3x3', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
+      { path: '/plan-actual', label: 'Plan & Actual', icon: 'bi-bar-chart-line', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
+      { path: '/wip', label: 'WIP', icon: 'bi-box-seam', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
+      { path: '/daily-result', label: 'Daily Result', icon: 'bi-clipboard-data', roles: ['ADMIN', 'PLANNER', 'MFG', 'MC'] },
     ],
   },
   {
@@ -245,7 +246,7 @@ const App = () => (
       <Route
         path="/orders"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MC']}>
             <OrderControlTower />
           </ProtectedRoute>
         }
@@ -253,7 +254,7 @@ const App = () => (
       <Route
         path="/planning"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <PlanningView />
           </ProtectedRoute>
         }
@@ -261,7 +262,7 @@ const App = () => (
       <Route
         path="/plan-actual"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <PlanActualPage />
           </ProtectedRoute>
         }
@@ -269,7 +270,7 @@ const App = () => (
       <Route
         path="/wip"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <WipPage />
           </ProtectedRoute>
         }
@@ -277,7 +278,7 @@ const App = () => (
       <Route
         path="/daily-result"
         element={
-          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG']}>
+          <ProtectedRoute roles={['ADMIN', 'PLANNER', 'MFG', 'MC']}>
             <DailyResultPage />
           </ProtectedRoute>
         }

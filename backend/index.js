@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { getPool } = require('./db/pool');
 const { reportSchema } = require('./db/schemaCheck');
+const { loadTimestamps } = require('./state/timestamps');
 const { activityLogger } = require('./middleware/activityLog');
 const { errorHandler, notFoundApi } = require('./middleware/errorHandler');
 
@@ -77,6 +78,9 @@ getPool()
     // เตือนตอน start ว่ามี DDL ตัวไหนยังไม่ได้รันบน DB นี้ — log อย่างเดียว ไม่ทำให้ start ล้ม
     // (ดูเหตุผลใน db/schemaCheck.js: โค้ด degrade เงียบ ๆ ได้ ตัวนี้คือสิ่งที่ทำให้รู้ว่าเงียบอยู่)
     await reportSchema();
+    // ป้าย "แผนไม่เป็นปัจจุบัน" ต้องรอด restart — โหลดเวลาวางแผน/แก้ไขล่าสุดที่เก็บไว้ใน system_settings
+    // (ไม่มีคอลัมน์/DB พัง = เริ่มจาก '-' แบบเดิม · ไม่ throw)
+    await loadTimestamps();
 
     // เตือนตอน start ถ้า SMTP ไม่ครบ — ไม่ exit (dev ที่ไม่ใช้เมลต้องรันได้)
     if (!env.isMailConfigured()) {

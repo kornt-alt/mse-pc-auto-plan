@@ -7,7 +7,8 @@ const { sendError } = require('../middleware/errorHandler');
 const { buildPlanVsActual } = require('../services/planVsActual');
 
 const router = express.Router();
-const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
+// MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
+const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'MC');
 
 // ========== GET /api/visualization/plan-vs-actual ==========
 router.get('/plan-vs-actual', verifyToken, readRoles, async (req, res) => {

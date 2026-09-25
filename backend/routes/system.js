@@ -12,7 +12,8 @@ const constants = require('../config/constants');
 
 const router = express.Router();
 
-const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG');
+// MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
+const readRoles = requireRole('ADMIN', 'PLANNER', 'MFG', 'MC');
 const writeRoles = requireRole('ADMIN', 'PLANNER');
 
 // เวลาวางแผน/แก้ไขล่าสุด — ใช้เช็คว่าแผน outdated หรือยัง

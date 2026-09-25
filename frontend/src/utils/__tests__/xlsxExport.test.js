@@ -48,3 +48,45 @@ describe('stampedFilename', () => {
     expect(stampedFilename('orders', '2026-08-28')).toBe('orders_2026-08-28.xlsx');
   });
 });
+
+describe('buildWorkbookSheets', () => {
+  const { buildWorkbookSheets, colLetter, metaRows } = require('../xlsxExport');
+
+  test('colLetter แปลงเลขคอลัมน์เป็นตัวอักษร Excel', () => {
+    expect(colLetter(0)).toBe('A');
+    expect(colLetter(25)).toBe('Z');
+    expect(colLetter(26)).toBe('AA');
+    expect(colLetter(27)).toBe('AB');
+  });
+
+  test('ไม่มี meta = ไม่มีแถวหัวรายงาน · autofilter เริ่ม A1', () => {
+    const [sh] = buildWorkbookSheets([{ name: 'S', header: HEADER, rows: [{ batch: 'B1' }] }]);
+    expect(sh.aoa[0]).toEqual(['Batch ID', 'Model', 'Issue Date']);
+    expect(sh.autofilter).toBe('A1:C2');
+  });
+
+  test('มี meta → autofilter เริ่มที่แถวหัวตาราง ไม่ใช่ A1', () => {
+    const meta = { title: 'รายงาน', filters: 'ทุกเครื่อง', asOf: '2026-09-25 08:00' };
+    expect(metaRows(meta)).toHaveLength(4); // 3 แถว + แถวว่าง
+    const [sh] = buildWorkbookSheets([{ name: 'S', header: HEADER, rows: [{}, {}] }], meta);
+    expect(sh.aoa[4]).toEqual(['Batch ID', 'Model', 'Issue Date']);
+    expect(sh.autofilter).toBe('A5:C7');
+  });
+
+  test('meta ของชีต (null) ทับ meta รวม', () => {
+    const [sh] = buildWorkbookSheets([{ name: 'S', header: HEADER, rows: [], meta: null }], { title: 'x' });
+    expect(sh.aoa[0][0]).toBe('Batch ID');
+  });
+
+  test('ชื่อชีตตัดอักขระต้องห้ามและยาวไม่เกิน 31', () => {
+    const [sh] = buildWorkbookSheets([{ name: 'Late/At-risk [a]: long\\sheet name here?*', header: HEADER, rows: [] }]);
+    expect(sh.name).not.toMatch(/[:\\/?*[\]]/);
+    expect(sh.name.length).toBeLessThanOrEqual(31);
+  });
+
+  test('ความกว้างคอลัมน์: ใช้ width ที่ระบุ ไม่งั้นคิดจากข้อความยาวสุด (8–40)', () => {
+    const header = [{ key: 'a', label: 'A', width: 20 }, { key: 'b', label: 'B' }];
+    const [sh] = buildWorkbookSheets([{ name: 'S', header, rows: [{ a: 'x', b: '1234567890123' }] }]);
+    expect(sh.cols).toEqual([{ wch: 20 }, { wch: 15 }]);
+  });
+});

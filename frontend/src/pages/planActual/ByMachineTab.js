@@ -1,28 +1,35 @@
-import React, { useState, useEffect, useCallback } from 'react';
+// By Machine — งานทุก batch บนเครื่องเดียว แผนเทียบผลจริงรายวัน (เดิม MATRIX PRODUCTION DASHBOARD /
+// dashboard_plan_actual_machine.dart) · transform อยู่ใน planActual.js (ตรรกะเดิม)
+// เครื่องที่เลือกถือไว้ที่ PlanActualPage — แท็บสรุปรายเครื่องกดส่งมาเปิดที่นี่ได้
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import PropTypes from 'prop-types';
 import { Form, Button, Spinner } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
-import { DateCell, stickyStyle, dateCellStyle, ROW_HEIGHT } from './matrixCells';
+import { transformByMachine, summarize, rowProgress, lotQty, flattenDaily, attainmentTone } from './planActual';
+import { PlanCell, dateColClass } from './matrixCells';
+import { kpiItems } from './ByBatchTab';
+import { KpiStrip, ReportActions, PrintHeader, DateRangeFilter } from '../../components/report';
+import { exportWorkbook, stampedFilename } from '../../utils/xlsxExport';
+import { addDays, diffDays, isWeekend, shortDateLabel } from '../../utils/dates';
 
-// MATRIX PRODUCTION DASHBOARD — port จาก tabs/dashboard_plan_actual_machine.dart
-const DATE_COL_WIDTH = 150;
-
-const FIXED_COLS = [
-  ['No.', 0, 50],
-  ['Machine', 50, 80],
-  ['Batch', 130, 150],
-  ['Description', 280, 150],
-  ['Step', 430, 100],
-  ['Qty.', 530, 80],
+const PRINT_MAX_DAYS = 7;
+const FROZEN = [
+  { key: 'no', label: '#', left: 0, width: 40 },
+  { key: 'batch', label: 'Batch', left: 40, width: 120 },
+  { key: 'model', label: 'Model', left: 160, width: 110 },
+  { key: 'step', label: 'Step', left: 270, width: 120 },
+  { key: 'lot', label: 'Lot', left: 390, width: 60 },
+  { key: 'ok', label: 'OK สะสม', left: 450, width: 70 },
 ];
-
+const frozenStyle = (i) => ({ left: FROZEN[i].left, minWidth: FROZEN[i].width, maxWidth: FROZEN[i].width });
 const trunc = (v) => Math.trunc(Number(v) || 0);
+const inRange = (d, from, to) => (!from || d >= from) && (!to || d <= to);
 
-const ByMachineTab = () => {
+const ByMachineTab = ({ today, machine, onMachineChange }) => {
   const [machines, setMachines] = useState([]);
-  const [selectedMachine, setSelectedMachine] = useState('');
-  const [rows, setRows] = useState([]);
-  const [sortedDates, setSortedDates] = useState([]);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [range, setRange] = useState({ from: addDays(today, -6), to: addDays(today, 7) });
 
   useEffect(() => {
     // FIX: ดึงจาก machine_config ผ่าน /production/machines (เดิม hardcode 8 ตัวฝั่ง Flutter)
@@ -31,194 +38,160 @@ const ByMachineTab = () => {
       .catch(() => setMachines([]));
   }, []);
 
-  // transform ตาม dart L80-187
-  const fetchPlanVsActual = useCallback(async (machine) => {
+  const fetchPlanVsActual = useCallback(async (m) => {
     setLoading(true);
     try {
-      const res = await apiCall(
-        `/visualization/plan-vs-actual?machine=${encodeURIComponent(machine)}`
-      );
-      const grouped = {};
-      const dateSet = new Set();
-
-      for (const item of res.data || []) {
-        const parentBatch = item.batch ?? '-';
-        const subBatches = item.sub_batches ?? parentBatch;
-        const step = String(item.step ?? '-');
-        const datePlan = item.plan_detail?.date_plan ?? '';
-        if (!datePlan || datePlan === '9999-12-31') continue;
-        dateSet.add(datePlan);
-        if (step.toUpperCase().includes('SETUP')) continue;
-
-        const rowKey = `${item.machine}|${parentBatch}|${subBatches}|${step}`;
-        const planQty = Number(item.plan_detail?.qty_plan) || 0;
-        const actualOk = Number(item.actual_detail?.qty_ok) || 0;
-        const actualNg = Number(item.actual_detail?.qty_ng) || 0;
-
-        if (!grouped[rowKey]) {
-          grouped[rowKey] = {
-            machine: item.machine ?? '-',
-            parent_batch: parentBatch,
-            sub_batches: subBatches,
-            description: item.description ?? '-',
-            step,
-            step_index: item.step_index ?? 999,
-            order_qty: Number(item.order_qty) || 0,
-            total_qty: 0,
-            total_actual_ok: Number(item.total_historical_ok) || 0,
-            dates: {},
-          };
-        }
-        const row = grouped[rowKey];
-        row.total_qty += planQty;
-        if (!row.dates[datePlan]) row.dates[datePlan] = { plan: 0, ok: 0, ng: 0 };
-        row.dates[datePlan].plan += planQty;
-        row.dates[datePlan].ok += actualOk;
-        row.dates[datePlan].ng += actualNg;
-      }
-
-      // sort: วันแรกสุดของ row → parent_batch → step_index → sub_batches (dart L154-174)
-      const rowList = Object.values(grouped).map((r) => {
-        const dateKeys = Object.keys(r.dates);
-        return { ...r, earliest_date: dateKeys.length ? dateKeys.sort()[0] : '9999-12-31' };
-      });
-      rowList.sort(
-        (a, b) =>
-          a.earliest_date.localeCompare(b.earliest_date) ||
-          a.parent_batch.localeCompare(b.parent_batch) ||
-          a.step_index - b.step_index ||
-          a.sub_batches.localeCompare(b.sub_batches)
-      );
-      setRows(rowList);
-      setSortedDates([...dateSet].sort());
+      const res = await apiCall(`/visualization/plan-vs-actual?machine=${encodeURIComponent(m)}`);
+      setData(res.data || []);
     } catch {
-      setRows([]);
-      setSortedDates([]);
+      setData([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  useEffect(() => {
+    if (machine) fetchPlanVsActual(machine);
+    else setData(null);
+  }, [machine, fetchPlanVsActual]);
+
+  const all = useMemo(() => transformByMachine(data ?? []), [data]);
+  // ช่วงวัน: ตัดคอลัมน์วัน และแสดงเฉพาะแถวที่มีแผนในช่วง
+  const dates = all.dates.filter((d) => inRange(d, range.from, range.to));
+  const rows = useMemo(
+    () => all.rows.filter((r) => Object.keys(r.dates).some((d) => inRange(d, range.from, range.to))),
+    [all, range],
+  );
+  const summary = useMemo(() => summarize(rows, today), [rows, today]);
+  const rangeText = range.from || range.to ? `${range.from || '…'} ถึง ${range.to || '…'}` : 'ทุกวัน';
+  const title = `Plan & Actual — เครื่อง ${machine ?? ''}`;
+
+  const span = range.from && range.to ? diffDays(range.from, range.to) + 1 : dates.length;
+  const printWarning = Math.min(span, dates.length) > PRINT_MAX_DAYS
+    ? `ช่วงที่เลือกมี ${Math.min(span, dates.length)} วัน — A4 แนวนอนพิมพ์ได้ราว ${PRINT_MAX_DAYS} วัน คอลัมน์ที่เกินจะถูกตัด แนะนำกด "7 วัน" ก่อนพิมพ์`
+    : null;
+
+  const handleExport = () => exportWorkbook(stampedFilename(`plan_actual_${machine}`, today), [
+    {
+      name: 'Summary',
+      header: [
+        { key: 'sub_batches', label: 'Batch' }, { key: 'parent_batch', label: 'Parent' }, { key: 'model', label: 'Model' },
+        { key: 'step', label: 'Step' }, { key: 'lot', label: 'Lot', value: (r) => trunc(lotQty(r)) },
+        { key: 'total_actual_ok', label: 'OK (total)', value: (r) => trunc(r.total_actual_ok) },
+        { key: 'planToDate', label: 'Plan to date', value: (r) => rowProgress(r, today).planToDate },
+        { key: 'pct', label: '% attainment', value: (r) => rowProgress(r, today).pct ?? '' },
+      ],
+      rows,
+    },
+    {
+      name: 'Daily',
+      header: [
+        { key: 'sub_batches', label: 'Batch' }, { key: 'step', label: 'Step' }, { key: 'date', label: 'Date' },
+        { key: 'plan', label: 'Plan' }, { key: 'ok', label: 'OK' }, { key: 'ng', label: 'NG' },
+      ],
+      rows: flattenDaily(rows, dates, ['sub_batches', 'step']),
+    },
+  ], { title, filters: rangeText, asOf: today });
+
   return (
     <div>
-      <div
-        className="d-flex flex-wrap align-items-center gap-2 px-3 py-2"
-        style={{ backgroundColor: '#263238', color: '#fff' }}
-      >
-        <strong>MATRIX PRODUCTION DASHBOARD</strong>
-        <div className="ms-auto d-flex gap-2 align-items-center">
-          <Form.Select
-            size="sm"
-            style={{ width: 240 }}
-            value={selectedMachine}
-            onChange={(e) => {
-              const m = e.target.value;
-              setSelectedMachine(m);
-              if (m) fetchPlanVsActual(m);
-            }}
-          >
-            <option value="">เลือกเครื่องจักร</option>
-            {machines.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </Form.Select>
-          <Button
-            variant="outline-light"
-            size="sm"
-            disabled={!selectedMachine}
-            onClick={() => fetchPlanVsActual(selectedMachine)}
-          >
-            <i className="bi bi-arrow-clockwise" aria-hidden="true" />
-          </Button>
-        </div>
+      <div className="rpt-toolbar">
+        <Form.Select
+          size="sm"
+          style={{ width: 200 }}
+          value={machine || ''}
+          onChange={(e) => onMachineChange(e.target.value || null)}
+          aria-label="เครื่องจักร"
+        >
+          <option value="">เลือกเครื่องจักร</option>
+          {machines.map((m) => <option key={m} value={m}>{m}</option>)}
+        </Form.Select>
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          disabled={!machine}
+          onClick={() => fetchPlanVsActual(machine)}
+          title="โหลดใหม่"
+          aria-label="โหลดใหม่"
+        >
+          <i className="bi bi-arrow-clockwise" aria-hidden="true" />
+        </Button>
+        <DateRangeFilter from={range.from} to={range.to} today={today} onChange={setRange} />
+        {machine && <ReportActions onExcel={handleExport} excelDisabled={rows.length === 0} printWarning={printWarning} />}
       </div>
 
-      {!selectedMachine ? (
-        <div className="text-center text-muted py-5">
-          <i className="bi bi-building-gear" style={{ fontSize: '4rem', opacity: 0.4 }} aria-hidden="true" />
-          <div className="fw-bold mt-3">เลือกเครื่องจักรด้านบนเพื่อแสดงข้อมูล</div>
+      {!machine ? (
+        <div className="empty-state">
+          <i className="bi bi-building-gear" aria-hidden="true" />
+          <div className="fw-bold">เลือกเครื่องจักรด้านบน หรือกดชื่อเครื่องในแท็บสรุปรายเครื่อง</div>
         </div>
       ) : loading ? (
-        <div className="text-center py-5">
-          <Spinner animation="border" />
-        </div>
+        <div className="text-center py-5"><Spinner animation="border" /></div>
       ) : rows.length === 0 ? (
-        <div className="text-center text-muted py-5" style={{ fontSize: 18 }}>
-          ไม่มีข้อมูลแผนการผลิตของเครื่องจักรนี้
-        </div>
+        <div className="empty-state"><i className="bi bi-inbox" aria-hidden="true" /><div>ไม่มีแผนของเครื่องนี้ในช่วงที่เลือก</div></div>
       ) : (
-        <div className="matrix-scroll bg-white" style={{ maxHeight: '70vh', overflow: 'auto' }}>
-          <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content' }}>
-            <thead>
-              <tr>
-                {FIXED_COLS.map(([label, left, width]) => (
-                  <th key={label} style={stickyStyle(left, width, { header: true })}>
-                    {label}
-                  </th>
-                ))}
-                {sortedDates.map((d) => (
-                  <th key={d} style={dateCellStyle(DATE_COL_WIDTH, { header: true })}>
-                    {d}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, idx) => {
-                const finalDisplayPlanQty = row.order_qty > 0 ? row.order_qty : row.total_qty;
-                const pct =
-                  finalDisplayPlanQty > 0
-                    ? Math.min(row.total_actual_ok / finalDisplayPlanQty, 1)
-                    : 0;
-                return (
-                  <tr key={idx} style={{ height: ROW_HEIGHT }}>
-                    <td style={{ ...stickyStyle(0, 50), textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ ...stickyStyle(50, 80), fontWeight: 'bold', color: '#546E7A' }}>
-                      {row.machine}
-                    </td>
-                    <td style={{ ...stickyStyle(130, 150), fontWeight: 'bold' }}>
-                      {row.sub_batches ?? row.parent_batch}
-                    </td>
-                    <td style={stickyStyle(280, 150)}>{row.description}</td>
-                    <td style={stickyStyle(430, 100)}>{row.step}</td>
-                    <td style={stickyStyle(530, 80)}>
-                      {/* Qty แบบง่าย: plan น้ำเงิน + actual เขียว + progress (dart L246-297) */}
-                      <div style={{ color: '#1565C0', fontWeight: 'bold', fontSize: 15 }}>
-                        {trunc(finalDisplayPlanQty)}
-                      </div>
-                      <div
-                        style={{ height: 6, backgroundColor: '#1E88E5', borderRadius: 3, margin: '2px 0' }}
-                      />
-                      <div style={{ color: '#388E3C', fontWeight: 'bold', fontSize: 15 }}>
-                        {trunc(row.total_actual_ok)}
-                      </div>
-                      <div style={{ height: 6, backgroundColor: '#e0e0e0', borderRadius: 3 }}>
-                        <div
-                          style={{
-                            height: '100%',
-                            width: `${pct * 100}%`,
-                            backgroundColor: '#4CAF50',
-                            borderRadius: 3,
-                          }}
-                        />
-                      </div>
-                    </td>
-                    {sortedDates.map((d) => (
-                      <td key={d} style={dateCellStyle(DATE_COL_WIDTH)}>
-                        <DateCell dayData={row.dates[d]} actPrefix="Act: " overLabel="(Over)" />
+        <>
+          <PrintHeader title={title} filters={rangeText} asOf={today} />
+          <KpiStrip items={kpiItems(summary)} />
+          <div className="rpt-note no-print">ช่องวัน = ได้ / แผน ของวันนั้น · OK สะสม = ยอด OK ทั้งหมดของ batch/step บนเครื่องนี้</div>
+          <div className="rpt-wrap">
+            <table className="rpt-table">
+              <thead>
+                <tr>
+                  {FROZEN.map((c, i) => (
+                    <th key={c.key} className={`frozen${i === FROZEN.length - 1 ? ' frozen-last' : ''}`} style={frozenStyle(i)}>
+                      {c.label}
+                    </th>
+                  ))}
+                  {dates.map((d) => {
+                    const { label, day } = shortDateLabel(d);
+                    return (
+                      <th key={d} className={dateColClass(d, today, isWeekend)} style={{ minWidth: 90 }} title={d}>
+                        <div className="date-head">{label}<small>{day}</small></div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, idx) => {
+                  const p = rowProgress(row, today);
+                  return (
+                    <tr key={`${row.parent_batch}|${row.sub_batches}|${row.step}`}>
+                      <td className="frozen text-center text-muted" style={frozenStyle(0)}>{idx + 1}</td>
+                      <td className="frozen num fw-bold text-truncate" style={frozenStyle(1)} title={`${row.sub_batches} (${row.description})`}>
+                        {row.sub_batches ?? row.parent_batch}
                       </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      <td className="frozen text-truncate" style={frozenStyle(2)} title={row.model}>{row.model}</td>
+                      <td className="frozen text-truncate" style={frozenStyle(3)} title={row.step}>{row.step}</td>
+                      <td className="frozen text-end num" style={frozenStyle(4)}>{trunc(lotQty(row))}</td>
+                      <td
+                        className={`frozen frozen-last text-end num fw-bold tone-${p.planToDate > 0 ? attainmentTone(p.pct) : 'muted'}`}
+                        style={frozenStyle(5)}
+                      >
+                        {trunc(row.total_actual_ok)}
+                      </td>
+                      {dates.map((d) => (
+                        <td key={d} className={dateColClass(d, today, isWeekend)}>
+                          <PlanCell dayData={row.dates[d]} date={d} today={today} />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
+};
+
+ByMachineTab.propTypes = {
+  today: PropTypes.string.isRequired,
+  machine: PropTypes.string,
+  onMachineChange: PropTypes.func.isRequired,
 };
 
 export default ByMachineTab;

@@ -1,0 +1,177 @@
+/* หน้ารายงาน (Planning / Plan & Actual / WIP / Daily Result) — ชุดสไตล์กลาง
+ * ใช้สีจาก theme.css เท่านั้น (ห้ามเพิ่มเฉดใหม่ — ดูหัว theme.css)
+ * ตอนพิมพ์ดู theme/print.css
+ */
+
+/* ===== KPI ===== */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.kpi-card {
+  background: var(--mse-surface);
+  border: 1px solid var(--mse-border);
+  border-left: 4px solid var(--mse-muted);
+  border-radius: var(--mse-radius-sm);
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.kpi-clickable { cursor: pointer; }
+.kpi-clickable:hover { background: var(--mse-canvas); }
+.kpi-active { box-shadow: 0 0 0 2px var(--mse-primary); }
+
+.kpi-label { font-size: var(--fs-meta); color: var(--mse-muted); }
+.kpi-value { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+.kpi-sub { font-size: 0.72rem; color: var(--mse-muted); }
+
+.kpi-ok { border-left-color: var(--mse-ok); }
+.kpi-ok .kpi-value { color: var(--mse-ok); }
+.kpi-warn { border-left-color: var(--mse-warn); }
+.kpi-warn .kpi-value { color: var(--mse-warn); }
+.kpi-ng { border-left-color: var(--mse-ng); }
+.kpi-ng .kpi-value { color: var(--mse-ng); }
+.kpi-info { border-left-color: var(--mse-primary); }
+.kpi-info .kpi-value { color: var(--mse-primary); }
+
+/* ===== แถบ filter + ปุ่ม ===== */
+.rpt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--mse-surface);
+  border: 1px solid var(--mse-border);
+  border-radius: var(--mse-radius-sm);
+  padding: 0.45rem 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.report-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rpt-note {
+  font-size: var(--fs-meta);
+  color: var(--mse-muted);
+  margin-bottom: 0.4rem;
+}
+
+/* ===== ตาราง ===== */
+.rpt-wrap {
+  overflow: auto;
+  max-height: calc(100vh - 320px);
+  min-height: 200px;
+  border: 1px solid var(--mse-border);
+  border-radius: var(--mse-radius-sm);
+  background: var(--mse-surface);
+}
+
+.rpt-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: 12px;
+}
+
+.rpt-table th,
+.rpt-table td {
+  border-right: 1px solid #eee;
+  border-bottom: 1px solid #eee;
+  padding: 3px 8px;
+  height: 30px;
+  white-space: nowrap;
+  vertical-align: middle;
+  background-clip: padding-box;
+}
+
+.rpt-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--mse-head-bg);
+  color: #37474f;
+  font-weight: 700;
+  border-bottom: 1px solid var(--mse-border);
+}
+
+.rpt-table tbody tr:hover td { background-color: var(--mse-canvas); }
+
+/* คอลัมน์ตรึงซ้าย — ค่า left ใส่เป็น inline style ต่อคอลัมน์ */
+.rpt-table .frozen {
+  position: sticky;
+  z-index: 2;
+  background: var(--mse-surface);
+}
+.rpt-table thead .frozen { z-index: 4; background: var(--mse-head-bg); }
+.rpt-table .frozen-last { border-right: 2px solid var(--mse-border); }
+
+.rpt-table .text-end { text-align: right; }
+.rpt-table .text-center { text-align: center; }
+
+/* แถวหัวกลุ่ม (เช่น Dispatch: ชื่อเครื่อง / วัน) */
+.rpt-table .group-row td {
+  background: var(--mse-primary-soft);
+  color: var(--mse-primary);
+  font-weight: 700;
+}
+.rpt-table .subgroup-row td {
+  background: var(--mse-canvas);
+  font-weight: 600;
+}
+
+/* คอลัมน์วัน: วันนี้ / เสาร์-อาทิตย์ */
+.rpt-table .col-date { text-align: center; min-width: 64px; }
+.rpt-table .col-weekend { background-color: var(--mse-canvas); }
+.rpt-table thead .col-weekend { color: var(--mse-ng); }
+.rpt-table .col-today { box-shadow: inset 2px 0 0 var(--mse-primary), inset -2px 0 0 var(--mse-primary); }
+.rpt-table thead .col-today { background: var(--mse-primary); color: #fff; }
+
+.date-head { line-height: 1.15; }
+.date-head small { display: block; font-weight: 400; font-size: 10px; }
+
+/* ช่องสีตามสถานะ (tone) */
+.tone-ok { background-color: var(--mse-ok-bg) !important; color: var(--mse-ok); }
+.tone-warn { background-color: var(--mse-warn-bg) !important; color: var(--mse-warn); }
+.tone-ng { background-color: var(--mse-ng-bg) !important; color: var(--mse-ng); }
+.tone-info { background-color: var(--mse-primary-soft) !important; color: var(--mse-primary); }
+.tone-muted { color: var(--mse-muted); }
+
+/* แท่งงานในตาราง Schedule */
+.cell-job {
+  display: block;
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 20px;
+  font-size: 11px;
+  text-align: center;
+  background: var(--mse-primary-soft);
+  color: var(--mse-primary-dark);
+}
+.cell-setup { background: var(--mse-warn-bg); color: var(--mse-warn); }
+
+/* แถบเทียบสัดส่วน (Plan vs Actual / Yield) */
+.mini-bar {
+  height: 5px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+.mini-bar > span { display: block; height: 100%; background: var(--mse-ok); }
+.mini-bar.bar-warn > span { background: var(--mse-warn); }
+.mini-bar.bar-ng > span { background: var(--mse-ng); }
+.mini-bar.bar-info > span { background: var(--mse-primary); }
+
+/* เฉพาะตอนพิมพ์ — บนจอซ่อน */
+.print-only { display: none; }
+.print-split { display: none; }

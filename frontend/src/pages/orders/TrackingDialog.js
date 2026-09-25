@@ -123,6 +123,12 @@ const TrackingDialog = ({ show, onHide, batchId }) => {
                 <span className="text-primary fw-bold">{data.model}</span>
                 {'  ·  Qty: '}
                 <span className="text-primary fw-bold">{data.qty}</span>
+                {data.flow_index !== null && data.flow_index !== undefined && (
+                  <>
+                    {'  ·  Flow: '}
+                    <span className="text-primary fw-bold">{data.flow_index}</span>
+                  </>
+                )}
               </>
             )}
           </Modal.Title>
@@ -150,7 +156,14 @@ const TrackingDialog = ({ show, onHide, batchId }) => {
                 <tbody>
                   {data.steps.map((s, i) => (
                     <tr key={s.step_name} style={i % 2 === 1 ? { backgroundColor: '#e8f5e9' } : {}}>
-                      <td className="fw-bold">{s.step_name}</td>
+                      <td className="fw-bold">
+                        {s.step_name}
+                        {s.outside_flow && (
+                          <span className="chip-warn ms-2" title="มียอดบันทึกแต่ step นี้ไม่อยู่ใน flow ที่ batch นี้เดิน">
+                            นอก flow
+                          </span>
+                        )}
+                      </td>
                       <td className="text-muted">{s.machine}</td>
                       <td>{s.comments || '-'}</td>
                       <td className="text-success fw-bold">{s.qty_ok}</td>
