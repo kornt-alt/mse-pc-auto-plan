@@ -34,7 +34,8 @@ const PlanningView = () => {
   const { planData, reportData, prevReportData, loading, loadLatest } = usePlanData();
   const today = todayBangkok();
   const [activeTab, setActiveTab] = useState('delivery');
-  const [scheduleFilter, setScheduleFilter] = useState({ machine: null, batch: null, from: today, to: addDays(today, 13) });
+  // ตั้งต้น 10 วัน = พอดี A4 ที่ PRINT_MAX_DAYS ของ ScheduleTab — ช่วงยาวกว่านี้เลือกได้ แต่พิมพ์แล้วจะขึ้นคำเตือน
+  const [scheduleFilter, setScheduleFilter] = useState({ machine: null, batch: null, from: today, to: addDays(today, 9) });
   const [orders, setOrders] = useState(null);
   const [ordersError, setOrdersError] = useState('');
   const [lastPlan, setLastPlan] = useState('');

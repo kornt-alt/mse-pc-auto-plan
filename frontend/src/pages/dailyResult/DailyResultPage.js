@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import PropTypes from 'prop-types';
 import { Form, Button, Spinner } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
@@ -88,23 +88,32 @@ const DailyResultPage = () => {
   const [machines, setMachines] = useState(['All']);
   const [summary, setSummary] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const reqSeq = useRef(0);
   const [d1Ctx, setD1Ctx] = useState(null);
   const { toast, showToast, hideToast } = useToast();
 
   const thisYear = Number(today.slice(0, 4));
   const years = Array.from({ length: 10 }, (_, i) => thisYear - 5 + i);
 
+  // เปลี่ยนปี/เดือน/เครื่องเร็วๆ คำตอบของตัวเลือกก่อนหน้าอาจมาถึงทีหลัง — ทิ้งทุกคำตอบที่ไม่ใช่คำขอล่าสุด
+  // ไม่งั้นหัวรายงาน/Excel บอกเดือนใหม่แต่ตารางเป็นของเดือนเก่า
   const fetchSummary = useCallback(async (y, m, mc) => {
+    reqSeq.current += 1;
+    const seq = reqSeq.current;
     setLoading(true);
+    setError('');
     try {
       const params = new URLSearchParams({ year: y, month: m, machine: mc });
       const res = await apiCall(`/daily-result/summary?${params.toString()}`);
-      setSummary(res.data || []);
+      if (seq === reqSeq.current) setSummary(res.data || []);
     } catch (err) {
+      if (seq !== reqSeq.current) return;
       showToast(`โหลดข้อมูลไม่สำเร็จ: ${err.message}`, 'danger');
+      setError(err.message || 'โหลดข้อมูลไม่สำเร็จ');
       setSummary([]);
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [showToast]);
 
@@ -162,7 +171,7 @@ const DailyResultPage = () => {
       sub: total.worstYield ? `วันที่ ${total.worstYield.day}` : null,
       tone: 'warn',
     },
-  ];
+  ].map((k) => (error ? { ...k, value: '…', sub: null, tone: 'muted' } : k)); // โหลดพัง = ห้ามโชว์ 0 สีเขียว
 
   return (
     <div className="container-fluid py-3">
@@ -213,13 +222,14 @@ const DailyResultPage = () => {
           {machines.map((m) => <option key={m} value={m}>{m === 'All' ? 'ทุกเครื่อง' : m}</option>)}
         </Form.Select>
         {loading && <Spinner animation="border" size="sm" />}
-        <ReportActions onExcel={handleExport} excelDisabled={total.workDays === 0}>
+        <ReportActions onExcel={handleExport} excelDisabled={!!error || total.workDays === 0}>
           <Button size="sm" variant="outline-secondary" onClick={() => fetchSummary(year, month, machine)}>
             <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />รีเฟรช
           </Button>
         </ReportActions>
       </div>
 
+      {error && <div className="text-danger small mb-2">โหลดข้อมูลไม่สำเร็จ: {error} — กดรีเฟรช</div>}
       <KpiStrip items={kpis} />
 
       <div className="rpt-note no-print">กดตัวเลขวันที่ (ที่มียอด) เพื่อดูรายละเอียดราย batch / step</div>

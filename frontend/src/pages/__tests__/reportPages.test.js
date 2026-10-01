@@ -100,3 +100,64 @@ test('Daily Result: KPI ของเดือนจากยอดรายว�
   await within(kpi('Yield ทั้งเดือน')).findByText('90.00%');
   expect(within(kpi('NG ทั้งเดือน')).getByText('10')).toBeInTheDocument();
 });
+
+// ---- โหลดพัง / ไม่ครบ: ตัวเลขต้องเป็น '…' สีเทา ไม่ใช่ 0 สีเขียว (อ่านว่า "ไม่มีปัญหา") ----
+const expectMuted = (label) => {
+  const card = kpi(label);
+  expect(within(card).getByText('…')).toBeInTheDocument();
+  expect(card).toHaveClass('kpi-muted');
+};
+
+test('WIP: หน้าที่ 2 โหลดพัง → แจ้งข้อมูลไม่ครบ, KPI เป็น …, Excel กดไม่ได้', async () => {
+  apiCall.mockImplementation((endpoint) => {
+    if (endpoint.includes('offset=0')) {
+      return Promise.resolve({
+        data: [{ batch: 'B1', description: 'D', due_date: addDays(TODAY, 20), qty: 10, wips: { S1: 4 }, total_ng: 0 }],
+        has_next: true,
+        sorted_steps: ['S1'],
+      });
+    }
+    return Promise.reject(new Error('timeout'));
+  });
+  render(<WipPage />);
+  await screen.findByText(/ข้อมูลไม่ครบ \(โหลดได้ 1 batch\)/);
+  expectMuted('Overdue');
+  expectMuted('Batch ที่เปิดอยู่');
+  expect(screen.getByRole('button', { name: /Excel/ })).toBeDisabled();
+});
+
+test('Plan & Actual สรุปรายเครื่อง: โหลดพัง → KPI เป็น …', async () => {
+  apiCall.mockImplementation(() => Promise.reject(new Error('DB down')));
+  render(<PlanActualPage />);
+  await screen.findByText('DB down');
+  expectMuted('NG รวม');
+  expectMuted('ผลิตได้ (OK)');
+});
+
+test('Daily Result: โหลดพัง → KPI เป็น …', async () => {
+  apiCall.mockImplementation(route({ '/daily-result/machines': { data: [] } }));
+  render(<DailyResultPage />);
+  await screen.findByText(/โหลดข้อมูลไม่สำเร็จ: unmocked/, { selector: 'div.text-danger' });
+  expectMuted('NG ทั้งเดือน');
+});
+
+test('Daily Result: คำตอบของเดือนเก่าที่มาถึงทีหลังต้องไม่ทับเดือนที่เลือกล่าสุด', async () => {
+  const { fireEvent, act } = require('@testing-library/react');
+  const target = Number(TODAY.slice(5, 7)) === 1 ? 2 : 1; // เดือนที่ไม่ใช่เดือนตั้งต้น
+  let resolveOld;
+  apiCall.mockImplementation((endpoint) => {
+    if (endpoint.startsWith('/daily-result/machines')) return Promise.resolve({ data: [] });
+    if (endpoint.includes(`month=${target}&`)) {
+      return Promise.resolve({ data: [{ day: 1, date: `${TODAY.slice(0, 4)}-0${target}-01`, ttl_input: 100, ttl_output: 50 }] });
+    }
+    return new Promise((res) => { resolveOld = res; }); // เดือนตั้งต้น — ค้างไว้
+  });
+  render(<DailyResultPage />);
+  await screen.findByText('Yield ทั้งเดือน', { selector: '.kpi-label' });
+  fireEvent.change(screen.getByLabelText('เดือน'), { target: { value: String(target) } });
+  await within(kpi('Yield ทั้งเดือน')).findByText('50.00%');
+  await act(async () => {
+    resolveOld({ data: [{ day: 1, date: `${TODAY.slice(0, 8)}01`, ttl_input: 100, ttl_output: 90 }] });
+  });
+  expect(within(kpi('Yield ทั้งเดือน')).getByText('50.00%')).toBeInTheDocument();
+});
