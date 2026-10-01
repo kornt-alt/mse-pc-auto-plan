@@ -68,6 +68,7 @@ const MachineSummaryTab = ({ today, onOpenMachine }) => {
   return (
     <div>
       <PrintHeader title={title} filters={`แผนสะสมถึง ${today}`} asOf={today} />
+      {/* โหลดพัง = ตัวเลขยังไม่รู้ — ห้ามโชว์ 0 สีเขียว (กฎเดียวกับ ordersOk ใน PlanningView) */}
       <KpiStrip items={[
         { id: 'machines', label: 'เครื่องที่มีแผน', value: rows.length, tone: 'info' },
         { id: 'plan', label: 'แผนถึงวันนี้ (ชิ้น)', value: trunc(totals.planToDate).toLocaleString() },
@@ -75,7 +76,7 @@ const MachineSummaryTab = ({ today, onOpenMachine }) => {
         { id: 'pct', label: '% ทำได้ตามแผน', value: totals.pct == null ? '-' : `${totals.pct}%`, tone: attainmentTone(totals.pct) },
         { id: 'low', label: `เครื่องต่ำกว่า ${ATTAINMENT_TONE.warn}%`, value: totals.low, tone: totals.low > 0 ? 'ng' : 'ok' },
         { id: 'ng', label: 'NG รวม', value: trunc(totals.ng).toLocaleString(), tone: totals.ng > 0 ? 'ng' : 'ok' },
-      ]}
+      ].map((k) => (error ? { ...k, value: '…', sub: null, tone: 'muted' } : k))}
       />
       <div className="rpt-toolbar">
         <span className="small text-muted">
@@ -84,7 +85,7 @@ const MachineSummaryTab = ({ today, onOpenMachine }) => {
           <span className="chip chip-warn ms-1">{ATTAINMENT_TONE.warn}–{ATTAINMENT_TONE.ok}%</span>
           <span className="chip chip-ng ms-1">&lt; {ATTAINMENT_TONE.warn}%</span>
         </span>
-        <ReportActions onExcel={handleExport} excelDisabled={rows.length === 0}>
+        <ReportActions onExcel={handleExport} excelDisabled={!!error || rows.length === 0}>
           <Button size="sm" variant="outline-secondary" onClick={load}>
             <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />รีเฟรช
           </Button>

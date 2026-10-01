@@ -1,7 +1,7 @@
 // By Machine — งานทุก batch บนเครื่องเดียว แผนเทียบผลจริงรายวัน (เดิม MATRIX PRODUCTION DASHBOARD /
 // dashboard_plan_actual_machine.dart) · transform อยู่ใน planActual.js (ตรรกะเดิม)
 // เครื่องที่เลือกถือไว้ที่ PlanActualPage — แท็บสรุปรายเครื่องกดส่งมาเปิดที่นี่ได้
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import PropTypes from 'prop-types';
 import { Form, Button, Spinner } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
@@ -29,7 +29,9 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
   const [machines, setMachines] = useState([]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [range, setRange] = useState({ from: addDays(today, -6), to: addDays(today, 7) });
+  // ตั้งต้น 7 วัน (±3 รอบวันนี้) = พอดี A4 ที่ PRINT_MAX_DAYS — เลือกช่วงยาวกว่านี้ได้ แต่พิมพ์แล้วจะขึ้นคำเตือน
+  const [range, setRange] = useState({ from: addDays(today, -3), to: addDays(today, 3) });
+  const reqSeq = useRef(0);
 
   useEffect(() => {
     // FIX: ดึงจาก machine_config ผ่าน /production/machines (เดิม hardcode 8 ตัวฝั่ง Flutter)
@@ -38,21 +40,29 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
       .catch(() => setMachines([]));
   }, []);
 
+  // เปลี่ยนเครื่องเร็วๆ คำตอบของเครื่องก่อนหน้าอาจมาถึงทีหลัง — ทิ้งทุกคำตอบที่ไม่ใช่คำขอล่าสุด
+  // ไม่งั้นหัวรายงาน/Excel บอกเครื่องใหม่แต่ตารางเป็นของเครื่องเก่า
   const fetchPlanVsActual = useCallback(async (m) => {
+    reqSeq.current += 1;
+    const seq = reqSeq.current;
     setLoading(true);
     try {
       const res = await apiCall(`/visualization/plan-vs-actual?machine=${encodeURIComponent(m)}`);
-      setData(res.data || []);
+      if (seq === reqSeq.current) setData(res.data || []);
     } catch {
-      setData([]);
+      if (seq === reqSeq.current) setData([]);
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (machine) fetchPlanVsActual(machine);
-    else setData(null);
+    else {
+      reqSeq.current += 1; // ล้างเครื่อง = คำขอที่ค้างอยู่ใช้ไม่ได้แล้ว
+      setData(null);
+      setLoading(false);
+    }
   }, [machine, fetchPlanVsActual]);
 
   const all = useMemo(() => transformByMachine(data ?? []), [data]);

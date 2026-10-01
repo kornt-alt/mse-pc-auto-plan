@@ -7,7 +7,7 @@ import PropTypes from 'prop-types';
 import { Form, Button, Spinner } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import {
-  WIP_PAGE_SIZE, WIP_FILTERS, wipStatus, mergeStepOrders, wipTotal, matchesWipFilter,
+  WIP_PAGE_SIZE, WIP_FILTERS, wipStatus, collectWipPages, wipTotal, matchesWipFilter,
   summarizeWip, countWipFilters, wipInline,
 } from './wipSummary';
 import { KpiStrip, ReportActions, PrintHeader } from '../../components/report';
@@ -20,6 +20,7 @@ const SummaryTab = ({ today }) => {
   const [rows, setRows] = useState(null);
   const [steps, setSteps] = useState([]);
   const [error, setError] = useState('');
+  const [incomplete, setIncomplete] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(null);
   const [page, setPage] = useState(1);
@@ -27,20 +28,14 @@ const SummaryTab = ({ today }) => {
   const load = useCallback(async () => {
     setRows(null);
     setError('');
-    const all = [];
-    const stepLists = [];
-    try {
-      for (let i = 0; i < MAX_PAGES; i += 1) {
-        const res = await apiCall(`/wip-summary?limit=${WIP_PAGE_SIZE}&offset=${i * WIP_PAGE_SIZE}&search=`);
-        all.push(...(res.data || []));
-        stepLists.push((res.sorted_steps || []).map(String));
-        if (!res.has_next) break;
-      }
-    } catch (err) {
-      setError(`เชื่อมต่อ API ไม่ได้: ${err.message}`);
-    }
-    setRows(all);
-    setSteps(mergeStepOrders(stepLists));
+    const res = await collectWipPages(
+      (offset) => apiCall(`/wip-summary?limit=${WIP_PAGE_SIZE}&offset=${offset}&search=`),
+      MAX_PAGES,
+    );
+    if (res.error) setError(`เชื่อมต่อ API ไม่ได้: ${res.error}`);
+    setIncomplete(res.incomplete);
+    setRows(res.rows);
+    setSteps(res.steps);
     setPage(1);
   }, []);
 
@@ -85,6 +80,8 @@ const SummaryTab = ({ today }) => {
 
   if (rows === null) return <div className="text-center py-5"><Spinner animation="border" className="text-mse" /></div>;
 
+  // โหลดไม่ครบ = ตัวเลขรวมยังไม่รู้ — ห้ามโชว์ 0 สีเขียว (กฎเดียวกับ ordersOk ใน PlanningView)
+  const kpi = (item) => (incomplete ? { ...item, value: '…', sub: null, tone: 'muted' } : item);
   const kpis = [
     { id: 'all', label: 'Batch ที่เปิดอยู่', value: summary.batches, sub: `มี WIP ${summary.withWip}`, tone: 'info', selectable: false },
     { id: 'wip', label: 'WIP รวม (ชิ้น)', value: Math.trunc(summary.wipPcs).toLocaleString(), tone: 'info', selectable: false },
@@ -92,7 +89,7 @@ const SummaryTab = ({ today }) => {
     { id: 'urgent', label: 'Urgent ≤ 3 วัน', value: summary.urgent, tone: summary.urgent > 0 ? 'warn' : 'ok' },
     { id: 'no-routing', label: 'No Routing', value: summary.noRouting, tone: summary.noRouting > 0 ? 'ng' : 'ok' },
     { id: 'ng', label: 'NG รวม', value: Math.trunc(summary.ng).toLocaleString(), tone: summary.ng > 0 ? 'ng' : 'ok', selectable: false },
-  ];
+  ].map(kpi);
 
   return (
     <div>
@@ -111,7 +108,7 @@ const SummaryTab = ({ today }) => {
             onClick={() => { setStatusFilter((cur) => (cur === f.id ? null : f.id)); setPage(1); }}
             title="กดเพื่อกรอง / กดซ้ำเพื่อยกเลิก"
           >
-            {f.label} {counts[f.id]}
+            {f.label} {incomplete ? '…' : counts[f.id]}
           </button>
         ))}
         <Form.Control
@@ -121,13 +118,18 @@ const SummaryTab = ({ today }) => {
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
         />
-        <ReportActions onExcel={handleExport} excelDisabled={filtered.length === 0}>
+        <ReportActions onExcel={handleExport} excelDisabled={incomplete || filtered.length === 0}>
           <Button size="sm" variant="outline-secondary" onClick={load}>
             <i className="bi bi-arrow-clockwise me-1" aria-hidden="true" />รีเฟรช
           </Button>
         </ReportActions>
       </div>
       {error && <div className="text-danger small mb-2">{error}</div>}
+      {incomplete && (
+        <div className="text-danger small mb-2">
+          ข้อมูลไม่ครบ (โหลดได้ {rows.length} batch) — ตัวเลขสรุปและ Excel ใช้ไม่ได้จนกว่าจะกดรีเฟรชสำเร็จ
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <div className="empty-state"><i className="bi bi-inbox" aria-hidden="true" /><div>ไม่มีข้อมูล WIP ตามเงื่อนไขนี้</div></div>

@@ -48,6 +48,38 @@ export function mergeStepOrders(lists) {
   return out;
 }
 
+// โหลดทุกหน้า — fetchPage(offset) ฉีดเข้ามา (ในแอป = apiCall GET /wip-summary) จึงเทสได้โดยไม่ต้อง mock API
+// คืน { rows, steps, incomplete, error }:
+// - incomplete = true เมื่อหน้าใดโหลดพัง หรือวนครบ maxPages แล้ว has_next ยังจริง → หน้าจอห้ามโชว์ KPI/Excel เหมือนครบ
+// - batch ซ้ำ (offset เลื่อนเพราะข้อมูลเปลี่ยนระหว่างโหลด) เก็บแถวแรก ไม่นับซ้ำ
+export async function collectWipPages(fetchPage, maxPages, pageSize = WIP_PAGE_SIZE) {
+  const rows = [];
+  const seen = new Set();
+  const stepLists = [];
+  let incomplete = true;
+  let error = '';
+  try {
+    for (let i = 0; i < maxPages; i += 1) {
+      const res = await fetchPage(i * pageSize);
+      for (const r of res?.data || []) {
+        const key = String(r.batch);
+        if (!seen.has(key)) {
+          seen.add(key);
+          rows.push(r);
+        }
+      }
+      stepLists.push((res?.sorted_steps || []).map(String));
+      if (!res?.has_next) {
+        incomplete = false;
+        break;
+      }
+    }
+  } catch (err) {
+    error = err?.message || String(err);
+  }
+  return { rows, steps: mergeStepOrders(stepLists), incomplete, error };
+}
+
 export const wipTotal = (row) => Object.values(row.wips ?? {}).reduce((s, v) => s + (Number(v) || 0), 0);
 
 export const matchesWipFilter = (row, id, todayStr) => {
