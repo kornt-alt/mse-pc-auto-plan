@@ -167,6 +167,7 @@ const TABLES = [
   issue_date           NVARCHAR(50)  NULL,
   issue_date_manual    BIT           NOT NULL DEFAULT 0,
   flow_locked          BIT           NOT NULL DEFAULT 0,
+  step_machines        NVARCHAR(2000) NULL,
   component_material      NVARCHAR(255)  NULL,
   component_material_desc NVARCHAR(1000) NULL
 )`,
@@ -200,6 +201,8 @@ const TABLES = [
       // 1 = ผู้ใช้เลือกเส้นทาง (wip_flow_index) เอง — ทำให้ Flow 0 ล็อกได้ และ manual flow ที่
       // เริ่มขั้นตอนแรกไม่ถูกนับเป็น WIP (ไม่โดดคิว -999) ดู scheduler/engine.js
       { name: 'flow_locked', definition: 'BIT NOT NULL DEFAULT 0', optional: true },
+      // เครื่องที่ผู้ใช้ล็อกเองรายขั้นตอน — JSON {"STEP NAME":"MACHINE"} (utils/stepMachines.js)
+      { name: 'step_machines', definition: 'NVARCHAR(2000) NULL', optional: true },
       // วัตถุดิบจาก Hana (ComponentMaterial / ComponentMaterialDescription) — หลายตัวรวมคั่น ' / '
       { name: 'component_material', definition: 'NVARCHAR(255) NULL', optional: true },
       { name: 'component_material_desc', definition: 'NVARCHAR(1000) NULL', optional: true },

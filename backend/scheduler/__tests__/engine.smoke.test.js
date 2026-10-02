@@ -480,3 +480,74 @@ test('FIX: งานผลิตค้างที่ล็อกกับ alter
   assert.ok(cut.length > 0 && cut.every((row) => row.machine === 'MC-B'));
   assert.equal(cut.reduce((a, row) => a + row.timeUsed_min, 0), 150); // เหลือ 50 ชิ้น × 3 นาที
 });
+
+// ===== เครื่องที่ผู้ใช้ล็อกรายขั้นตอน (orders.step_machines → WIP_StepMachines, 2026-10-02) =====
+// M5: ขั้นตอนที่ 2 (FIN) มีเครื่องทางเลือก 2 ตัว cycle time ต่างกัน
+const buildM5Engine = () => {
+  const r = [
+    { Model: 'M5', FlowIndex: 0, StepIndex: 0, StepName: 'CUT' },
+    { Model: 'M5', FlowIndex: 0, StepIndex: 1, StepName: 'FIN' },
+  ];
+  const m = [
+    { Model: 'M5', FlowIndex: 0, StepIndex: 0, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M5', FlowIndex: 0, StepIndex: 1, AlternativeIndex: 0, Machine: 'MC-A', CycleTime: 1, SetupTime: 0, JigID: '-' },
+    { Model: 'M5', FlowIndex: 0, StepIndex: 1, AlternativeIndex: 1, Machine: 'MC-B', CycleTime: 3, SetupTime: 0, JigID: '-' },
+  ];
+  const { fixedMachine, cycleTime, setupConfig } = processUnifiedMachineConfig(m);
+  return new SchedulerEngine(makeCalendar(), processRouting(r), fixedMachine, cycleTime, setupConfig);
+};
+const m5Order = (over) =>
+  new OrderManager(false).processOrders([
+    { Batch: 'B9', Model: 'M5', qty: 100, dueDate: '2026-07-30', priority: 1, planningMode: 'forward', planMode: 'NEW',
+      WIP_FlowIndex: 0, WIP_StartStepIndex: 0, WIP_FlowLocked: true, ...over },
+  ])[0];
+const finRows = (mainPlan) => mainPlan.filter((row) => row.step === 'FIN' && !row.isSetup);
+
+test('step pin: ล็อก FIN ไว้ที่ MC-B (ทางเลือกตัวที่ 2) → ใช้ MC-B และ cycle time ของมัน', () => {
+  const { mainPlan } = buildM5Engine().run(
+    m5Order({ WIP_StepMachines: { FIN: 'MC-B' } }), null, null, null, null, bkk('2026-07-16T09:00:00'),
+  );
+  const fin = finRows(mainPlan);
+  assert.ok(fin.length > 0 && fin.every((row) => row.machine === 'MC-B'));
+  assert.equal(fin.reduce((a, row) => a + row.timeUsed_min, 0), 300); // 100 × 3
+});
+
+test('step pin: ไม่ล็อก → engine เลือก MC-A ที่เร็วกว่าเหมือนเดิม', () => {
+  const { mainPlan } = buildM5Engine().run(m5Order({}), null, null, null, null, bkk('2026-07-16T09:00:00'));
+  assert.ok(finRows(mainPlan).every((row) => row.machine === 'MC-A'));
+});
+
+test('step pin: สายถอยหลังก็ล็อก', () => {
+  const { mainPlan, totalPlanMap } = buildM5Engine().run(
+    m5Order({ planningMode: 'backward', WIP_StepMachines: { FIN: 'MC-B' } }),
+    null, null, null, null, bkk('2026-07-16T09:00:00'),
+  );
+  assert.equal(totalPlanMap.get('B9').StatusLOT, 'Backward Planned');
+  const fin = finRows(mainPlan);
+  assert.ok(fin.length > 0 && fin.every((row) => row.machine === 'MC-B'));
+});
+
+test('step pin: เครื่องไม่อยู่ในตัวเลือก → engine เลือกเอง ไม่ทำงานหาย', () => {
+  const { mainPlan, totalPlanMap } = buildM5Engine().run(
+    m5Order({ WIP_StepMachines: { FIN: 'MC-Z' } }), null, null, null, null, bkk('2026-07-16T09:00:00'),
+  );
+  assert.equal(totalPlanMap.get('B9').StatusLOT, 'Proceeding');
+  assert.ok(finRows(mainPlan).length > 0);
+});
+
+test('step pin: ทับการล็อกอัตโนมัติจากยอดผลิตจริง (สั่งเอง)', () => {
+  const { mainPlan } = buildM5Engine().run(
+    m5Order({ WIP_StepMachines: { FIN: 'MC-B' } }),
+    null, { B9: { FIN: 20 } }, { B9: { FIN: 'MC-A' } }, null, bkk('2026-07-16T09:00:00'),
+  );
+  const fin = finRows(mainPlan);
+  assert.ok(fin.length > 0 && fin.every((row) => row.machine === 'MC-B'));
+});
+
+test('step pin: order ที่ไม่ล็อกเส้นทาง → ไม่สนใจ WIP_StepMachines', () => {
+  const { mainPlan } = buildM5Engine().run(
+    m5Order({ WIP_FlowLocked: undefined, WIP_StepMachines: { FIN: 'MC-B' } }),
+    null, null, null, null, bkk('2026-07-16T09:00:00'),
+  );
+  assert.ok(finRows(mainPlan).every((row) => row.machine === 'MC-A'));
+});

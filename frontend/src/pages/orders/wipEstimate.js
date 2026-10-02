@@ -247,6 +247,27 @@ export function ownMachinesOf(step) {
 
 // สลับค่าเวลาของขั้นตอนแรกของ flow เป็นของเครื่องที่ผู้ใช้เลือก — ให้ประมาณการตรงกับที่ engine
 // ล็อกเครื่องนั้น (engine.js narrowToMachine) · ไม่เจอเครื่องในตัวเลือก = คืนของเดิม
+// เครื่องที่ล็อกเองรายขั้นตอน (orders.step_machines) — { 'STEP NAME (upper)': machine }
+// สลับเวลาของทุกขั้นที่ล็อกใน flow นั้นเป็นของเครื่องที่เลือก ให้ประมาณการตรงกับ engine (pinnedMachine)
+// ไม่เจอเครื่องในตัวเลือก = ขั้นนั้นคงเดิม (engine ก็ไม่ล็อก)
+export function withStepMachines(steps, flowIndex, pins) {
+  const list = steps || [];
+  if (!pins || Object.keys(pins).length === 0) return list;
+  return list.map((s) => {
+    if (s.flow_index !== flowIndex) return s;
+    const mac = pins[String(s.step_name ?? '').trim().toUpperCase()];
+    const alt = mac && (s.alternatives || []).find((a) => a.machine === mac);
+    if (!alt) return s;
+    return {
+      ...s,
+      machine: alt.machine,
+      cycle_time: alt.cycle_time,
+      setup_time: alt.setup_time,
+      handling_time: alt.handling_time ?? 0,
+    };
+  });
+}
+
 export function withFirstMachine(steps, flowIndex, machine) {
   const list = steps || [];
   const flowSteps = list.filter((s) => s.flow_index === flowIndex);

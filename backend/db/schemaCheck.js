@@ -97,6 +97,13 @@ const OPTIONAL_OBJECTS = [
     impact: 'เลือกเส้นทางเอง (manual flow) ที่ขั้นตอนแรกไม่ได้ผล — Flow 0 ไม่ล็อก และ flow อื่นโดดคิวแบบ WIP เหมือนเดิม',
   },
   {
+    name: 'orders.step_machines',
+    kind: 'column',
+    table: 'orders',
+    column: 'step_machines',
+    impact: 'เลือกเครื่องเองรายขั้นตอน (ฟอร์ม order ส่วน WIP) ไม่ถูกบันทึก — engine เลือกเครื่องเองทุกขั้น',
+  },
+  {
     name: 'orders.component_material',
     kind: 'column',
     table: 'orders',

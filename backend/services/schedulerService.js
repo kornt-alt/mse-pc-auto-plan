@@ -69,11 +69,14 @@ async function loadInputs(isReplan) {
   const hasArrivedCol = (await query("SELECT COL_LENGTH('orders','material_arrived') AS c"))[0].c != null;
   // flow_locked (manual flow) — DDL รันมือ ไม่มีคอลัมน์ = ไม่มี order ไหนล็อก = พฤติกรรมเดิม
   const hasFlowLockedCol = (await query("SELECT COL_LENGTH('orders','flow_locked') AS c"))[0].c != null;
+  // step_machines (เครื่องที่ล็อกเองรายขั้นตอน) — DDL รันมือ ไม่มีคอลัมน์ = ไม่มีการล็อก = พฤติกรรมเดิม
+  const hasStepMachinesCol = (await query("SELECT COL_LENGTH('orders','step_machines') AS c"))[0].c != null;
   const orderRows = await query(
     `SELECT batch, model, due_date, priority, qty, plan_mode,
             wip_flow_index, wip_start_step_index, wip_finish_date, wip_machine,
             planning_mode, release_date, material_ready_date, confirm_reply_date
             ${hasArrivedCol ? ', material_arrived' : ''}${hasFlowLockedCol ? ', flow_locked' : ''}
+            ${hasStepMachinesCol ? ', step_machines' : ''}
      FROM orders
      WHERE is_deleted = 0 AND (plan_mode != 'COMPLETED' OR plan_mode IS NULL)
      ORDER BY id`,

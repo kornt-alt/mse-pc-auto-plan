@@ -122,6 +122,18 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
   return lastEdit > lastPlan;
 };
 
+// orders.step_machines (เครื่องที่ล็อกเองรายขั้นตอน) → "STEP: MACHINE" ต่อบรรทัด | '' ถ้าไม่ล็อก/อ่านไม่ได้
+const pinnedMachinesText = (raw) => {
+  if (!raw) return '';
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
+    return Object.entries(obj).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('\n');
+  } catch {
+    return '';
+  }
+};
+
 // ===== แถวตาราง (sortable) =====
 const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDates, canEditMaterial, checked, onToggleSelect, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate, onToggleArrived }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -221,7 +233,16 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDa
       <td className="text-truncate" style={{ maxWidth: 200 }} title={order.component_material_desc || ''}>
         {order.component_material_desc || '-'}
       </td>
-      <td className="num">{formatWip(order.wip)}</td>
+      <td className="num">
+        {formatWip(order.wip)}
+        {pinnedMachinesText(order.step_machines) && (
+          <i
+            className="bi bi-pin-angle ms-1 text-mse"
+            title={`ล็อกเครื่องเอง:\n${pinnedMachinesText(order.step_machines)}`}
+            aria-label="ล็อกเครื่องเองรายขั้นตอน"
+          />
+        )}
+      </td>
       <td>{order.planning_mode === 'backward' ? 'Backward' : 'Forward'}</td>
       <td className="num">{order.qty}</td>
       <td className={`num ${due.className}`} style={due.style}>

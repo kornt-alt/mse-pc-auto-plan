@@ -12,6 +12,7 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError, AppError } = require('../middleware/errorHandler');
 const timestamps = require('../state/timestamps');
 const { formatThaiTimestamp, dateOnly, nowBangkok, toDateString } = require('../utils/dates');
+const { serializeStepMachines } = require('../utils/stepMachines');
 const { computeProgramNote } = require('../scheduler/planBuilder');
 const { validateAttachment, parseLogKinds, MAX_FILE_SIZE } = require('../utils/attachments');
 const { isDayUnitStep } = require('../scheduler/dayUnit');
@@ -31,6 +32,9 @@ const materialRoles = requireRole('ADMIN', 'PLANNER', 'MC');
 // จึงต้องเช็คก่อนอ้างถึง ไม่มีคอลัมน์ = ข้ามการเขียน (house style เดียวกับ material_arrived)
 const hasFlowLockedColumn = async () =>
   (await query("SELECT COL_LENGTH('orders','flow_locked') AS c"))[0].c != null;
+// orders.step_machines (เครื่องที่ล็อกเองรายขั้นตอน) — DDL รันมือ แพทเทิร์นเดียวกัน
+const hasStepMachinesColumn = async () =>
+  (await query("SELECT COL_LENGTH('orders','step_machines') AS c"))[0].c != null;
 
 // ===== ไฟล์แนบของ Release/Material/Confirm (order_date_log) =====
 // memoryStorage + limit ที่ multer เพื่อกันไฟล์ยักษ์ตั้งแต่ต้น; validateAttachment เช็คซ้ำอีกชั้น
@@ -585,19 +589,21 @@ router.post('/', verifyToken, writeRoles, async (req, res) => {
 
     // flow_locked (manual flow) — DDL รันมือ ไม่มีคอลัมน์ = ข้าม (DEFAULT 0 ดูแลแถวที่ไม่ได้ส่งมา)
     const writeFlowLocked = await hasFlowLockedColumn();
+    const writeStepMachines = await hasStepMachinesColumn();
 
     // FIX: ระบบเดิมไม่ save wip_*/release_date/is_missing_routing (bug) — เวอร์ชันนี้ save ครบ
     await execute(
       `INSERT INTO orders
        (batch, model, description, qty, due_date, priority, plan_mode, planning_mode,
         release_date, wip_flow_index, wip_start_step_index, wip_machine, wip_finish_date,
-        is_missing_routing, is_deleted, is_new${writeFlowLocked ? ', flow_locked' : ''})
+        is_missing_routing, is_deleted, is_new${writeFlowLocked ? ', flow_locked' : ''}${writeStepMachines ? ', step_machines' : ''})
        VALUES
        (@batch, @model, @description, @qty, @due_date, @priority, @plan_mode, @planning_mode,
         @release_date, @wip_flow_index, @wip_start_step_index, @wip_machine, @wip_finish_date,
-        @is_missing_routing, 0, 1${writeFlowLocked ? ', @flow_locked' : ''})`,
+        @is_missing_routing, 0, 1${writeFlowLocked ? ', @flow_locked' : ''}${writeStepMachines ? ', @step_machines' : ''})`,
       {
         flow_locked: b.flow_locked ? 1 : 0,
+        step_machines: serializeStepMachines(b.step_machines),
         batch: b.batch,
         model: b.model,
         description: b.description ?? null,
@@ -1018,6 +1024,9 @@ router.put('/:batch', verifyToken, writeRoles, async (req, res) => {
     // (client เก่าที่ไม่ส่ง = ไม่แตะค่าเดิม)
     const writeFlowLocked =
       Object.prototype.hasOwnProperty.call(b, 'flow_locked') && (await hasFlowLockedColumn());
+    // step_machines — กติกาเดียวกัน: client ไม่ส่ง = ไม่แตะ · ส่ง null/{} = ล้างการล็อก
+    const writeStepMachines =
+      Object.prototype.hasOwnProperty.call(b, 'step_machines') && (await hasStepMachinesColumn());
 
     await execute(
       `UPDATE orders SET
@@ -1026,9 +1035,11 @@ router.put('/:batch', verifyToken, writeRoles, async (req, res) => {
          wip_flow_index = @wip_flow_index, wip_start_step_index = @wip_start_step_index,
          wip_machine = @wip_machine, wip_finish_date = @wip_finish_date,
          release_date = @release_date${writeFlowLocked ? ', flow_locked = @flow_locked' : ''}
+         ${writeStepMachines ? ', step_machines = @step_machines' : ''}
        WHERE id = @id`,
       {
         flow_locked: b.flow_locked ? 1 : 0,
+        step_machines: serializeStepMachines(b.step_machines),
         id: rows[0].id,
         model: b.model,
         description: b.description ?? null,

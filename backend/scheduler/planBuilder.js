@@ -7,6 +7,7 @@
 const { DROP_DATES } = require('../config/constants');
 const { pyRound, pyInt } = require('./pyUtils');
 const { isBlockedThroughHorizon, normalizeJigList } = require('./jigBlocks');
+const { parseStepMachines } = require('../utils/stepMachines');
 
 const isDict = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -84,6 +85,10 @@ function buildRawOrders(orderRows, pmMap, todayStr, isReplan, startedBatchSet = 
     // orders.flow_locked (DDL รันมือ) = ผู้ใช้เลือกเส้นทางเอง — ใส่ key เฉพาะตอนล็อกจริง
     // ⚠️ อย่าใส่ false ทุกแถว: order object ไหลไปถึง total_plan_map ที่ parity เทียบ union ของ key
     if (row.flow_locked === true || row.flow_locked === 1) raw.WIP_FlowLocked = true;
+    // orders.step_machines (DDL รันมือ) = เครื่องที่ผู้ใช้ล็อกรายขั้นตอน — key มีเฉพาะเมื่อล็อกอย่างน้อย 1 ขั้น
+    // (เหตุผลเดียวกับ WIP_FlowLocked: total_plan_map ที่ parity เทียบ)
+    const pins = parseStepMachines(row.step_machines);
+    if (Object.keys(pins).length > 0) raw.WIP_StepMachines = pins;
     rawOrders.push(raw);
   }
   return rawOrders;
