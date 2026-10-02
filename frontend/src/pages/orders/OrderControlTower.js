@@ -40,6 +40,7 @@ const DATE_EDIT_META = {
   // logKinds: กล่อง Material โชว์ประวัติรวมกับการติ๊ก "Mat'l เข้า" (kind material_arrived) — เรื่องวัตถุดิบเดียวกัน
   material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam', logKinds: 'material,material_arrived' },
   confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
+  // Release ซ่อนจากหน้าจอแล้ว (2026-10-02) — engine ยังอ่าน release_date, endpoint/ประวัติยังอยู่ เปิดกลับได้ด้วยการคืนคอลัมน์
   release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
   // ปกติระบบเติมวัน Issue ให้เองตอนรันแผน (start_date ถอยหลังตามจำนวนวันของโมเดล)
   // กล่องนี้คือการแก้มือทับ ซึ่งตั้งธง issue_date_manual กันไม่ให้ replan รอบหน้าทับกลับ
@@ -104,7 +105,6 @@ const EXPORT_COLUMNS = [
   { key: 'planning_mode', label: 'Delivery mode', value: (o) => (o.planning_mode === 'backward' ? 'Backward' : 'Forward') },
   { key: 'qty', label: 'Qty' },
   { key: 'due_date', label: 'Due Date', value: (o) => shortDate(o.due_date) },
-  { key: 'release_date', label: 'Release Date', value: (o) => shortDate(o.release_date) },
   { key: 'issue_date', label: 'Issue Date', value: (o) => shortDate(o.issue_date) },
   { key: 'issue_date_manual', label: 'Issue แก้มือ', value: (o) => (isManualIssueDate(o) ? 'ใช่' : '') },
   { key: 'material_ready_date', label: 'Material', value: (o) => shortDate(o.material_ready_date) },
@@ -274,19 +274,6 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDa
           />
         )}
         {logMarker(order.date_log_counts?.issue)}
-      </td>
-      <td className="num">
-        <Button
-          variant="link"
-          size="sm"
-          className={`p-0 text-decoration-none num ${order.release_date ? 'fw-bold text-mse' : 'text-muted'}`}
-          disabled={datesLocked}
-          title={canEditDates ? 'แก้วัน Release งาน' : 'ดูประวัติวัน Release'}
-          onClick={() => onEditDate('release', order)}
-        >
-          {order.release_date ? shortDate(order.release_date) : '-'}
-        </Button>
-        {logMarker(order.date_log_counts?.release)}
       </td>
       <td className="num">
         <Button
@@ -1161,7 +1148,6 @@ const OrderControlTower = () => {
                     <th>Qty</th>
                     <th>Due Date</th>
                     <th>Issue Date</th>
-                    <th>Release Date</th>
                     <th>Material</th>
                     <th>Confirm</th>
                     <th>Start</th>

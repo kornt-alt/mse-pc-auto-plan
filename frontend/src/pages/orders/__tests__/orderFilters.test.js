@@ -32,7 +32,7 @@ describe('dateFilterActive / countActiveDateFilters', () => {
     expect(countActiveDateFilters(f)).toBe(1);
   });
   test('has อย่างเดียวก็ active', () => {
-    const f = withFilter({ release_date: { has: 'none' } });
+    const f = withFilter({ confirm_reply_date: { has: 'none' } });
     expect(dateFilterActive(f)).toBe(true);
     expect(countActiveDateFilters(f)).toBe(1);
   });
@@ -85,8 +85,8 @@ describe('matchOrderDates — ซ่อนแถวว่างเมื่อ�
 
 describe('matchOrderDates — presence มี/ไม่มี', () => {
   test('has: ต้องมีวัน', () => {
-    expect(matchOrderDates({ release_date: '2026-08-01' }, withFilter({ release_date: { has: 'has' } }))).toBe(true);
-    expect(matchOrderDates({ release_date: '' }, withFilter({ release_date: { has: 'has' } }))).toBe(false);
+    expect(matchOrderDates({ issue_date: '2026-08-01' }, withFilter({ issue_date: { has: 'has' } }))).toBe(true);
+    expect(matchOrderDates({ issue_date: '' }, withFilter({ issue_date: { has: 'has' } }))).toBe(false);
   });
   test('none: ต้องไม่มีวัน และข้าม from/to', () => {
     const f = withFilter({ material_ready_date: { has: 'none', from: '2026-08-01', to: '2026-08-31' } });

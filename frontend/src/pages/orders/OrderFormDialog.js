@@ -439,17 +439,8 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                 </Form.Select>
               </Form.Group>
             </Col>
-            <Col md={4}>
-              <Form.Group>
-                <Form.Label>Release Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={form.release_date || ''}
-                  onChange={(e) => setField('release_date', e.target.value)}
-                  placeholder="Default = Today"
-                />
-              </Form.Group>
-            </Col>
+            {/* Release Date ซ่อนจากหน้าจอ (2026-10-02) — form.release_date ยังโหลด/ส่งค่าเดิมกลับเสมอ
+                เพราะ PUT /orders/:batch เขียน release_date ?? null (ตัดออกจาก payload = ลบค่าทิ้ง) */}
           </Row>
 
           {/* โซน 3: WIP */}
