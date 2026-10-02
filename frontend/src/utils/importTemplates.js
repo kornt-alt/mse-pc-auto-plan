@@ -30,6 +30,8 @@ export const TEMPLATE_SPECS = {
       { name: 'release_date', isDate: true, format: 'YYYY-MM-DD', example: '', note: 'ว่างได้' },
       { name: 'is_deleted', format: '0 / 1', default: '0', example: '0' },
       { name: 'is_new', format: '0 / 1', default: '1', example: '1' },
+      { name: 'component_material', format: 'ข้อความ', example: 'RM-SCM435-20', note: "Mat'l No. — ว่างได้; batch ที่มีอยู่แล้วจะถูกอัปเดตช่องนี้" },
+      { name: 'component_material_desc', format: 'ข้อความ (ไทยได้)', example: 'BAR SCM435 D20', note: "Mat'l Name — ว่างได้" },
     ],
   },
   calendar: {

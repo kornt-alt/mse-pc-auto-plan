@@ -12,6 +12,7 @@ import ConfirmModal from '../../components/shared/ConfirmModal';
 import { TEMPLATE_SPECS, downloadTemplate, exampleRow } from '../../utils/importTemplates';
 import CalendarTemplateDialog from './CalendarTemplateDialog';
 import HanaOrderCard from './HanaOrderCard';
+import { describeDiff } from '../../utils/hanaOrders';
 import ConfigTemplateDialog from './ConfigTemplateDialog';
 import ActualResultTemplateDialog from './ActualResultTemplateDialog';
 
@@ -63,6 +64,7 @@ const PREVIEW_FIELDS = [
   { key: 'to_insert', label: 'จะเพิ่ม', color: 'text-success' },
   { key: 'to_update', label: 'จะอัปเดต', color: 'text-primary' },
   { key: 'skipped_existing', label: 'ข้าม (มีในระบบแล้ว)', color: 'text-muted' },
+  { key: 'component_updates', label: "อัปเดต Mat'l No./Name ของ order เดิม", color: 'text-primary', onlyIfPositive: true },
   { key: 'already_in_db', label: 'ข้าม (อัปซ้ำกับฐานข้อมูล)', color: 'text-muted' },
   { key: 'duplicates_in_file', label: 'ตัดแถวซ้ำในไฟล์', color: 'text-muted' },
   { key: 'rejected', label: 'ปัดตก (ไม่ตรงแผน)', color: 'text-danger' },
@@ -315,6 +317,54 @@ const ImportPage = () => {
     }
   };
 
+  // อัปเดต order เดิมที่ติ๊กในการ์ด Hana — JSON ไม่ใช่ไฟล์ จึงไม่ผ่าน dry-run ของ /upload/orders
+  // การ์ดคำนวณ diff มาให้แล้ว: ConfirmModal โชว์ตัวอย่าง "เดิม → ใหม่" แทน preview ของ backend
+  const runRefresh = async (rows) => {
+    setBusy(true);
+    setStatus({ type: 'busy', message: 'กำลังอัปเดต order เดิมจาก SAP...' });
+    try {
+      const data = await apiCall('/upload/orders/refresh', { method: 'PUT', body: JSON.stringify({ rows }) });
+      setStatus({ type: 'ok', message: data.message || 'อัปเดตสำเร็จ' });
+      setResetTokens((t) => ({ ...t, [HANA_ROW.key]: (t[HANA_ROW.key] || 0) + 1 }));
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRefresh = (rows, diffs) => {
+    const changed = diffs.filter((d) => d.diff.length > 0);
+    const fieldCount = changed.reduce((n, d) => n + d.diff.length, 0);
+    setConfirm({
+      title: `อัปเดต order เดิม ${rows.length} ใบจาก SAP`,
+      body: (
+        <div className="small">
+          <div className="mb-2">
+            ทับ Model, Description, Qty, Due Date และ Mat&apos;l No./Name ด้วยค่าจาก SAP —
+            ข้อมูลต่างจากในระบบ {changed.length} ใบ ({fieldCount} ช่อง)
+            {rows.length > changed.length && `, อีก ${rows.length - changed.length} ใบค่าเท่าเดิม`}
+          </div>
+          {changed.slice(0, 10).map((d) => (
+            <div key={d.batch} className="mb-1">
+              <span className="num fw-bold">{d.batch}</span>
+              {d.diff.map((x) => (
+                <div key={x.field} className="ms-3 text-muted">{describeDiff(x)}</div>
+              ))}
+            </div>
+          ))}
+          {changed.length > 10 && <div className="text-muted">…และอีก {changed.length - 10} ใบ</div>}
+          <div className="mt-2 text-danger">
+            ค่าที่เคยแก้มือในช่องเหล่านี้จะถูกทับ · ไม่แตะ priority / WIP / วัน Material-Confirm · กด Replan หลังอัปเดต
+          </div>
+        </div>
+      ),
+      confirmLabel: 'ยืนยันอัปเดต',
+      variant: 'warning',
+      onConfirm: () => runRefresh(rows),
+    });
+  };
+
   // step 1: dry-run ขอ preview แล้วเปิด ConfirmModal
   const handleUpload = async (row, file) => {
     setBusy(true);
@@ -414,6 +464,7 @@ const ImportPage = () => {
         busy={busy || !!confirm}
         resetToken={resetTokens[HANA_ROW.key] || 0}
         onImport={(file) => handleUpload(HANA_ROW, file)}
+        onRefresh={handleRefresh}
       />
 
       {/* Modal คำแนะนำวิธีกรอก */}

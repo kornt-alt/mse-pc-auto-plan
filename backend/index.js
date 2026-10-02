@@ -14,6 +14,9 @@ const app = express();
 // ถ้า IIS ไม่ส่ง XFF มา req.ip จะเป็น 127.0.0.1/::1 (ดูหมายเหตุใน CHANGELOG)
 // ค่านี้ยังเป็นตัวที่ทำให้ rate limit ใน routes/auth.js นับต่อ IP จริง ไม่ใช่ IP ของ IIS
 app.set('trust proxy', true);
+// การ์ด Hana ส่ง order ได้ถึง 5000 ใบใน JSON เดียว (เช็ค order เดิม / อัปเดตที่ติ๊ก) — เกินเพดาน 100kb ของ
+// express.json() ปกติ จึงให้สอง path นี้ parse ก่อนด้วยเพดานใหญ่กว่า (ตัว global จะข้ามเพราะ body ถูกอ่านแล้ว)
+app.use(['/api/upload/orders/existing', '/api/upload/orders/refresh'], express.json({ limit: '5mb' }));
 app.use(express.json());
 
 // CORS: production ไม่ต้องใช้เลย (หน้าเว็บกับ API อยู่ origin เดียวกันผ่าน IIS) จึง **ปิดเป็น default**

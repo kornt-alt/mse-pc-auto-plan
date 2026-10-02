@@ -5,7 +5,14 @@ export const ORDER_CSV_COLUMNS = [
   'batch', 'model', 'description', 'due_date', 'qty', 'plan_mode',
   'wip_flow_index', 'wip_start_step_index', 'wip_finish_date', 'wip_machine',
   'planning_mode', 'release_date', 'is_deleted', 'is_new',
+  'component_material', 'component_material_desc',
 ];
+
+// วัตถุดิบ (component) ของ order — 1 order มีได้หลายตัว และ API คืน 1 แถวต่อ component
+// จึงรวมทุกตัวของ batch เดียวกันเป็นข้อความเดียวคั่น ' / ' (Korn เลือก 2026-10-02)
+// ⚠️ ชื่อ field ComponentMaterial / ComponentMaterialDescription ยังไม่ได้ยืนยันกับ payload จริง
+const COMPONENT_COLUMNS = ['component_material', 'component_material_desc'];
+const COMPONENT_SEP = ' / ';
 
 
 export const QTY_FIELD = 'TotalOrderQuantity';
@@ -75,7 +82,7 @@ export function cleanQty(value) {
   return Number.isFinite(num) ? num : 0;
 }
 
-// 1 แถวของ Hana → 1 แถวตามสเปก /upload/orders (14 คอลัมน์)
+// 1 แถวของ Hana → 1 แถวตามสเปก /upload/orders (16 คอลัมน์)
 export function mapHanaRow(raw) {
   const desc = raw?.MaterialDescription;
   return {
@@ -93,11 +100,24 @@ export function mapHanaRow(raw) {
     release_date: RELEASE_DATE_SOURCE ? toIsoDate(raw?.[RELEASE_DATE_SOURCE]) : '',
     is_deleted: 0,
     is_new: 1,
+    component_material: str(raw?.ComponentMaterial).trim(),
+    component_material_desc: str(raw?.ComponentMaterialDescription).trim(),
   };
 }
 
+// 'A / B' + 'C' → 'A / B / C' · ตัวที่มีอยู่แล้วหรือค่าว่าง → คงเดิม (ลำดับตามที่เจอก่อน)
+export function appendUnique(joined, value) {
+  const v = str(value).trim();
+  if (!v) return joined;
+  const parts = joined ? joined.split(COMPONENT_SEP) : [];
+  return parts.includes(v) ? joined : [...parts, v].join(COMPONENT_SEP);
+}
+
 // เทียบว่าสองแถวที่ batch เดียวกัน "ค่าต่างกัน" ไหม (ต่าง = ข้อมูลจาก SAP ไม่นิ่ง ต้องเตือน)
-const sameRow = (a, b) => ORDER_CSV_COLUMNS.every((c) => String(a[c]) === String(b[c]));
+// ไม่เทียบคอลัมน์ component — order ที่มีหลายวัตถุดิบต่างกันตรงนั้นเป็นปกติ (ถูกรวมแทน)
+const sameRow = (a, b) => ORDER_CSV_COLUMNS
+  .filter((c) => !COMPONENT_COLUMNS.includes(c))
+  .every((c) => String(a[c]) === String(b[c]));
 
 export function buildOrderRows(rawRows) {
   const list = Array.isArray(rawRows) ? rawRows : [];
@@ -115,7 +135,8 @@ export function buildOrderRows(rawRows) {
     if (prev) {
       duplicatesCollapsed += 1;
       if (!sameRow(prev, row)) conflicts += 1;
-      continue; // keep-first
+      for (const c of COMPONENT_COLUMNS) prev[c] = appendUnique(prev[c], row[c]);
+      continue; // keep-first (ยกเว้น component ที่รวมทุกแถว)
     }
     byBatch.set(row.batch, row);
     if (!str(raw?.MaterialDescription).includes('/')) noSlash += 1;
@@ -157,4 +178,88 @@ export function buildOrdersCsvMatrix(rows) {
 // rows → ข้อความ CSV (ไม่มี BOM — ไฟล์ที่ POST ไม่ต้องใส่, ตัวที่ผู้ใช้ดาวน์โหลดใส่ให้ที่ exportCsv)
 export function buildOrdersCsvText(rows) {
   return toCsvText(ORDER_CSV_COLUMNS, buildOrdersCsvMatrix(rows));
+}
+
+// ===== อัปเดต order เดิมจาก Hana (ผู้ใช้ติ๊กเลือกเองในการ์ด) =====
+// ช่องที่ทับได้ — Korn เลือก 2026-10-02 · ต้องตรงกับ backend/utils/orderRefresh.js
+export const REFRESH_FIELDS = [
+  'model', 'description', 'qty', 'due_date', 'component_material', 'component_material_desc',
+];
+
+const sameValue = (field, a, b) => {
+  if (field === 'qty') return cleanQty(a) === cleanQty(b);
+  if (field === 'due_date') return str(a).trim().slice(0, 10) === str(b).trim().slice(0, 10);
+  return str(a).trim() === str(b).trim();
+};
+
+// แถว Hana (หลัง mapHanaRow) เทียบกับแถวใน DB → [{ field, from, to }] เฉพาะช่องที่ต่าง
+// DB ที่ยังไม่รัน DDL component ส่ง field นั้นมาเป็น undefined → ไม่นับ (backend ก็ไม่เขียน)
+export function diffOrderFields(hanaRow, dbRow) {
+  if (!hanaRow || !dbRow) return [];
+  return REFRESH_FIELDS
+    .filter((f) => dbRow[f] !== undefined || !f.startsWith('component_'))
+    .filter((f) => !sameValue(f, hanaRow[f], dbRow[f]))
+    .map((f) => ({ field: f, from: dbRow[f] ?? '', to: hanaRow[f] ?? '' }));
+}
+
+// payload ของ PUT /upload/orders/refresh — เฉพาะ batch ที่เลือก
+export function buildRefreshRows(rows, selected) {
+  const pick = selected instanceof Set ? selected : new Set(selected ?? []);
+  return (rows ?? [])
+    .filter((r) => pick.has(r.batch))
+    .map((r) => Object.fromEntries([['batch', r.batch], ...REFRESH_FIELDS.map((f) => [f, r[f]])]));
+}
+
+// ชื่อช่องที่ผู้ใช้เห็น — ใช้ทั้งการ์ด Hana (หน้า Import) และ SapRefreshDialog (หน้า Orders)
+export const REFRESH_FIELD_LABELS = {
+  model: 'Model',
+  description: 'Description',
+  qty: 'Qty',
+  due_date: 'Due Date',
+  component_material: "Mat'l No.",
+  component_material_desc: "Mat'l Name",
+};
+
+const shownValue = (v) => (v === '' || v === null || v === undefined ? '(ว่าง)' : String(v));
+export const describeDiff = (d) =>
+  `${REFRESH_FIELD_LABELS[d.field] || d.field}: ${shownValue(d.from)} → ${shownValue(d.to)}`;
+
+// ===== หน้า Orders: ดึง Hana เฉพาะใบที่ติ๊ก =====
+// Hana กรองเลข order ได้เป็นช่วง (orderNoFrom/To) เท่านั้น → จัดกลุ่มเลขที่อยู่ใกล้กันให้ยิงครั้งเดียว
+// ห่างเกิน maxSpan = แยกช่วง (กันช่วงกว้างจนดึง order ที่ไม่ได้เลือกมาเป็นพัน)
+// batch ที่ไม่ใช่ตัวเลขล้วน (สร้างมือ ฯลฯ) ไม่มีใน SAP → skipped
+export function groupBatchRanges(batches, maxSpan = 500) {
+  const skipped = [];
+  const nums = [];
+  for (const b of new Set((batches ?? []).map((x) => str(x).trim()).filter(Boolean))) {
+    if (/^\d+$/.test(b)) nums.push(b);
+    else skipped.push(b);
+  }
+  // เลข order SAP 10 หลัก — Number ยังแม่นถึง 2^53 (16 หลัก)
+  nums.sort((a, b) => Number(a) - Number(b));
+  const ranges = [];
+  for (const b of nums) {
+    const last = ranges[ranges.length - 1];
+    if (last && Number(b) - Number(last.from) <= maxSpan) {
+      last.to = b;
+      last.batches.push(b);
+    } else {
+      ranges.push({ from: b, to: b, batches: [b] });
+    }
+  }
+  return { ranges, skipped };
+}
+
+// ใบที่เลือก (แถวจาก GET /orders) × แถวดิบจาก Hana → found [{ order, hanaRow, diff }] / notFound [batch]
+export function matchSapRows(selectedOrders, rawHanaRows) {
+  const byBatch = new Map(buildOrderRows(rawHanaRows).rows.map((r) => [r.batch, r]));
+  const found = [];
+  const notFound = [];
+  for (const order of selectedOrders ?? []) {
+    const batch = str(order?.batch).trim();
+    const hanaRow = byBatch.get(batch);
+    if (!hanaRow) notFound.push(batch);
+    else found.push({ order, hanaRow, diff: diffOrderFields(hanaRow, order) });
+  }
+  return { found, notFound };
 }
