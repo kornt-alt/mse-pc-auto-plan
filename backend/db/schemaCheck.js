@@ -97,6 +97,27 @@ const OPTIONAL_OBJECTS = [
     impact: 'เลือกเส้นทางเอง (manual flow) ที่ขั้นตอนแรกไม่ได้ผล — Flow 0 ไม่ล็อก และ flow อื่นโดดคิวแบบ WIP เหมือนเดิม',
   },
   {
+    name: 'orders.step_machines',
+    kind: 'column',
+    table: 'orders',
+    column: 'step_machines',
+    impact: 'เลือกเครื่องเองรายขั้นตอน (ฟอร์ม order ส่วน WIP) ไม่ถูกบันทึก — engine เลือกเครื่องเองทุกขั้น',
+  },
+  {
+    name: 'orders.component_material',
+    kind: 'column',
+    table: 'orders',
+    column: 'component_material',
+    impact: "คอลัมน์ Mat'l No. ในหน้า Orders ว่างเสมอ และ import (รวมดึงจาก Hana) ไม่บันทึกวัตถุดิบ",
+  },
+  {
+    name: 'orders.component_material_desc',
+    kind: 'column',
+    table: 'orders',
+    column: 'component_material_desc',
+    impact: "คอลัมน์ Mat'l Name ในหน้า Orders ว่างเสมอ (uploads.js เช็คแค่ component_material — รัน DDL คู่กันเสมอ)",
+  },
+  {
     name: 'system_settings.last_plan_at',
     kind: 'column',
     table: 'system_settings',

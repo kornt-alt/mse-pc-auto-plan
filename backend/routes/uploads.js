@@ -23,6 +23,7 @@ const { pyFloat } = require('../scheduler/pyUtils');
 const { nowBangkokString } = require('../utils/dates');
 const { normalizeRowDates, invalidDateMessage } = require('../utils/importDates');
 const { MAX_FILE_SIZE } = require('../utils/attachments');
+const { cleanRefreshRows, cleanBatchList } = require('../utils/orderRefresh');
 
 const router = express.Router();
 const writeRoles = requireRole('ADMIN', 'PLANNER');
@@ -181,6 +182,70 @@ const writeConfigTable = async (req, res, {
   return res.json({ message: `✅ ${label} Updated: ${rows.length} records` });
 };
 
+// orders.component_material / _desc (Mat'l No./Name จาก Hana) มาจาก DDL รันมือ — สองคอลัมน์มาคู่กัน เช็คตัวเดียว
+const hasComponentColumns = async () =>
+  (await query("SELECT COL_LENGTH('orders','component_material') AS c"))[0].c != null;
+
+// ========== POST /api/upload/orders/existing — ไม่มีใน Python ==========
+// การ์ด Hana ถามว่า batch ไหนมีในระบบแล้ว (พร้อมค่าปัจจุบันไว้เทียบ) เพื่อโชว์ช่องติ๊ก "อัปเดต order เดิม"
+// อ่านอย่างเดียว แต่ใช้ writeRoles เพราะเป็นส่วนหนึ่งของการ import (หน้า Import เข้าได้เฉพาะ ADMIN/PLANNER)
+router.post('/upload/orders/existing', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const checked = cleanBatchList(req.body?.batches);
+    if (!checked.ok) return res.status(400).json({ message: checked.message });
+    const withComponent = await hasComponentColumns();
+    const cols = `batch, model, description, qty, due_date, plan_mode${
+      withComponent ? ', component_material, component_material_desc' : ''}`;
+    const data = [];
+    for (let i = 0; i < checked.batches.length; i += 1000) {
+      const p = {};
+      const inc = checked.batches.slice(i, i + 1000).map((b, j) => { p[`b${j}`] = b; return `@b${j}`; }).join(',');
+      data.push(...await query(
+        `SELECT ${cols} FROM orders WHERE is_deleted = 0 AND batch IN (${inc})`, p
+      ));
+    }
+    res.json({ data });
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
+// ========== PUT /api/upload/orders/refresh — ไม่มีใน Python ==========
+// อัปเดต order เดิมที่ผู้ใช้ติ๊กในการ์ด Hana ด้วยค่าจาก SAP (Korn เลือกช่อง 2026-10-02):
+// model, description, qty, due_date (+ Mat'l No./Name ถ้ามีคอลัมน์) — ไม่แตะ priority/plan_mode/WIP/วัน Mat'l-Confirm
+// ใบที่ปิดแล้ว (COMPLETED) หรือถูกลบไม่ถูกแตะ · model/qty/due มีผลกับแผน → markEdit
+router.put('/upload/orders/refresh', verifyToken, writeRoles, async (req, res) => {
+  try {
+    const cleaned = cleanRefreshRows(req.body?.rows);
+    if (!cleaned.ok) return res.status(400).json({ message: cleaned.message });
+    const withComponent = await hasComponentColumns();
+    const setComponent = withComponent
+      ? ', component_material = @component_material, component_material_desc = @component_material_desc'
+      : '';
+    const updated = await transaction(async (t) => {
+      let n = 0;
+      for (const r of cleaned.rows) {
+        // t.query คืนแค่ recordset — ขอ @@ROWCOUNT มาเป็นแถวแทน rowsAffected
+        const out = await t.query(
+          `UPDATE orders SET model = @model, description = @description, qty = @qty,
+                  due_date = @due_date${setComponent}
+           WHERE batch = @batch AND is_deleted = 0 AND (plan_mode IS NULL OR plan_mode <> 'COMPLETED');
+           SELECT @@ROWCOUNT AS n`,
+          r
+        );
+        n += out[0]?.n ?? 0;
+      }
+      return n;
+    });
+    if (updated > 0) timestamps.markEdit();
+    const skipped = cleaned.rows.length - updated;
+    const skipNote = skipped > 0 ? ` (ข้าม ${skipped} ใบที่ไม่พบหรือปิดแล้ว)` : '';
+    res.json({ message: `✅ อัปเดต order เดิม ${updated} ใบ${skipNote}`, updated, skipped });
+  } catch (err) {
+    sendError(req, res, err);
+  }
+});
+
 // ========== POST /api/upload/orders (L1285) — append-only ==========
 router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req, res) => {
   try {
@@ -197,6 +262,9 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
 
     // replace: ล้างทั้งตารางแล้วใส่ใหม่ → priority เริ่มใหม่จาก 0, ไม่ข้าม batch ที่มีอยู่
     // append: ต่อท้าย → priority ต่อจาก max เดิม, ข้าม batch ที่มีใน DB
+    // orders.component_material / _desc (Mat'l No./Name จาก Hana) มาจาก DDL รันมือ — ไม่มี = ไม่เขียน
+    const hasComponent = await hasComponentColumns();
+
     let currentMax = 0;
     let existingBatches = new Set();
     if (!isReplace) {
@@ -224,12 +292,20 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
 
     let skippedExisting = 0;
     const rows = [];
+    // batch ที่มีใน DB แล้ว: append ยังข้ามทั้งแถว แต่เติม Mat'l No./Name ให้ (Korn เลือก 2026-10-02)
+    // — เฉพาะเมื่อไฟล์มีค่า ช่องอื่นไม่แตะ; Map กัน batch ซ้ำในไฟล์ (แถวแรกชนะ)
+    const componentUpdates = new Map();
     for (let i = 0; i < csvRows.length; i += 1) {
       const r = csvRows[i];
       const batch = String(r.batch ?? '').trim();
       if (!batch || batch === 'None') continue;
       if (existingBatches.has(batch)) {
         skippedExisting += 1;
+        const mat = getSafeNull(r, 'component_material');
+        const matDesc = getSafeNull(r, 'component_material_desc');
+        if (hasComponent && (mat || matDesc) && !componentUpdates.has(batch)) {
+          componentUpdates.set(batch, { mat, matDesc });
+        }
         continue;
       }
       currentMax += 1;
@@ -260,6 +336,9 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
         intSafe(r, 'is_deleted', 0),
         intSafe(r, 'is_new', 1),
         0, // is_missing_routing (ORM เดิมใส่ default ฝั่ง client)
+        // ⚠️ ต้องอยู่ท้ายสุด — bulkInsert อ่านตามตำแหน่ง และไม่มีคอลัมน์ = ไม่ส่งชื่อ (ค่าสองช่องนี้ถูกตัดทิ้ง)
+        getSafeNull(r, 'component_material'),
+        getSafeNull(r, 'component_material_desc'),
       ]);
     }
 
@@ -297,6 +376,7 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
         preview.delete_existing = cnt[0]?.n ?? 0;
       } else {
         preview.skipped_existing = skippedExisting;
+        preview.component_updates = componentUpdates.size;
       }
       return res.json({ preview });
     }
@@ -310,14 +390,26 @@ router.post('/upload/orders', verifyToken, writeRoles, uploadSingle, async (req,
           'batch', 'model', 'description', 'due_date', 'qty', 'priority', 'plan_mode',
           'wip_flow_index', 'wip_start_step_index', 'wip_finish_date', 'wip_machine',
           'planning_mode', 'release_date', 'is_deleted', 'is_new', 'is_missing_routing',
+          ...(hasComponent ? ['component_material', 'component_material_desc'] : []),
         ],
         uniqueRows
       );
+      for (const [batch, { mat, matDesc }] of componentUpdates) {
+        await t.query(
+          // COALESCE: ช่องที่ไฟล์ว่างไม่ไปล้างค่าเดิม
+          `UPDATE orders SET component_material = COALESCE(@mat, component_material),
+                  component_material_desc = COALESCE(@matDesc, component_material_desc)
+           WHERE batch = @batch`,
+          { batch, mat, matDesc }
+        );
+      }
     });
     // FIX: ระบบเดิม /upload/orders ไม่ markEdit (quirk) ทำให้ import ออเดอร์ใหม่แล้วป้าย "แผนไม่เป็นปัจจุบัน" ยังเขียว
     timestamps.markEdit();
     const verb = isReplace ? 'แทนที่ทั้งตาราง' : 'เพิ่มออเดอร์ใหม่';
-    res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ` });
+    const matNote = componentUpdates.size > 0
+      ? ` · อัปเดต Mat'l ของ order เดิม ${componentUpdates.size} รายการ` : '';
+    res.json({ message: `✅ Server ได้รับไฟล์แล้ว! ${verb} ${uniqueRows.length} รายการ${matNote}` });
   } catch (err) {
     sendError(req, res, err);
   }

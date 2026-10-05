@@ -11,10 +11,24 @@ import { attainmentPct, attainmentTone } from './planActual';
 const trunc = (v) => Math.trunc(Number(v) || 0);
 
 export const PlanCell = ({ dayData, date, today }) => {
-  if (!dayData || !dayData.plan) return null;
+  if (!dayData) return null;
   const plan = trunc(dayData.plan);
   const ok = trunc(dayData.ok);
   const ng = trunc(dayData.ng);
+  if (!plan) {
+    // วันที่ไม่มีแผนแต่ผลิตจริง (ทำก่อนวันแผน / คนละเครื่อง / นอกแผน) — ยอดลงตามวันผลิตจริง (2026-10-02)
+    if (!ok && !ng) return null;
+    return (
+      <div title={`${date}\nไม่มีแผนวันนี้ · ได้ ${ok}${ng ? ` · NG ${ng}` : ''}`}>
+        <div className="num">
+          <span className="fw-bold text-primary">{ok}</span>
+          <span className="text-muted">/0</span>
+          {ng > 0 && <span className="text-danger ms-1">NG {ng}</span>}
+        </div>
+        <div className="small text-primary">นอกแผน</div>
+      </div>
+    );
+  }
   const due = date <= today;
   const pct = attainmentPct(plan, ok);
   const tone = due ? attainmentTone(pct) : 'info';

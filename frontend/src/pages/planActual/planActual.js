@@ -11,6 +11,10 @@
 // dashboard_plan_actual_batch.dart / _machine.dart) โดยตรรกะไม่เปลี่ยน — รวม quirk ที่ระบุไว้ในแต่ละตัว
 // ส่วน attainment / summarize / machineSummary เป็นของใหม่ (รอบปรับหน้ารายงาน 2026-09-25)
 //
+// ⚠️ ยอดตามวันจริง (2026-10-02): response มี actual_daily = ยอดผลิตรายวันโรงงาน ต่อ (batch, machine, step)
+//    เมื่อส่งเข้ามา transform จะลงช่อง ok/ng ตาม "วันที่ผลิตจริง" แทน actual_detail (ที่ลงตามวันแผน) และยอดที่
+//    ไม่มีแถวแผนตรงคีย์ (ผลิตคนละเครื่อง / ไม่อยู่ในแผน) กลายเป็นแถว off_plan — ไม่ส่ง = พฤติกรรมเดิมเป๊ะ
+//
 // pure ล้วน — todayStr ฉีดเข้ามา · ทดสอบใน __tests__/planActual.test.js
 
 const isSetupStep = (step) => String(step ?? '').toUpperCase().includes('SETUP');
@@ -28,8 +32,54 @@ export const attainmentTone = (pct) => {
   return 'ng';
 };
 
+const keyPart = (v) => String(v ?? '').trim();
+
+// ลงยอดจริงรายวัน (actual_daily) ลงแถวที่จัดกลุ่มแล้ว — ใช้ทั้ง By Batch และ By Machine
+//   index: Map(คีย์ batch|machine|step ที่ trim แล้ว → rowKey ของ grouped)
+//   makeOffPlan(a): สร้างแถว off_plan ให้ยอดที่ไม่มีแถวแผนตรงคีย์ — คืน [rowKey, row]
+function applyActualDaily(grouped, dateSet, index, actualDaily, makeOffPlan) {
+  for (const a of actualDaily) {
+    const date = keyPart(a.date).slice(0, 10);
+    if (!validPlanDate(date) || isSetupStep(a.step)) continue;
+    const ok = Number(a.ok) || 0;
+    const ng = Number(a.ng) || 0;
+    const k = `${keyPart(a.batch)}|${keyPart(a.machine)}|${keyPart(a.step)}`;
+    let rowKey = index.get(k);
+    if (!rowKey) {
+      const [newKey, newRow] = makeOffPlan(a);
+      grouped[newKey] = newRow;
+      index.set(k, newKey);
+      rowKey = newKey;
+    }
+    const row = grouped[rowKey];
+    if (row.off_plan) row.total_actual_ok += ok;
+    if (!row.dates[date]) row.dates[date] = { plan: 0, ok: 0, ng: 0 };
+    row.dates[date].ok += ok;
+    row.dates[date].ng += ng;
+    dateSet.add(date);
+  }
+}
+
+// ข้อมูลของ batch จากแถวแผน (parent/model/description/order_qty) — ไว้เติมแถว off_plan
+const batchInfoOf = (data) => {
+  const info = {};
+  for (const item of data ?? []) {
+    const sub = keyPart(item.sub_batches ?? item.batch);
+    if (!info[sub]) {
+      info[sub] = {
+        parent: item.batch ?? sub,
+        model: item.model ?? '-',
+        description: item.description ?? '-',
+        order_qty: Number(item.order_qty) || 0,
+      };
+    }
+  }
+  return info;
+};
+
 // ===== By Batch (dashboard_plan_actual_batch.dart L94-181) =====
-export function transformByBatch(data) {
+export function transformByBatch(data, actualDaily) {
+  const byDay = Array.isArray(actualDaily);
   const grouped = {};
   const dateSet = new Set();
   const earliestDateMap = {}; // ต่อ sub_batch
@@ -50,8 +100,9 @@ export function transformByBatch(data) {
 
     const rowKey = `${subBatches}|${step}|${machine}`;
     const planQty = Number(item.plan_detail?.qty_plan) || 0;
-    const actualOk = Number(item.actual_detail?.qty_ok) || 0;
-    const actualNg = Number(item.actual_detail?.qty_ng) || 0;
+    // byDay: ok/ng มาจาก actual_daily ตามวันจริง (ด้านล่าง) — ไม่ใช้ยอดที่กระจายลงวันแผน
+    const actualOk = byDay ? 0 : Number(item.actual_detail?.qty_ok) || 0;
+    const actualNg = byDay ? 0 : Number(item.actual_detail?.qty_ng) || 0;
     // quirk เดิม: total_historical_ng ไม่เคยถูกส่งจาก backend → 0 เสมอ → fallback รวม ng รายวัน
     const totalHistoricalNg = Number(item.total_historical_ng ?? 0);
 
@@ -79,9 +130,38 @@ export function transformByBatch(data) {
     row.dates[datePlan].ng += actualNg;
   }
 
+  if (byDay) {
+    const index = new Map();
+    for (const [rowKey, r] of Object.entries(grouped)) {
+      index.set(`${keyPart(r.batch)}|${keyPart(r.machine)}|${keyPart(r.step)}`, rowKey);
+    }
+    const info = batchInfoOf(data);
+    applyActualDaily(grouped, dateSet, index, actualDaily, (a) => {
+      const b = info[keyPart(a.batch)] ?? {};
+      return [`${a.batch}|${a.step}|${a.machine}|OFF`, {
+        batch: a.batch,
+        model: b.model ?? '-',
+        description: b.description ?? '-',
+        step: String(a.step ?? '-'),
+        machine: String(a.machine ?? '-'),
+        step_index: 999,
+        order_qty: b.order_qty ?? 0,
+        total_qty: 0,
+        total_actual_ok: 0,
+        total_actual_ng: 0,
+        off_plan: true,
+        dates: {},
+      }];
+    });
+    // NG ของแถว = ผลรวม NG รายวันจริง (total_historical_ng = 0 เสมอ → fallback เดิมก็คือรวมรายวัน)
+    for (const r of Object.values(grouped)) {
+      r.total_actual_ng = Object.values(r.dates).reduce((n, v) => n + v.ng, 0);
+    }
+  }
+
   const rows = Object.values(grouped).map((r) => ({
     ...r,
-    step_earliest_date: earliestDateMap[r.batch] ?? '9999-12-31',
+    step_earliest_date: earliestDateMap[r.batch] ?? Object.keys(r.dates).sort()[0] ?? '9999-12-31',
   }));
   rows.sort(
     (a, b) =>
@@ -93,7 +173,8 @@ export function transformByBatch(data) {
 }
 
 // ===== By Machine (dashboard_plan_actual_machine.dart L80-187) =====
-export function transformByMachine(data) {
+export function transformByMachine(data, actualDaily) {
+  const byDay = Array.isArray(actualDaily);
   const grouped = {};
   const dateSet = new Set();
 
@@ -108,8 +189,8 @@ export function transformByMachine(data) {
 
     const rowKey = `${item.machine}|${parentBatch}|${subBatches}|${step}`;
     const planQty = Number(item.plan_detail?.qty_plan) || 0;
-    const actualOk = Number(item.actual_detail?.qty_ok) || 0;
-    const actualNg = Number(item.actual_detail?.qty_ng) || 0;
+    const actualOk = byDay ? 0 : Number(item.actual_detail?.qty_ok) || 0;
+    const actualNg = byDay ? 0 : Number(item.actual_detail?.qty_ng) || 0;
 
     if (!grouped[rowKey]) {
       grouped[rowKey] = {
@@ -132,6 +213,32 @@ export function transformByMachine(data) {
     row.dates[datePlan].plan += planQty;
     row.dates[datePlan].ok += actualOk;
     row.dates[datePlan].ng += actualNg;
+  }
+
+  if (byDay) {
+    const index = new Map();
+    for (const [rowKey, r] of Object.entries(grouped)) {
+      index.set(`${keyPart(r.sub_batches)}|${keyPart(r.machine)}|${keyPart(r.step)}`, rowKey);
+    }
+    const info = batchInfoOf(data);
+    applyActualDaily(grouped, dateSet, index, actualDaily, (a) => {
+      const b = info[keyPart(a.batch)] ?? {};
+      const parent = b.parent ?? a.batch;
+      return [`${a.machine}|${parent}|${a.batch}|${a.step}|OFF`, {
+        machine: a.machine ?? '-',
+        parent_batch: parent,
+        sub_batches: a.batch,
+        model: b.model ?? '-',
+        description: b.description ?? '-',
+        step: String(a.step ?? '-'),
+        step_index: 999,
+        order_qty: b.order_qty ?? 0,
+        total_qty: 0,
+        total_actual_ok: 0,
+        off_plan: true,
+        dates: {},
+      }];
+    });
   }
 
   // sort: วันแรกสุดของ row → parent_batch → step_index → sub_batches (dart L154-174)
@@ -168,25 +275,31 @@ export function rowProgress(row, todayStr) {
 }
 
 // summarize(rows, todayStr) → KPI ของตารางที่แสดงอยู่
+// % ทำได้ = Σ min(ok, แผนถึงวันนี้) ÷ Σ แผนถึงวันนี้ (2026-10-02) — ของที่ทำล่วงหน้า/นอกแผนไม่กลบงานที่พลาด
+//   ส่วนที่เกินแผนแยกไว้ใน extra · offPlan = จำนวนแถวนอกแผน
 export function summarize(rows, todayStr) {
-  const s = { rows: rows.length, planToDate: 0, planTotal: 0, ok: 0, ng: 0, behind: 0 };
+  const s = { rows: rows.length, planToDate: 0, planTotal: 0, ok: 0, ng: 0, behind: 0, okInPlan: 0, extra: 0, offPlan: 0 };
   for (const r of rows) {
     const p = rowProgress(r, todayStr);
     s.planToDate += p.planToDate;
     s.planTotal += p.planTotal;
     s.ok += p.ok;
     s.ng += p.ng;
+    s.okInPlan += Math.min(p.ok, p.planToDate);
+    s.extra += Math.max(0, p.ok - p.planToDate);
+    if (r.off_plan) s.offPlan += 1;
     if (p.behind) s.behind += 1;
   }
-  s.pct = attainmentPct(s.planToDate, s.ok);
+  s.pct = attainmentPct(s.planToDate, s.okInPlan);
   s.ngPct = s.ok + s.ng > 0 ? Math.round((s.ng / (s.ok + s.ng)) * 1000) / 10 : null;
   return s;
 }
 
-// machineSummary(data, todayStr) → [{ machine, batches, planToDate, planTotal, ok, ng, pct, ngPct, behind }]
+// machineSummary(data, todayStr, actualDaily) → [{ machine, batches, planToDate, planTotal, ok, okInPlan, extra,
+//   offPlan, ng, pct, ngPct, behind }]
 // ใช้กับแท็บ "สรุปรายเครื่อง" (เรียก endpoint แบบไม่ใส่ filter) — ตรรกะแถวเดียวกับ By Machine
-export function machineSummary(data, todayStr) {
-  const { rows } = transformByMachine(data);
+export function machineSummary(data, todayStr, actualDaily) {
+  const { rows } = transformByMachine(data, actualDaily);
   const byMachine = new Map();
   for (const r of rows) {
     const m = String(r.machine);
@@ -203,6 +316,9 @@ export function machineSummary(data, todayStr) {
       planToDate: s.planToDate,
       planTotal: s.planTotal,
       ok: s.ok,
+      okInPlan: s.okInPlan,
+      extra: s.extra,
+      offPlan: s.offPlan,
       ng: s.ng,
       pct: s.pct,
       ngPct: s.ngPct,

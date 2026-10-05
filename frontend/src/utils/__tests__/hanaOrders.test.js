@@ -1,7 +1,8 @@
 import {
   ORDER_CSV_COLUMNS, normalizeHanaPayload, toIsoDate, cleanIdentifier,
   extractModel, convertDescription, cleanQty, mapHanaRow, buildOrderRows,
-  buildOrdersCsvText, buildOrdersCsvMatrix,
+  buildOrdersCsvText, buildOrdersCsvMatrix, appendUnique, diffOrderFields, buildRefreshRows,
+  groupBatchRanges, matchSapRows, describeDiff,
 } from '../hanaOrders';
 
 // แถวจริงจาก Hana API (ยืนยันรูปแล้ว 2026-08-13) — ตัวเลขมาเป็น number, วันที่ยังไม่เกิดเป็น '00000000'
@@ -14,10 +15,12 @@ const SAMPLE = {
   BasicStartDate: '20260810', BasicFinishDate: '20260901', ActualStartDate: '00000000',
   ActualFinishDate: '00000000', ScheduledStart: '20260901', ScheduledFinish: '20260901',
   StatusList: 'CRTD BCRQ MSPT NEWQ PRC SETC SSAP',
+  // ⚠️ ชื่อ field component ยังไม่ได้ยืนยันกับ payload จริง (เพิ่ม 2026-10-02)
+  ComponentMaterial: 'RM-SCM435-20', ComponentMaterialDescription: 'BAR SCM435 D20',
 };
 
 describe('mapHanaRow', () => {
-  test('แถวจริง → ครบ 14 คอลัมน์ตามสเปก /upload/orders', () => {
+  test('แถวจริง → ครบ 16 คอลัมน์ตามสเปก /upload/orders', () => {
     expect(mapHanaRow(SAMPLE)).toEqual({
       batch: '5003600792',
       model: 'KT12323-2',
@@ -33,6 +36,8 @@ describe('mapHanaRow', () => {
       release_date: '', // RELEASE_DATE_SOURCE = null (ไม่เอา BasicStartDate มาล็อกพื้นวันเริ่ม)
       is_deleted: 0,
       is_new: 1,
+      component_material: 'RM-SCM435-20',
+      component_material_desc: 'BAR SCM435 D20',
     });
   });
 
@@ -41,6 +46,18 @@ describe('mapHanaRow', () => {
     expect(row.batch).toBe('');
     expect(row.qty).toBe(0);
     expect(row.due_date).toBe('');
+    expect(row.component_material).toBe('');
+    expect(row.component_material_desc).toBe('');
+  });
+});
+
+describe('appendUnique', () => {
+  test('ต่อท้ายด้วย / · ตัดซ้ำ · ข้ามค่าว่าง', () => {
+    expect(appendUnique('', 'A')).toBe('A');
+    expect(appendUnique('A', 'B')).toBe('A / B');
+    expect(appendUnique('A / B', 'A')).toBe('A / B');
+    expect(appendUnique('A', '  ')).toBe('A');
+    expect(appendUnique('A', undefined)).toBe('A');
   });
 });
 
@@ -131,6 +148,23 @@ describe('buildOrderRows', () => {
     expect(stats.conflicts).toBe(1);
   });
 
+  test('batch เดียวกันหลาย component → รวมคั่น / ตัดซ้ำ และไม่นับเป็น conflict', () => {
+    const { rows, stats } = buildOrderRows([
+      row({ ComponentMaterial: 'A', ComponentMaterialDescription: 'Bar A' }),
+      row({ ComponentMaterial: 'B', ComponentMaterialDescription: 'Bar B' }),
+      row({ ComponentMaterial: 'A', ComponentMaterialDescription: 'Bar A' }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].component_material).toBe('A / B');
+    expect(rows[0].component_material_desc).toBe('Bar A / Bar B');
+    expect(stats.conflicts).toBe(0);
+  });
+
+  test('แถวแรกไม่มี component แถวหลังมี → ได้ค่าของแถวหลัง', () => {
+    const { rows } = buildOrderRows([row({ ComponentMaterial: '' }), row({ ComponentMaterial: 'B' })]);
+    expect(rows[0].component_material).toBe('B');
+  });
+
   test('ไม่มีเลข order → ตัดทิ้งและนับไว้', () => {
     const { rows, stats } = buildOrderRows([row({ OrderNumber: '' }), row({ OrderNumber: 'B2' })]);
     expect(rows).toHaveLength(1);
@@ -185,9 +219,9 @@ describe('normalizeHanaPayload', () => {
 describe('buildOrdersCsvText', () => {
   const { rows } = buildOrderRows([SAMPLE, { ...SAMPLE, OrderNumber: 'B2' }]);
 
-  test('หัวตารางมีชื่อครบ 14 คอลัมน์ (เช็คเป็นเซ็ต — uploads.js อ่านด้วยชื่อ ไม่ใช่ลำดับ)', () => {
+  test('หัวตารางมีชื่อครบ 16 คอลัมน์ (เช็คเป็นเซ็ต — uploads.js อ่านด้วยชื่อ ไม่ใช่ลำดับ)', () => {
     const header = buildOrdersCsvText(rows).split('\n')[0].split(',');
-    expect(header).toHaveLength(14);
+    expect(header).toHaveLength(16);
     expect(new Set(header)).toEqual(new Set(ORDER_CSV_COLUMNS));
   });
 
@@ -221,5 +255,74 @@ describe('buildOrdersCsvText', () => {
     const bodyLines = buildOrdersCsvText(dirty).split('\n').slice(1);
     expect(bodyLines).toHaveLength(matrix.length);
     expect(matrix[0].join('|')).toBe(bodyLines[0].split(',').join('|'));
+  });
+});
+
+describe('diffOrderFields / buildRefreshRows', () => {
+  const hana = mapHanaRow(SAMPLE);
+  const db = {
+    batch: '5003600792', model: 'KT12323-2', description: 'ELEMENT CW072-20KN', qty: 500,
+    due_date: '2026-09-01', plan_mode: 'NEW', component_material: 'RM-SCM435-20', component_material_desc: 'BAR SCM435 D20',
+  };
+
+  test('ค่าเท่ากัน → ไม่ต่าง (qty เทียบเป็นตัวเลข, due ตัดเวลา)', () => {
+    expect(diffOrderFields(hana, { ...db, qty: '500.0', due_date: '2026-09-01 00:00:00' })).toEqual([]);
+  });
+
+  test('model / qty / Mat\'l เปลี่ยน → บอกเดิม → ใหม่', () => {
+    const d = diffOrderFields(hana, { ...db, model: 'OLD', qty: 100, component_material: null });
+    expect(d).toEqual([
+      { field: 'model', from: 'OLD', to: 'KT12323-2' },
+      { field: 'qty', from: 100, to: 500 },
+      { field: 'component_material', from: '', to: 'RM-SCM435-20' },
+    ]);
+  });
+
+  test('DB ยังไม่มีคอลัมน์ component (undefined) → ไม่นับช่องนั้น', () => {
+    const { component_material: _a, component_material_desc: _b, ...noComp } = db;
+    expect(diffOrderFields(hana, noComp)).toEqual([]);
+  });
+
+  test('buildRefreshRows เอาเฉพาะที่เลือก และส่งเฉพาะช่องที่ทับได้', () => {
+    const rows = [hana, { ...hana, batch: 'B2' }];
+    const out = buildRefreshRows(rows, new Set(['B2']));
+    expect(out).toHaveLength(1);
+    expect(Object.keys(out[0]).sort()).toEqual(
+      ['batch', 'component_material', 'component_material_desc', 'description', 'due_date', 'model', 'qty'],
+    );
+    expect(out[0].batch).toBe('B2');
+  });
+});
+
+describe('groupBatchRanges / matchSapRows', () => {
+  test('เลขใกล้กันรวมช่วงเดียว · ห่างเกิน span แยก · ไม่ใช่ตัวเลขข้าม · ซ้ำนับครั้งเดียว', () => {
+    const { ranges, skipped } = groupBatchRanges(
+      ['5003600900', '5003600792', 'MANUAL-1', '5003600792', '5003700000', ' '], 500,
+    );
+    expect(ranges).toEqual([
+      { from: '5003600792', to: '5003600900', batches: ['5003600792', '5003600900'] },
+      { from: '5003700000', to: '5003700000', batches: ['5003700000'] },
+    ]);
+    expect(skipped).toEqual(['MANUAL-1']);
+  });
+
+  test('ช่วงวัดจากตัวแรกของกลุ่ม (ไม่ไหลต่อกันจนกว้างเกิน span)', () => {
+    const { ranges } = groupBatchRanges(['1000', '1400', '1800'], 500);
+    expect(ranges.map((r) => [r.from, r.to])).toEqual([['1000', '1400'], ['1800', '1800']]);
+  });
+
+  test('matchSapRows แยกเจอ/ไม่เจอ พร้อม diff เทียบกับแถวใน DB', () => {
+    const orders = [
+      { batch: '5003600792', model: 'OLD', description: 'ELEMENT CW072-20KN', qty: 500, due_date: '2026-09-01', component_material: 'RM-SCM435-20', component_material_desc: 'BAR SCM435 D20' },
+      { batch: '5009999999', model: 'X' },
+    ];
+    const { found, notFound } = matchSapRows(orders, [SAMPLE, SAMPLE]);
+    expect(notFound).toEqual(['5009999999']);
+    expect(found).toHaveLength(1);
+    expect(found[0].diff).toEqual([{ field: 'model', from: 'OLD', to: 'KT12323-2' }]);
+  });
+
+  test('describeDiff แสดงค่าว่างเป็น (ว่าง)', () => {
+    expect(describeDiff({ field: 'component_material', from: null, to: 'A' })).toBe("Mat'l No.: (ว่าง) → A");
   });
 });

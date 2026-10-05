@@ -60,6 +60,10 @@ class OrderManager {
     clean.WIP_FinishDate = 'WIP_FinishDate' in o ? o.WIP_FinishDate : null;
     // manual flow (orders.flow_locked) — key มีเฉพาะตอนล็อก ไม่งั้น total_plan_map ของ parity เปลี่ยน
     if (o.WIP_FlowLocked === true) clean.WIP_FlowLocked = true;
+    // เครื่องที่ล็อกรายขั้นตอน — key มีเฉพาะเมื่อมีค่า (เหตุผลเดียวกัน)
+    if (o.WIP_StepMachines && Object.keys(o.WIP_StepMachines).length > 0) {
+      clean.WIP_StepMachines = o.WIP_StepMachines;
+    }
 
     // ประทับตราส่งไปตอน pack/sort (scheduler_core.py L285-288)
     clean.confirm_reply_date = confDate;
@@ -96,6 +100,11 @@ class OrderManager {
           : 'NEW';
       // เครื่องของขั้นตอนแรกที่ผู้ใช้ล็อก (WIP_Machine) ต้องอยู่ใน key ด้วย — ล็อกคนละเครื่อง = คนละถุง
       if (o.WIP_FlowLocked && stepKey <= 0) flowKey = `LOCK${o.WIP_FlowIndex ?? 0}@${o.WIP_Machine || ''}`;
+      // ล็อกเครื่องรายขั้นตอนต่างกัน = คนละถุง (PACK ใช้ config ของใบแรกทั้งถุง) · ไม่ล็อก = key เดิมทุกตัวอักษร
+      if (o.WIP_FlowLocked && o.WIP_StepMachines) {
+        const pins = o.WIP_StepMachines;
+        flowKey = `${flowKey}#PIN:${JSON.stringify(Object.keys(pins).sort().map((k) => [k, pins[k]]))}`;
+      }
       const modeKey = String(o.planningMode).toUpperCase();
       // Mat'l: วันพร้อมต่างกันแยกถุง (scheduler_core.py L316)
       const effDateKey = String(o.effectiveReadyDate ?? '1970-01-01');

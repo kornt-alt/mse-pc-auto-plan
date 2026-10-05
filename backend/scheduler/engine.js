@@ -59,6 +59,13 @@ function narrowToMachine(mOpts, cOpts, sOpts, mac) {
   const pick = (opts) => (idx < opts.length ? [opts[idx]] : opts.length ? [opts[0]] : opts);
   return { mOpts: [mOpts[idx]], cOpts: pick(cOpts), sOpts: pick(sOpts) };
 }
+
+// เครื่องที่ผู้ใช้ล็อกเองรายขั้นตอน (orders.step_machines → WIP_StepMachines, key = ชื่อ step upper)
+// ไม่มีการล็อก / step นี้ไม่ได้ล็อก → null (engine เลือกเองตามเดิม)
+function pinnedMachine(stepMachines, step) {
+  if (!stepMachines) return null;
+  return stepMachines[String(step ?? '').trim().toUpperCase()] || null;
+}
 const { pyInt, pyFloat, sortedNumericKeys } = require('./pyUtils');
 
 // clean_text (L426/L676): upper + ตัด space - _ –
@@ -237,6 +244,7 @@ class SchedulerEngine {
     originalBatches = null,
     machineMemory = null,
     firstMachine = null,
+    stepMachines = null,
   ) {
     const steps = orderConfig.steps;
     const machineOptions = orderConfig.machineOptions;
@@ -286,6 +294,7 @@ class SchedulerEngine {
       //   ของเครื่องทางเลือกตัวแรก ไม่ใช่ของเครื่องที่ล็อก (ผิดเมื่อเครื่องที่ล็อกไม่ใช่ alternative 0)
       let cOpts = Array.isArray(cycleTimeOpts[i]) ? cycleTimeOpts[i] : [cycleTimeOpts[i]];
       let sOpts = Array.isArray(setupTimeOpts[i]) ? setupTimeOpts[i] : [setupTimeOpts[i]];
+      const fullOpts = { mOpts, cOpts, sOpts }; // ตัวเลือกเต็มของ step — ล็อกของผู้ใช้ตัดจากชุดนี้
 
       // HYBRID: ล็อกเครื่องถ้างานคาเครื่อง (L381-406)
       let isWipStep = false;
@@ -319,6 +328,13 @@ class SchedulerEngine {
       }
       // manual flow: เครื่องของขั้นตอนแรกที่ผู้ใช้เลือกเอง (orders.wip_machine) — ล็อกเครื่องเดียว
       if (i === 0 && firstMachine) ({ mOpts, cOpts, sOpts } = narrowToMachine(mOpts, cOpts, sOpts, firstMachine));
+      // เครื่องที่ผู้ใช้ล็อกรายขั้นตอน (orders.step_machines) — สั่งเอง จึงทับล็อกอัตโนมัติ (HYBRID) ข้างบน
+      // เครื่องไม่อยู่ในตัวเลือกแล้ว → narrowToMachine คืนของเดิม (engine เลือกเอง ไม่ทำงานหาย)
+      // ตัดจากตัวเลือกเต็ม (fullOpts) ไม่ใช่จากที่ HYBRID ตัดเหลือเครื่องเดียวไปแล้ว
+      const pinBack = pinnedMachine(stepMachines, step);
+      if (pinBack && fullOpts.mOpts.includes(pinBack)) {
+        ({ mOpts, cOpts, sOpts } = narrowToMachine(fullOpts.mOpts, fullOpts.cOpts, fullOpts.sOpts, pinBack));
+      }
 
       let bestMachineRes = null;
       let bestMachineStartStr = '1970-01-01';
@@ -647,6 +663,7 @@ class SchedulerEngine {
       //   — บั๊กเดียวกับสายถอยหลัง: เดิมเครื่องที่ล็อกได้ cycle/setup/jig ของ alternative ตัวแรก
       let cOpts = Array.isArray(cycleTimeOpts[i]) ? cycleTimeOpts[i] : [cycleTimeOpts[i]];
       let sOpts = Array.isArray(setupTimeOpts[i]) ? setupTimeOpts[i] : [setupTimeOpts[i]];
+      const fullOpts = { mOpts, cOpts, sOpts }; // ตัวเลือกเต็มของ step — ล็อกของผู้ใช้ตัดจากชุดนี้
 
       // HYBRID: ล็อกเครื่องเดิมถ้า step เริ่มทำแล้ว (L628-654)
       let isWipStep = false;
@@ -681,6 +698,12 @@ class SchedulerEngine {
       // manual flow: เครื่องของขั้นตอนแรกที่ผู้ใช้เลือกเอง (orders.wip_machine) — ล็อกเครื่องเดียว
       if (i === 0 && wip.firstMachine) {
         ({ mOpts, cOpts, sOpts } = narrowToMachine(mOpts, cOpts, sOpts, wip.firstMachine));
+      }
+      // เครื่องที่ผู้ใช้ล็อกรายขั้นตอน — ใช้เฉพาะ flow ที่ล็อกไว้ (step_machines ผูกกับเส้นทางนั้น)
+      //   ตัดจากตัวเลือกเต็ม (fullOpts) — ทับล็อกอัตโนมัติจากยอดจริง/แผนเก่า (HYBRID) ที่ตัดเหลือเครื่องเดียวไปแล้ว
+      const pin = wip.stepMachinesFlow === flowIdx ? pinnedMachine(wip.stepMachines, step) : null;
+      if (pin && fullOpts.mOpts.includes(pin)) {
+        ({ mOpts, cOpts, sOpts } = narrowToMachine(fullOpts.mOpts, fullOpts.cOpts, fullOpts.sOpts, pin));
       }
 
       if (!prevD || prevD === SENTINEL_FAR_DATE) {
@@ -1197,6 +1220,8 @@ class SchedulerEngine {
             lockedFlow !== null && pyInt(pyFloat(order.WIP_StartStepIndex ?? 0)) <= 0
               ? order.WIP_Machine || null
               : null,
+            // เครื่องที่ล็อกรายขั้นตอน — backwardFlowKeys มีแค่ flow ที่ล็อกเมื่อ lockedFlow !== null
+            lockedFlow !== null ? order.WIP_StepMachines || null : null,
           );
 
           if (!res.failed) {
@@ -1265,6 +1290,9 @@ class SchedulerEngine {
         // (WIP จริงใช้ช่องเดียวกันเป็น "เครื่องของขั้นตอนก่อนหน้า" ซึ่งมีความหมายเฉพาะ startStep > 0)
         firstMachine:
           order.WIP_FlowLocked === true && stepVal === 0 ? order.WIP_Machine || null : null,
+        // เครื่องที่ล็อกรายขั้นตอน (orders.step_machines) — มีผลเฉพาะเมื่อวางบน flow ที่ล็อกไว้
+        stepMachines: order.WIP_FlowLocked === true ? order.WIP_StepMachines || null : null,
+        stepMachinesFlow: order.WIP_FlowLocked === true ? pyInt(pyFloat(order.WIP_FlowIndex ?? 0)) : null,
       };
       // Mat'l: บังคับเริ่มหาคิวตาม effectiveReadyDate (fallback releaseDate/earliest) — L1183-1191
       let effectiveStartDate = earliestDate;

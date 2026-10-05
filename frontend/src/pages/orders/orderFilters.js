@@ -1,5 +1,6 @@
 // ===== ตัวกรองวันที่ของหน้า Orders — pure logic ล้วน (ห้าม import DB/clock/React) =====
-// ใช้กรองรายการ order ในจอตามช่วงวันที่ 7 คอลัมน์ + เงื่อนไข มี/ไม่มี ของ Release/Material/Confirm/Issue
+// ใช้กรองรายการ order ในจอตามช่วงวันที่ 6 คอลัมน์ + เงื่อนไข มี/ไม่มี ของ Material/Confirm/Issue
+// (Release ถูกซ่อนจากหน้าจอ 2026-10-02 จึงไม่มีตัวกรอง)
 // วันที่ทั้งระบบเป็นสตริง 'YYYY-MM-DD' zero-padded เทียบกันแบบ lexicographic (ตาม convention เดิม)
 // จึงเทียบช่วง from/to ด้วย >= / <= บนสตริงได้ตรง ๆ หลัง slice(0,10) — ไม่ต้องแปลงเป็น Date
 // ทดสอบใน __tests__/orderFilters.test.js
@@ -7,7 +8,6 @@
 // คอลัมน์วันที่ที่กรองได้ presence:true = มีตัวเลือก "มี/ไม่มี" เพิ่มด้วย
 const DATE_FILTER_FIELDS = [
   { key: 'due_date', label: 'Due Date', presence: false },
-  { key: 'release_date', label: 'Release', presence: true },
   { key: 'material_ready_date', label: 'Material', presence: true },
   { key: 'confirm_reply_date', label: 'Confirm', presence: true },
   { key: 'issue_date', label: 'Issue', presence: true },

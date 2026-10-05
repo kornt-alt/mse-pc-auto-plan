@@ -2,10 +2,25 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Modal, Form, Button, Row, Col, Spinner, Alert, Table, Badge } from 'react-bootstrap';
 import { apiCall } from '../../api/client';
 import {
-  estimateFlow, estimateFlowTotal, formatDays, diffDays, ownMachinesOf, withFirstMachine,
+  estimateFlow, estimateFlowTotal, formatDays, diffDays, ownMachinesOf, withStepMachines,
 } from './wipEstimate';
 
 const pad2 = (n) => String(n).padStart(2, '0');
+// orders.step_machines — key = ชื่อ step แบบ trim+upper (ตรงกับ backend/utils/stepMachines.js + engine)
+const stepKeyOf = (name) => String(name ?? '').trim().toUpperCase();
+const parsePins = (raw) => {
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    return Object.fromEntries(
+      Object.entries(obj)
+        .map(([k, v]) => [stepKeyOf(k), String(v ?? '').trim()])
+        .filter(([k, v]) => k && v),
+    );
+  } catch {
+    return {};
+  }
+};
 const todayStr = () => {
   const t = new Date();
   return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
@@ -46,6 +61,8 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
   const [wipFlow, setWipFlow] = useState(null);
   const [wipStepIndex, setWipStepIndex] = useState(null);
   const [wipMachine, setWipMachine] = useState('');
+  // เครื่องที่ล็อกเองรายขั้นตอน { 'STEP NAME': machine } — ว่าง = ให้ระบบเลือก (engine: pinnedMachine)
+  const [stepMachines, setStepMachines] = useState({});
   const [showDetail, setShowDetail] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [realPlanDate, setRealPlanDate] = useState(null);
@@ -76,6 +93,18 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
         // ขั้นตอนแรก (manual flow): wip_machine = เครื่องของขั้นตอนนั้นเอง ไม่ใช่เครื่องของขั้นตอนก่อนหน้า
         const machines = !step ? [] : stepIdx === 0 ? ownMachinesOf(step) : step.previous_machines;
         setWipMachine(machines.includes(presetOrder.wip_machine) ? presetOrder.wip_machine : '');
+        // เครื่องรายขั้นตอนที่เคยล็อก — เก็บเฉพาะที่ยังเป็นตัวเลือกของขั้นนั้นใน flow นี้
+        const saved = parsePins(presetOrder.step_machines);
+        // order เก่าที่ล็อกแค่เครื่องขั้นแรก (wip_machine) ก่อนมีตารางนี้ → ยกมาเป็นแถวแรก
+        if (stepIdx === 0 && step && presetOrder.wip_machine && !saved[stepKeyOf(step.step_name)]) {
+          saved[stepKeyOf(step.step_name)] = presetOrder.wip_machine;
+        }
+        const pins = {};
+        for (const st of steps.filter((x) => x.flow_index === flow)) {
+          const k = stepKeyOf(st.step_name);
+          if (saved[k] && ownMachinesOf(st).includes(saved[k])) pins[k] = saved[k];
+        }
+        setStepMachines(pins);
       }
     } catch (err) {
       onError && onError(err.message);
@@ -94,6 +123,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
     setWipFlow(null);
     setWipStepIndex(null);
     setWipMachine('');
+    setStepMachines({});
     setShowDetail(false);
     setRealPlanDate(null);
 
@@ -151,6 +181,31 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
   const machineOptions = !selectedStep
     ? []
     : wipStepIndex === 0 ? ownMachinesOf(selectedStep) : selectedStep.previous_machines;
+  // ตารางล็อกเครื่องรายขั้นตอน: ขั้นที่ยังต้องทำ (ตั้งแต่ process ที่เลือกเป็นต้นไป)
+  const pinSteps = useMemo(
+    () => (wipStepIndex === null ? [] : stepOptions.filter((st) => st.step_index >= wipStepIndex)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [modelSteps, wipFlow, wipStepIndex],
+  );
+  // ค่าที่ใช้จริง = เฉพาะขั้นที่แสดงอยู่ (ขั้นที่ทำเสร็จไปแล้วไม่ต้องล็อก)
+  const activePins = useMemo(() => {
+    const out = {};
+    for (const st of pinSteps) {
+      const k = stepKeyOf(st.step_name);
+      if (stepMachines[k]) out[k] = stepMachines[k];
+    }
+    return out;
+  }, [stepMachines, pinSteps]);
+  const pinCount = Object.keys(activePins).length;
+  const setPin = (stepName, mac) =>
+    setStepMachines((prev) => {
+      const next = { ...prev };
+      if (mac) next[stepKeyOf(stepName)] = mac;
+      else delete next[stepKeyOf(stepName)];
+      return next;
+    });
+  // manual flow: เครื่องของขั้นตอนแรก = แถวแรกของตาราง (บันทึกลง wip_machine ด้วย — pack key / firstMachine เดิม)
+  const firstPin = isManualStart && selectedStep ? activePins[stepKeyOf(selectedStep.step_name)] || '' : '';
 
   const qtyNum = parseFloat(form.qty);
 
@@ -175,15 +230,15 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
     // manual flow ไม่มีวันจบ WIP → นับจากวัน Release หรือวันนี้
     const anchorDate = wipStepIndex === 0 ? (form.release_date || todayStr()) : form.wip_finish_date;
     if (!anchorDate) return null;
-    // เลือกเครื่องของขั้นตอนแรกไว้ → คิดเวลาด้วย cycle/setup/handling ของเครื่องนั้น ไม่ใช่เครื่องหลัก
-    const info = wipStepIndex === 0 && wipMachine
-      ? { ...modelInfo, steps: withFirstMachine(modelInfo.steps, wipFlow, wipMachine) }
+    // ล็อกเครื่องรายขั้นตอนไว้ → คิดเวลาด้วย cycle/setup/handling ของเครื่องนั้น ไม่ใช่เครื่องหลัก
+    const info = pinCount > 0
+      ? { ...modelInfo, steps: withStepMachines(modelInfo.steps, wipFlow, activePins) }
       : modelInfo;
     return estimateFlow(info, {
       flowIndex: wipFlow, startStepIndex: wipStepIndex, qty: qtyNum,
       anchorDate, today: todayStr(),
     });
-  }, [modelInfo, isWip, wipFlow, wipStepIndex, wipMachine, form.wip_finish_date, form.release_date, qtyNum]);
+  }, [modelInfo, isWip, wipFlow, wipStepIndex, activePins, pinCount, form.wip_finish_date, form.release_date, qtyNum]);
 
   // เทียบ finish vs due → ข้อความ/สี
   const dueCompare = (() => {
@@ -230,8 +285,10 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
       release_date: form.release_date || null,
       wip_flow_index: isWip ? wipFlow : 0,
       wip_start_step_index: isWip ? wipStepIndex : 0,
-      // ขั้นตอนแรก: wip_machine = เครื่องของขั้นตอนแรกที่ล็อก (ว่าง = ให้ระบบเลือก)
-      wip_machine: isWip ? wipMachine || null : null,
+      // ขั้นตอนแรก: wip_machine = เครื่องของขั้นตอนแรกที่ล็อก (แถวแรกของตาราง, ว่าง = ให้ระบบเลือก)
+      wip_machine: !isWip ? null : isManualStart ? firstPin || null : wipMachine || null,
+      // เครื่องที่ล็อกเองรายขั้นตอน — {} = ไม่ล็อก (backend เก็บเป็น NULL)
+      step_machines: isWip ? activePins : {},
       wip_finish_date: isWip && !isManualStart ? form.wip_finish_date : null,
       flow_locked: isWip ? 1 : 0,
     };
@@ -382,17 +439,8 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                 </Form.Select>
               </Form.Group>
             </Col>
-            <Col md={4}>
-              <Form.Group>
-                <Form.Label>Release Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={form.release_date || ''}
-                  onChange={(e) => setField('release_date', e.target.value)}
-                  placeholder="Default = Today"
-                />
-              </Form.Group>
-            </Col>
+            {/* Release Date ซ่อนจากหน้าจอ (2026-10-02) — form.release_date ยังโหลด/ส่งค่าเดิมกลับเสมอ
+                เพราะ PUT /orders/:batch เขียน release_date ?? null (ตัดออกจาก payload = ลบค่าทิ้ง) */}
           </Row>
 
           {/* โซน 3: WIP */}
@@ -428,6 +476,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                       setWipFlow(f);
                       setWipStepIndex(null);
                       setWipMachine('');
+                      setStepMachines({});
                     }}
                     {...invalid(isWip && wipFlow === null)}
                   >
@@ -472,18 +521,18 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                   <Form.Control.Feedback type="invalid">ระบุ Process</Form.Control.Feedback>
                 </Form.Group>
               </Col>
+              {/* manual flow: เครื่องของขั้นตอนแรกย้ายไปอยู่แถวแรกของตาราง "4." ข้างล่าง */}
+              {!isManualStart && (
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label>
-                    {isManualStart ? '3. เครื่องของขั้นตอนแรก (ไม่บังคับ)' : '3. Last Machine'}
-                  </Form.Label>
+                  <Form.Label>3. Last Machine</Form.Label>
                   <Form.Select
                     value={wipMachine}
                     onChange={(e) => setWipMachine(e.target.value)}
                     disabled={wipStepIndex === null}
                     {...invalid(isWip && !isManualStart && !wipMachine)}
                   >
-                    <option value="">{isManualStart ? '-- ให้ระบบเลือก --' : '-- เลือกเครื่อง --'}</option>
+                    <option value="">-- เลือกเครื่อง --</option>
                     {machineOptions.map((m) => (
                       <option key={m} value={m}>
                         {m}
@@ -493,6 +542,7 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
                   <Form.Control.Feedback type="invalid">ระบุ Machine</Form.Control.Feedback>
                 </Form.Group>
               </Col>
+              )}
               <Col md={4}>
                 <Form.Group>
                   <Form.Label>WIP Finish Date</Form.Label>
@@ -512,8 +562,58 @@ const OrderFormDialog = ({ show, onHide, order, maxPriority, onSaved, onError })
               <div className="text-muted small mt-2">
                 <i className="bi bi-signpost-split text-mse me-1" aria-hidden="true" />
                 ล็อกเส้นทาง Flow {wipFlow} ตั้งแต่ขั้นตอนแรก (ยังไม่ผลิต ไม่ใช่ WIP)
-                {wipMachine ? ` · ขั้นตอนแรกทำบน ${wipMachine} เท่านั้น` : ''}
                 {' '}— ลำดับคิวและ forward/backward เป็นไปตามที่ตั้งไว้
+              </div>
+            )}
+
+            {pinSteps.length > 0 && (
+              <div className="mt-3">
+                <div className="fw-bold small mb-1">
+                  4. เครื่องที่ใช้แต่ละขั้นตอน{' '}
+                  <span className="text-muted fw-normal">(ไม่บังคับ — ว่าง = ให้ระบบเลือก)</span>
+                </div>
+                <Table size="sm" bordered className="align-middle mb-1">
+                  <thead className="table-light">
+                    <tr>
+                      <th style={{ width: 70 }}>Step</th>
+                      <th>ขั้นตอน</th>
+                      <th style={{ width: '45%' }}>เครื่อง</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pinSteps.map((st) => {
+                      const own = ownMachinesOf(st);
+                      const value = activePins[stepKeyOf(st.step_name)] || '';
+                      return (
+                        <tr key={`${st.flow_index}_${st.step_index}`}>
+                          <td className="num">{st.step_index}</td>
+                          <td>{st.step_name}</td>
+                          <td>
+                            <Form.Select
+                              size="sm"
+                              aria-label={`เครื่องของขั้นตอน ${st.step_name}`}
+                              value={value}
+                              onChange={(e) => setPin(st.step_name, e.target.value)}
+                            >
+                              <option value="">
+                                -- ให้ระบบเลือก --{own.length > 1 ? ` (${own.length} เครื่อง)` : ''}
+                              </option>
+                              {own.map((m) => (
+                                <option key={m} value={m}>{m}</option>
+                              ))}
+                            </Form.Select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+                <div className="text-muted small">
+                  <i className="bi bi-pin-angle me-1" aria-hidden="true" />
+                  {pinCount > 0
+                    ? `ล็อกเครื่อง ${pinCount} ขั้นตอน — engine ใช้เครื่องนั้นเท่านั้น (ทับการเลือกจากยอดผลิตจริง/แผนเดิม) · ขั้นที่ว่าง engine เลือกเอง`
+                    : 'ยังไม่ได้ล็อกเครื่อง — engine เลือกเครื่องเองทุกขั้นตอน'}
+                </div>
               </div>
             )}
 

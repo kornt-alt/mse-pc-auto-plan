@@ -1,6 +1,6 @@
 import {
   addDays, weekdayOf, diffDays, walkCalendar, estimateStep, estimateFlow, estimateFlowTotal,
-  NOMINAL_MINUTES, ownMachinesOf, withFirstMachine,
+  NOMINAL_MINUTES, ownMachinesOf, withFirstMachine, withStepMachines,
 } from '../wipEstimate';
 
 // ปฏิทินเต็มวัน (1240 นาที) ต่อเนื่อง n วันจาก start
@@ -262,5 +262,18 @@ describe('เครื่องของขั้นตอนแรก (manual f
   test('withFirstMachine: เครื่องไม่อยู่ในตัวเลือก/ไม่ได้เลือก → คืนของเดิม', () => {
     expect(withFirstMachine(steps, 0, 'MC-Z')[0]).toBe(steps[0]);
     expect(withFirstMachine(steps, 0, '')).toBe(steps);
+  });
+
+  test('withStepMachines สลับเวลาเฉพาะขั้นที่ล็อก (key = ชื่อ step upper) ใน flow นั้น', () => {
+    const out = withStepMachines(steps, 0, { CUT: 'MC-B' });
+    expect(out[0]).toMatchObject({ machine: 'MC-B', cycle_time: 3, setup_time: 20, handling_time: 0.5 });
+    expect(out[1]).toBe(steps[1]);
+    expect(withStepMachines(steps, 1, { CUT: 'MC-B' })[0]).toBe(steps[0]); // คนละ flow ไม่แตะ
+  });
+
+  test('withStepMachines: ไม่ล็อก / เครื่องไม่อยู่ในตัวเลือก → คืนของเดิม', () => {
+    expect(withStepMachines(steps, 0, {})).toBe(steps);
+    expect(withStepMachines(steps, 0, null)).toBe(steps);
+    expect(withStepMachines(steps, 0, { CUT: 'MC-Z' })[0]).toBe(steps[0]);
   });
 });

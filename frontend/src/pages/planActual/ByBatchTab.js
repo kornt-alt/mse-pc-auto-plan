@@ -30,6 +30,7 @@ export const kpiItems = (s) => [
   { id: 'pct', label: '% ทำได้ตามแผน', value: s.pct == null ? '-' : `${s.pct}%`, tone: attainmentTone(s.pct) },
   { id: 'ng', label: 'NG', value: trunc(s.ng).toLocaleString(), sub: s.ngPct == null ? null : `${s.ngPct}%`, tone: s.ng > 0 ? 'ng' : 'ok' },
   { id: 'behind', label: 'แถวที่ตามหลังแผน', value: s.behind, tone: s.behind > 0 ? 'warn' : 'ok' },
+  { id: 'extra', label: 'ผลิตล่วงหน้า/นอกแผน', value: trunc(s.extra).toLocaleString(), sub: s.offPlan ? `นอกแผน ${s.offPlan} แถว` : null, tone: s.extra > 0 ? 'info' : 'muted' },
 ];
 
 const ByBatchTab = ({ today }) => {
@@ -54,15 +55,16 @@ const ByBatchTab = ({ today }) => {
     setLoading(true);
     try {
       const res = await apiCall(`/visualization/plan-vs-actual?batch=${encodeURIComponent(batch)}`);
-      setData(res.data || []);
+      // เก็บทั้ง response — actual_daily ใช้ลงยอดตามวันผลิตจริง (planActual.js)
+      setData({ data: res.data || [], actualDaily: res.actual_daily });
     } catch {
-      setData([]);
+      setData({ data: [] });
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const { rows, dates } = useMemo(() => transformByBatch(data ?? []), [data]);
+  const { rows, dates } = useMemo(() => transformByBatch(data?.data ?? [], data?.actualDaily), [data]);
   const summary = useMemo(() => summarize(rows, today), [rows, today]);
 
   const handleSelect = (value) => {
@@ -80,6 +82,7 @@ const ByBatchTab = ({ today }) => {
       header: [
         { key: 'batch', label: 'Batch' }, { key: 'model', label: 'Model' }, { key: 'step', label: 'Step' },
         { key: 'machine', label: 'Machine' }, { key: 'lot', label: 'Lot', value: (r) => trunc(lotQty(r)) },
+        { key: 'off_plan', label: 'Off plan', value: (r) => (r.off_plan ? 'Y' : '') },
         { key: 'in', label: 'In', value: (r) => trunc(r.total_actual_ok + r.total_actual_ng) },
         { key: 'out', label: 'Out', value: (r) => trunc(r.total_actual_ok) },
         { key: 'planToDate', label: 'Plan to date', value: (r) => rowProgress(r, today).planToDate },
@@ -142,7 +145,7 @@ const ByBatchTab = ({ today }) => {
           <PrintHeader title={title} filters={`Model ${rows[0].model} · ${rows[0].description}`} asOf={today} />
           <KpiStrip items={kpiItems(summary)} />
           <div className="rpt-note no-print">
-            Model {rows[0].model} · {rows[0].description} · ช่องวัน = ได้ / แผน · Lot = จำนวนสั่ง · In = OK+NG · Out = OK สะสม
+            Model {rows[0].model} · {rows[0].description} · ช่องวัน = ได้ / แผน (ยอดได้ลงตามวันผลิตจริง) · นอกแผน = ผลิตบนเครื่องที่ไม่มีแผน · Lot = จำนวนสั่ง · In = OK+NG · Out = OK สะสม
           </div>
           <div className="rpt-wrap">
             <table className="rpt-table">
@@ -167,11 +170,11 @@ const ByBatchTab = ({ today }) => {
                 {rows.map((row, idx) => {
                   const p = rowProgress(row, today);
                   return (
-                    <tr key={`${row.batch}|${row.step}|${row.machine}`}>
+                    <tr key={`${row.batch}|${row.step}|${row.machine}${row.off_plan ? '|OFF' : ''}`}>
                       <td className="frozen text-center text-muted" style={frozenStyle(0)}>{idx + 1}</td>
                       <td className="frozen num fw-bold text-truncate" style={frozenStyle(1)} title={row.batch}>{row.batch}</td>
                       <td className="frozen text-truncate" style={frozenStyle(2)} title={row.step}>{row.step}</td>
-                      <td className="frozen" style={frozenStyle(3)}>{row.machine}</td>
+                      <td className="frozen text-truncate" style={frozenStyle(3)} title={row.machine}>{row.machine}{row.off_plan && <span className="chip chip-warn ms-1" title="ผลิตจริงแต่ไม่มีแผนของ batch/step นี้บนเครื่องนี้ (ทำคนละเครื่อง หรือไม่อยู่ในแผน)">นอกแผน</span>}</td>
                       <td className="frozen text-end num" style={frozenStyle(4)}>{trunc(lotQty(row))}</td>
                       <td className="frozen text-end num" style={frozenStyle(5)}>{trunc(row.total_actual_ok + row.total_actual_ng)}</td>
                       <td

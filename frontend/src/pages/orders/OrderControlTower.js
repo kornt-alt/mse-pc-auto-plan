@@ -25,6 +25,7 @@ import PlanPreviewDialog from './PlanPreviewDialog';
 import CalendarHorizonAlert from '../../components/shared/CalendarHorizonAlert';
 import LastRunAlert from './LastRunAlert';
 import PlanRunsDialog from './PlanRunsDialog';
+import SapRefreshDialog from './SapRefreshDialog';
 import { buildPlanDiff, computeSortByDueDate } from './planDiff';
 import { buildPlanDetail, buildMachineSchedule } from './planDetail';
 import OrderFilterPanel from './OrderFilterPanel';
@@ -39,6 +40,7 @@ const DATE_EDIT_META = {
   // logKinds: กล่อง Material โชว์ประวัติรวมกับการติ๊ก "Mat'l เข้า" (kind material_arrived) — เรื่องวัตถุดิบเดียวกัน
   material: { endpoint: 'material-date', bodyKey: 'material_ready_date', title: 'วันMaterial เข้า (Material Ready)', label: 'เลือกวันที่Material เข้า', icon: 'bi-box-seam', logKinds: 'material,material_arrived' },
   confirm: { endpoint: 'confirm-date', bodyKey: 'confirm_reply_date', title: 'วัน Confirm ส่งมอบ (VIP)', label: 'เลือกวัน Confirm', icon: 'bi-star-fill' },
+  // Release ซ่อนจากหน้าจอแล้ว (2026-10-02) — engine ยังอ่าน release_date, endpoint/ประวัติยังอยู่ เปิดกลับได้ด้วยการคืนคอลัมน์
   release: { endpoint: 'release-date', bodyKey: 'release_date', title: 'วัน Release งาน', label: 'เลือกวัน Release', icon: 'bi-calendar-check' },
   // ปกติระบบเติมวัน Issue ให้เองตอนรันแผน (start_date ถอยหลังตามจำนวนวันของโมเดล)
   // กล่องนี้คือการแก้มือทับ ซึ่งตั้งธง issue_date_manual กันไม่ให้ replan รอบหน้าทับกลับ
@@ -97,11 +99,12 @@ const EXPORT_COLUMNS = [
   { key: 'batch', label: 'Batch ID' },
   { key: 'model', label: 'Model' },
   { key: 'description', label: 'Description' },
+  { key: 'component_material', label: "Mat'l No." },
+  { key: 'component_material_desc', label: "Mat'l Name" },
   { key: 'wip', label: 'WIP', value: (o) => formatWip(o.wip) },
   { key: 'planning_mode', label: 'Delivery mode', value: (o) => (o.planning_mode === 'backward' ? 'Backward' : 'Forward') },
   { key: 'qty', label: 'Qty' },
   { key: 'due_date', label: 'Due Date', value: (o) => shortDate(o.due_date) },
-  { key: 'release_date', label: 'Release Date', value: (o) => shortDate(o.release_date) },
   { key: 'issue_date', label: 'Issue Date', value: (o) => shortDate(o.issue_date) },
   { key: 'issue_date_manual', label: 'Issue แก้มือ', value: (o) => (isManualIssueDate(o) ? 'ใช่' : '') },
   { key: 'material_ready_date', label: 'Material', value: (o) => shortDate(o.material_ready_date) },
@@ -119,8 +122,20 @@ const isPlanOutdated = (lastPlan, lastEdit) => {
   return lastEdit > lastPlan;
 };
 
+// orders.step_machines (เครื่องที่ล็อกเองรายขั้นตอน) → "STEP: MACHINE" ต่อบรรทัด | '' ถ้าไม่ล็อก/อ่านไม่ได้
+const pinnedMachinesText = (raw) => {
+  if (!raw) return '';
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
+    return Object.entries(obj).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('\n');
+  } catch {
+    return '';
+  }
+};
+
 // ===== แถวตาราง (sortable) =====
-const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDates, canEditMaterial, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate, onToggleArrived }) => {
+const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDates, canEditMaterial, checked, onToggleSelect, onEdit, onClose, onDelete, onTracking, onMissingAlert, onEditDate, onToggleArrived }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: order.batch,
   });
@@ -136,6 +151,17 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDa
 
   return (
     <tr ref={setNodeRef} style={style}>
+      {/* ติ๊กเลือก → "อัปเดตจาก SAP" (ADMIN/PLANNER — PUT /upload/orders/refresh เป็น writeRoles) */}
+      {canPlan && (
+        <td className="text-center align-middle">
+          <Form.Check
+            type="checkbox"
+            aria-label={`เลือก ${order.batch}`}
+            checked={checked}
+            onChange={() => onToggleSelect(order.batch)}
+          />
+        </td>
+      )}
       <td className="text-center align-middle">
         <span
           {...attributes}
@@ -200,7 +226,23 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDa
       <td className="text-truncate" style={{ maxWidth: 200 }} title={order.description || ''}>
         {order.description || '-'}
       </td>
-      <td className="num">{formatWip(order.wip)}</td>
+      {/* วัตถุดิบจาก Hana (orders.component_material*, DDL รันมือ — ไม่มีคอลัมน์ = '-') */}
+      <td className="num text-truncate" style={{ maxWidth: 160 }} title={order.component_material || ''}>
+        {order.component_material || '-'}
+      </td>
+      <td className="text-truncate" style={{ maxWidth: 200 }} title={order.component_material_desc || ''}>
+        {order.component_material_desc || '-'}
+      </td>
+      <td className="num">
+        {formatWip(order.wip)}
+        {pinnedMachinesText(order.step_machines) && (
+          <i
+            className="bi bi-pin-angle ms-1 text-mse"
+            title={`ล็อกเครื่องเอง:\n${pinnedMachinesText(order.step_machines)}`}
+            aria-label="ล็อกเครื่องเองรายขั้นตอน"
+          />
+        )}
+      </td>
       <td>{order.planning_mode === 'backward' ? 'Backward' : 'Forward'}</td>
       <td className="num">{order.qty}</td>
       <td className={`num ${due.className}`} style={due.style}>
@@ -232,19 +274,6 @@ const SortableRow = ({ order, today, dragLocked, datesLocked, canPlan, canEditDa
           />
         )}
         {logMarker(order.date_log_counts?.issue)}
-      </td>
-      <td className="num">
-        <Button
-          variant="link"
-          size="sm"
-          className={`p-0 text-decoration-none num ${order.release_date ? 'fw-bold text-mse' : 'text-muted'}`}
-          disabled={datesLocked}
-          title={canEditDates ? 'แก้วัน Release งาน' : 'ดูประวัติวัน Release'}
-          onClick={() => onEditDate('release', order)}
-        >
-          {order.release_date ? shortDate(order.release_date) : '-'}
-        </Button>
-        {logMarker(order.date_log_counts?.release)}
       </td>
       <td className="num">
         <Button
@@ -354,6 +383,8 @@ const OrderControlTower = () => {
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, variant, onConfirm}
   const [dateEdit, setDateEdit] = useState(null); // { kind:'material'|'confirm'|'release', order }
   const [showSettings, setShowSettings] = useState(false);
+  const [selected, setSelected] = useState(() => new Set()); // batch ที่ติ๊กไว้ (อัปเดตจาก SAP)
+  const [sapOrders, setSapOrders] = useState(null); // snapshot ใบที่เลือกตอนเปิด SapRefreshDialog | null = ปิด
 
   const currentUser = useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
@@ -426,6 +457,12 @@ const OrderControlTower = () => {
     try {
       const data = await apiCall('/orders');
       setOrders(data);
+      // ใบที่ปิด/ลบไปแล้วหลุดจากรายการ → ตัดออกจากที่ติ๊กไว้ด้วย
+      setSelected((prev) => {
+        if (prev.size === 0) return prev;
+        const alive = new Set(data.map((o) => o.batch));
+        return new Set([...prev].filter((b) => alive.has(b)));
+      });
       if (!baselineRef.current || baselineRef.current.length === 0) {
         baselineRef.current = JSON.parse(JSON.stringify(data));
       }
@@ -453,7 +490,9 @@ const OrderControlTower = () => {
         (o) =>
           String(o.batch || '').toLowerCase().includes(q) ||
           String(o.model || '').toLowerCase().includes(q) ||
-          String(o.description || '').toLowerCase().includes(q)
+          String(o.description || '').toLowerCase().includes(q) ||
+          String(o.component_material || '').toLowerCase().includes(q) ||
+          String(o.component_material_desc || '').toLowerCase().includes(q)
       );
     }
     if (dateFilterActive(dateFilters)) {
@@ -461,6 +500,23 @@ const OrderControlTower = () => {
     }
     return list;
   }, [orders, searchQuery, dateFilters]);
+
+  const toggleSelect = useCallback((batch) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(batch)) next.delete(batch);
+    else next.add(batch);
+    return next;
+  }), []);
+  // "เลือกทั้งหมด" = ใบที่เห็นอยู่ (ผ่านค้นหา/ตัวกรอง) — กดซ้ำเอาออกเฉพาะใบที่เห็น
+  const allVisibleSelected = filteredOrders.length > 0 && filteredOrders.every((o) => selected.has(o.batch));
+  const toggleSelectVisible = () => setSelected((prev) => {
+    const next = new Set(prev);
+    for (const o of filteredOrders) {
+      if (allVisibleSelected) next.delete(o.batch);
+      else next.add(o.batch);
+    }
+    return next;
+  });
 
   const searchActive = searchQuery.trim() !== '';
   // ตัวกรองใด ๆ (ค้นหา หรือ วันที่) กำลังทำงาน → ล็อกการลากจัดลำดับ
@@ -937,7 +993,7 @@ const OrderControlTower = () => {
             <i className="bi bi-search" aria-hidden="true" />
           </InputGroup.Text>
           <Form.Control
-            placeholder="ค้นหา Batch หรือ Model..."
+            placeholder="ค้นหา Batch, Model หรือ Mat'l..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -963,6 +1019,22 @@ const OrderControlTower = () => {
         {canPlan && (
           <Button className="btn-mse" onClick={() => setFormOrder(null)} disabled={reorderDirty}>
             <i className="bi bi-plus-lg me-1" aria-hidden="true" /> เพิ่มออเดอร์
+          </Button>
+        )}
+
+        {canPlan && (
+          <Button
+            variant="outline-primary"
+            disabled={selected.size === 0 || reorderDirty}
+            title="ดึงข้อมูลจาก SAP (Hana) ของใบที่ติ๊ก แล้วอัปเดต Model / Description / Qty / Due / Mat'l"
+            onClick={() => setSapOrders(orders.filter((o) => selected.has(o.batch)))}
+          >
+            <i className="bi bi-cloud-arrow-down me-1" aria-hidden="true" /> อัปเดตจาก SAP ({selected.size})
+          </Button>
+        )}
+        {canPlan && selected.size > 0 && (
+          <Button variant="link" className="p-0" onClick={() => setSelected(new Set())}>
+            ล้างที่เลือก
           </Button>
         )}
 
@@ -1053,17 +1125,29 @@ const OrderControlTower = () => {
               <Table hover size="sm" className="align-middle bg-white">
                 <thead>
                   <tr>
+                    {canPlan && (
+                      <th className="text-center" style={{ width: 36 }}>
+                        <Form.Check
+                          type="checkbox"
+                          aria-label="เลือกทั้งหมดที่แสดง"
+                          title="เลือก/ยกเลิกทุกใบที่แสดงอยู่"
+                          checked={allVisibleSelected}
+                          onChange={toggleSelectVisible}
+                        />
+                      </th>
+                    )}
                     <th style={{ width: 40 }}></th>
                     <th style={{ width: 90 }}>Action</th>
                     <th>Batch ID</th>
                     <th>Model</th>
                     <th>Description</th>
+                    <th>Mat'l No.</th>
+                    <th>Mat'l Name</th>
                     <th>WIP</th>
                     <th>Delivery mode</th>
                     <th>Qty</th>
                     <th>Due Date</th>
                     <th>Issue Date</th>
-                    <th>Release Date</th>
                     <th>Material</th>
                     <th>Confirm</th>
                     <th>Start</th>
@@ -1083,6 +1167,8 @@ const OrderControlTower = () => {
                       canPlan={canPlan}
                       canEditDates={canEditDates}
                       canEditMaterial={canEditMaterial}
+                      checked={selected.has(order.batch)}
+                      onToggleSelect={toggleSelect}
                       onEdit={(o) => setFormOrder(o)}
                       onClose={handleCloseOrder}
                       onDelete={handleDeleteOrder}
@@ -1100,6 +1186,18 @@ const OrderControlTower = () => {
       )}
 
       {/* ===== dialogs ===== */}
+      <SapRefreshDialog
+        show={sapOrders !== null}
+        orders={sapOrders || []}
+        onHide={() => setSapOrders(null)}
+        onDone={(msg) => {
+          setSapOrders(null);
+          setSelected(new Set());
+          showToast(`${msg} — กด Replan เพื่อคำนวณแผนใหม่`, 'success');
+          fetchOrders();
+          fetchTimestamps();
+        }}
+      />
       <OrderFormDialog
         show={formOrder !== undefined}
         order={formOrder || null}

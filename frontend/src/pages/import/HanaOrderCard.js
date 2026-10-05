@@ -6,11 +6,19 @@
 //
 // การแบ่งงาน: ที่นี่คือ React + I/O เท่านั้น ตรรกะแปลงข้อมูลทั้งหมดอยู่ใน utils/hanaOrders.js (pure, มีเทส)
 // บรรทัด new File(...) ตอนกดนำเข้าคือจุดเดียวที่แตะ Blob — เทสจะได้ไม่ต้องพึ่ง jsdom
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+//
+// order เดิม (2026-10-02): หลังดึงเสร็จถาม backend ว่า batch ไหนมีในระบบแล้ว (/upload/orders/existing)
+//   - ปุ่มนำเข้าส่ง **เฉพาะ order ใหม่** — order เดิมไม่ผ่านท่อ append เลย (ท่อนั้นเติม Mat'l ให้ order เดิมอัตโนมัติ)
+//   - order เดิมมีช่องติ๊ก → "อัปเดต order เดิมที่เลือก" ทับ model/description/qty/due/Mat'l ด้วยค่าจาก SAP
+//     (ImportPage เปิด ConfirmModal แล้วยิง PUT /upload/orders/refresh)
+//   - เช็คไม่สำเร็จ = ปิดทั้งสองปุ่ม (ไม่รู้ว่าใบไหนเดิม → นำเข้าไปจะไปแตะ order เดิมโดยไม่ได้ติ๊ก)
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, Button, Form, Row, Col, Spinner, Badge, Table } from 'react-bootstrap';
+import { apiCall } from '../../api/client';
 import { fetchHanaOrders, hanaConfigStatus, HANA_DEFAULT_PLANT } from '../../utils/hanaApi';
 import {
   buildOrderRows, buildOrdersCsvText, buildOrdersCsvMatrix, ORDER_CSV_COLUMNS,
+  diffOrderFields, buildRefreshRows, describeDiff,
 } from '../../utils/hanaOrders';
 import { exportCsv } from '../../utils/csvExport';
 
@@ -45,22 +53,32 @@ const FILTER_FIELDS = [
   { key: 'materialDesc', label: 'Material Description', type: 'text', placeholder: 'ELEMENT' },
 ];
 
-const HanaOrderCard = ({ busy, resetToken, onImport }) => {
+const isClosed = (dbRow) => String(dbRow?.plan_mode || '').toUpperCase() === 'COMPLETED';
+
+const HanaOrderCard = ({ busy, resetToken, onImport, onRefresh }) => {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null); // { rows, stats }
-  const [pending, setPending] = useState(0);  // จำนวนใบที่กำลังยืนยัน (ไว้บอกหลังบันทึกสำเร็จ)
-  const [done, setDone] = useState(0);
+  const [existing, setExisting] = useState(null); // Map batch → แถวใน DB | null = ยังไม่รู้
+  const [lookupError, setLookupError] = useState('');
+  const [selected, setSelected] = useState(() => new Set());
+  const [pending, setPending] = useState(null); // { n, verb } ของงานที่กำลังยืนยัน (ไว้บอกหลังบันทึกสำเร็จ)
+  const [done, setDone] = useState(null);
+  const reqSeq = useRef(0); // กดดึงซ้ำเร็ว ๆ — ผลของรอบเก่าต้องไม่ทับรอบใหม่
 
   const config = useMemo(() => hanaConfigStatus(), []);
 
-  // อัปโหลดจริงสำเร็จ → ล้างผลลัพธ์ (แพตเทิร์นเดียวกับ UploadRow) แล้วเตือนให้ Replan
+  // บันทึกจริงสำเร็จ (นำเข้าหรืออัปเดต) → ล้างผลลัพธ์ (แพตเทิร์นเดียวกับ UploadRow) แล้วเตือนให้ Replan
   // /upload/orders ตั้งป้าย "แผนไม่เป็นปัจจุบัน" บนหน้า Orders แล้ว (เดิมเป็น quirk ที่ไม่ markEdit) แต่ผู้ใช้อยู่หน้า Import
   // ไม่เห็นป้ายนั้น — คำเตือนให้ Replan ตรงนี้จึงยังต้องมี
   useEffect(() => {
     if (resetToken > 0) {
+      reqSeq.current += 1;
       setResult(null);
+      setExisting(null);
+      setLookupError('');
+      setSelected(new Set());
       setError('');
       setDone(pending);
     }
@@ -70,34 +88,94 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
   const setField = (key, value) => setFilters((f) => ({ ...f, [key]: value }));
 
   const handleFetch = useCallback(async () => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     setError('');
     setResult(null);
+    setExisting(null);
+    setLookupError('');
+    setSelected(new Set());
+    setDone(null);
     try {
       const raw = await fetchHanaOrders(filters);
-      setResult(buildOrderRows(raw));
+      const built = buildOrderRows(raw);
+      if (seq !== reqSeq.current) return;
+      setResult(built);
+      if (built.rows.length === 0 || built.rows.length > MAX_IMPORT_ROWS) {
+        setExisting(new Map());
+        return;
+      }
+      try {
+        const res = await apiCall('/upload/orders/existing', {
+          method: 'POST',
+          body: JSON.stringify({ batches: built.rows.map((r) => r.batch) }),
+        });
+        if (seq !== reqSeq.current) return;
+        setExisting(new Map((res?.data ?? []).map((d) => [String(d.batch).trim(), d])));
+      } catch (err) {
+        if (seq === reqSeq.current) setLookupError(err.message);
+      }
     } catch (err) {
-      setError(err.message);
+      if (seq === reqSeq.current) setError(err.message);
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, [filters]);
 
-  const rows = result ? result.rows : [];
+  const rows = useMemo(() => (result ? result.rows : []), [result]);
   const stats = result ? result.stats : null;
   const tooMany = rows.length > MAX_IMPORT_ROWS;
+  const lookupOk = existing !== null && !lookupError;
+
+  // แยกใบใหม่ / ใบเดิม + ช่องที่ต่างจากในระบบ (คำนวณครั้งเดียวต่อผลดึง)
+  const split = useMemo(() => {
+    const out = { newRows: [], existingCount: 0, diffs: new Map(), selectable: [], changed: [] };
+    if (!existing) return out;
+    for (const r of rows) {
+      const db = existing.get(r.batch);
+      if (!db) {
+        out.newRows.push(r);
+        continue;
+      }
+      out.existingCount += 1;
+      const d = diffOrderFields(r, db);
+      out.diffs.set(r.batch, d);
+      if (!isClosed(db)) {
+        out.selectable.push(r.batch);
+        if (d.length > 0) out.changed.push(r.batch);
+      }
+    }
+    return out;
+  }, [rows, existing]);
+
+  const toggle = (batch) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(batch)) next.delete(batch);
+    else next.add(batch);
+    return next;
+  });
+  const allSelected = split.selectable.length > 0 && split.selectable.every((b) => selected.has(b));
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(split.selectable));
 
   // ต้องใช้ matrix ตัวเดียวกับที่ POST — ไฟล์ที่เซฟไว้จะได้อัปกลับเข้าแถว Orders ได้จริง
+  // (ไฟล์นี้มีทุกใบ รวม order เดิม — อัปที่แถว Orders แล้ว order เดิมถูกข้าม/เติม Mat'l ตามท่อ append)
   const handleDownload = () => {
     exportCsv('hana_orders.csv', ORDER_CSV_COLUMNS, buildOrdersCsvMatrix(rows));
   };
 
   const handleImport = () => {
-    const text = buildOrdersCsvText(rows);
+    const text = buildOrdersCsvText(split.newRows);
     const file = new File([text], 'hana_orders.csv', { type: 'text/csv' });
-    setPending(rows.length);
-    setDone(0);
+    setPending({ n: split.newRows.length, verb: 'นำเข้า order ใหม่' });
+    setDone(null);
     onImport(file);
+  };
+
+  const handleRefresh = () => {
+    const payload = buildRefreshRows(rows, selected);
+    setPending({ n: payload.length, verb: 'อัปเดต order เดิม' });
+    setDone(null);
+    onRefresh(payload, payload.map((r) => ({ batch: r.batch, diff: split.diffs.get(r.batch) || [] })));
   };
 
   const disabled = busy || loading;
@@ -129,10 +207,10 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
           </div>
         )}
 
-        {done > 0 && (
+        {done && done.n > 0 && (
           <div className="alert alert-success py-2 small" role="status">
             <i className="bi bi-check-circle-fill me-2" aria-hidden="true" />
-            นำเข้าแล้ว {done.toLocaleString()} ใบ — <strong>อย่าลืมกด Replan</strong> ที่หน้า Orders เพื่อคำนวณแผนใหม่
+            {done.verb} {done.n.toLocaleString()} ใบแล้ว — <strong>อย่าลืมกด Replan</strong> ที่หน้า Orders เพื่อคำนวณแผนใหม่
           </div>
         )}
 
@@ -178,7 +256,14 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
             size="sm"
             variant="outline-secondary"
             disabled={disabled || !result}
-            onClick={() => { setFilters(EMPTY_FILTERS); setResult(null); setError(''); }}
+            onClick={() => {
+              setFilters(EMPTY_FILTERS);
+              setResult(null);
+              setExisting(null);
+              setLookupError('');
+              setSelected(new Set());
+              setError('');
+            }}
           >
             ล้างเงื่อนไข
           </Button>
@@ -204,7 +289,18 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
           <div className="mt-3">
             <div className="d-flex flex-wrap gap-2 align-items-center mb-2">
               <Badge bg="light" text="dark">ดึงมา {stats.fetched.toLocaleString()} แถว</Badge>
-              <Badge bg="success">จะนำเข้า {stats.mapped.toLocaleString()} ใบ</Badge>
+              <Badge bg="light" text="dark">{stats.mapped.toLocaleString()} ใบ</Badge>
+              {lookupOk && (
+                <>
+                  <Badge bg="success">order ใหม่ {split.newRows.length.toLocaleString()}</Badge>
+                  <Badge bg="secondary">มีในระบบแล้ว {split.existingCount.toLocaleString()}</Badge>
+                  {split.changed.length > 0 && (
+                    <Badge bg="info" text="dark" title="order เดิมที่ค่าจาก SAP ไม่ตรงกับในระบบ — ชี้ป้าย 'ต่าง' ในตารางเพื่อดูรายละเอียด">
+                      ข้อมูลต่างจากระบบ {split.changed.length.toLocaleString()}
+                    </Badge>
+                  )}
+                </>
+              )}
               {stats.duplicatesCollapsed > 0 && (
                 <Badge bg="secondary">ตัดซ้ำ {stats.duplicatesCollapsed.toLocaleString()}</Badge>
               )}
@@ -233,44 +329,116 @@ const HanaOrderCard = ({ busy, resetToken, onImport }) => {
               </div>
             )}
 
+            {lookupError && (
+              <div className="alert alert-danger py-2 small" role="alert">
+                <i className="bi bi-x-circle-fill me-2" aria-hidden="true" />
+                เช็ค order เดิมในระบบไม่สำเร็จ ({lookupError}) — ปิดปุ่มนำเข้า/อัปเดตไว้ กด &quot;ดึงข้อมูล&quot; ใหม่อีกครั้ง
+              </div>
+            )}
+
             <div style={{ maxHeight: 320, overflowY: 'auto' }}>
               <Table bordered size="sm" className="align-middle mb-1">
                 <thead className="table-light">
                   <tr>
-                    <th>batch</th><th>model</th><th>description</th><th>due_date</th><th className="text-end">qty</th>
+                    <th className="text-center" style={{ width: 36 }}>
+                      <Form.Check
+                        type="checkbox"
+                        aria-label="เลือก order เดิมทั้งหมด"
+                        title="เลือก order เดิมทั้งหมด (รวมแถวที่ไม่ได้แสดง)"
+                        checked={allSelected}
+                        disabled={disabled || !lookupOk || split.selectable.length === 0}
+                        onChange={toggleAll}
+                      />
+                    </th>
+                    <th>batch</th><th>model</th><th>description</th><th>Mat'l No.</th><th>due_date</th><th className="text-end">qty</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.slice(0, PREVIEW_LIMIT).map((r) => (
-                    <tr key={r.batch}>
-                      <td className="num">{r.batch}</td>
-                      <td className="num">{r.model}</td>
-                      <td className="small">{r.description}</td>
-                      <td className="num">{r.due_date || <span className="text-muted">-</span>}</td>
-                      <td className="num text-end">{r.qty}</td>
-                    </tr>
-                  ))}
+                  {rows.slice(0, PREVIEW_LIMIT).map((r) => {
+                    const db = existing?.get(r.batch);
+                    const diff = split.diffs.get(r.batch) || [];
+                    return (
+                      <tr key={r.batch}>
+                        <td className="text-center">
+                          {db && !isClosed(db) && (
+                            <Form.Check
+                              type="checkbox"
+                              aria-label={`เลือกอัปเดต ${r.batch}`}
+                              checked={selected.has(r.batch)}
+                              disabled={disabled}
+                              onChange={() => toggle(r.batch)}
+                            />
+                          )}
+                        </td>
+                        <td className="num text-nowrap">
+                          {r.batch}
+                          {lookupOk && !db && <span className="chip chip-ok ms-1">ใหม่</span>}
+                          {db && isClosed(db) && (
+                            <span className="chip chip-muted ms-1" title="ปิดจ๊อบแล้ว — ไม่อัปเดต">ปิดแล้ว</span>
+                          )}
+                          {db && !isClosed(db) && diff.length > 0 && (
+                            <span className="chip chip-warn ms-1" title={diff.map(describeDiff).join('\n')}>
+                              ต่าง {diff.length} ช่อง
+                            </span>
+                          )}
+                        </td>
+                        <td className="num">{r.model}</td>
+                        <td className="small">{r.description}</td>
+                        {/* ว่างทุกแถว = ชื่อ field ComponentMaterial ใน payload ไม่ตรง (ยังไม่ได้ยืนยัน) */}
+                        <td className="small" title={r.component_material_desc || ''}>
+                          {r.component_material || <span className="text-muted">-</span>}
+                        </td>
+                        <td className="num">{r.due_date || <span className="text-muted">-</span>}</td>
+                        <td className="num text-end">{r.qty}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </Table>
             </div>
             {rows.length > PREVIEW_LIMIT && (
               <div className="text-muted small">
-                แสดง {PREVIEW_LIMIT} จาก {rows.length.toLocaleString()} ใบ (นำเข้าครบทุกใบ)
+                แสดง {PREVIEW_LIMIT} จาก {rows.length.toLocaleString()} ใบ (นำเข้า/เลือกทั้งหมด ครอบคลุมทุกใบ)
               </div>
             )}
 
-            <div className="d-flex gap-2 mt-3 align-items-center">
-              <Button className="btn-mse" size="sm" disabled={disabled || tooMany} onClick={handleImport}>
+            <div className="d-flex flex-wrap gap-2 mt-3 align-items-center">
+              <Button
+                className="btn-mse"
+                size="sm"
+                disabled={disabled || tooMany || !lookupOk || split.newRows.length === 0}
+                onClick={handleImport}
+              >
                 <i className="bi bi-upload me-1" aria-hidden="true" />
-                ตรวจสอบและนำเข้า
+                ตรวจสอบและนำเข้า order ใหม่ ({split.newRows.length.toLocaleString()})
               </Button>
+              <Button
+                size="sm"
+                variant="outline-primary"
+                disabled={disabled || !lookupOk || selected.size === 0}
+                onClick={handleRefresh}
+              >
+                <i className="bi bi-arrow-repeat me-1" aria-hidden="true" />
+                อัปเดต order เดิมที่เลือก ({selected.size.toLocaleString()})
+              </Button>
+              {split.changed.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="link"
+                  className="p-0"
+                  disabled={disabled || !lookupOk}
+                  onClick={() => setSelected(new Set(split.changed))}
+                >
+                  เลือกเฉพาะที่ข้อมูลต่าง
+                </Button>
+              )}
               <Button size="sm" variant="outline-success" disabled={disabled} onClick={handleDownload}>
                 <i className="bi bi-file-earmark-arrow-down me-1" aria-hidden="true" />
                 ดาวน์โหลด CSV
               </Button>
-              <span className="text-muted small">
-                เซฟไฟล์ไว้ก่อนได้ — ถ้า session หมดอายุระหว่างยืนยัน ยังเอาไฟล์นี้ไปอัปที่แถว Orders ด้านบนได้
-              </span>
+            </div>
+            <div className="text-muted small mt-1">
+              เซฟไฟล์ไว้ก่อนได้ — ถ้า session หมดอายุระหว่างยืนยัน ยังเอาไฟล์นี้ไปอัปที่แถว Orders ด้านบนได้
             </div>
           </div>
         )}

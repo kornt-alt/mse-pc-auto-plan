@@ -509,3 +509,14 @@ test('buildUnplannedReport: ไม่มีคอลัมน์ handling_time �
   assert.equal(row.steps[0].neededMinutes, 40);
   assert.equal(row.steps[0].candidates[0].handlingTime, 0);
 });
+
+test('buildRawOrders: step_machines → WIP_StepMachines เฉพาะเมื่อมีค่า (parity: ไม่มี key ถ้าไม่ล็อก)', () => {
+  const [none] = pb.buildRawOrders([orderRow({})], {}, '2026-07-10', false);
+  assert.equal('WIP_StepMachines' in none, false);
+  const [empty] = pb.buildRawOrders([orderRow({ step_machines: '{}' })], {}, '2026-07-10', false);
+  assert.equal('WIP_StepMachines' in empty, false);
+  const [bad] = pb.buildRawOrders([orderRow({ step_machines: 'oops' })], {}, '2026-07-10', false);
+  assert.equal('WIP_StepMachines' in bad, false);
+  const [pinned] = pb.buildRawOrders([orderRow({ step_machines: '{"fin":"MC-B"}' })], {}, '2026-07-10', false);
+  assert.deepEqual(pinned.WIP_StepMachines, { FIN: 'MC-B' });
+});

@@ -1,7 +1,7 @@
 // Tests สำหรับ buildPlanVsActual — พฤติกรรมอ้างอิง api.py L1739-1872 (ระบบเดิม)
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { buildPlanVsActual } = require('../planVsActual');
+const { buildPlanVsActual, normalizeActualDaily, earliestPlanDate } = require('../planVsActual');
 
 const plan = (batch, machine, step, date_plan, qty_plan, extra = {}) => ({
   batch,
@@ -146,4 +146,27 @@ test('start/end_time ส่งผ่านโดย reference (Date เข้า
   });
   assert.strictEqual(data[0].actual_detail.start_time, start);
   assert.strictEqual(data[0].actual_detail.end_time, end);
+});
+
+// ===== actual_daily (ใหม่ 2026-10-02 — ไม่มีใน Python) =====
+test('normalizeActualDaily: trim + Number + ตัดวันก่อน minDate + ทิ้งแถวยอด 0', () => {
+  const rows = [
+    { batch: ' B1 ', machine: 'MC1 ', process_step: ' S1', work_date: '2026-10-01', ok: '5', ng: null },
+    { batch: 'B1', machine: 'MC1', process_step: 'S1', work_date: '2026-09-20', ok: 3, ng: 0 },
+    { batch: 'B2', machine: 'MC2', process_step: 'S2', work_date: '2026-10-02', ok: 0, ng: 0 },
+    { batch: 'B3', machine: 'MC3', process_step: 'S3', work_date: '', ok: 9, ng: 0 },
+  ];
+  assert.deepStrictEqual(normalizeActualDaily(rows, '2026-09-30'), [
+    { batch: 'B1', machine: 'MC1', step: 'S1', date: '2026-10-01', ok: 5, ng: 0 },
+  ]);
+  assert.strictEqual(normalizeActualDaily(rows, null).length, 2);
+  assert.deepStrictEqual(normalizeActualDaily(null), []);
+});
+
+test('earliestPlanDate: ข้าม sentinel และค่าที่ไม่ใช่วันที่', () => {
+  assert.strictEqual(earliestPlanDate([
+    { date_plan: '9999-12-31' }, { date_plan: 'NO_CAPACITY' }, { date_plan: '2026-10-05' }, { date_plan: '2026-10-03' },
+  ]), '2026-10-03');
+  assert.strictEqual(earliestPlanDate([{ date_plan: '9999-12-31' }]), null);
+  assert.strictEqual(earliestPlanDate([]), null);
 });

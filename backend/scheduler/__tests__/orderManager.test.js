@@ -254,3 +254,23 @@ test('sortForScheduler: VIP ขึ้นก่อนแม้ priority แย่
   ]);
   assert.deepEqual(finals.map((o) => o.Batch), ['V', 'P']); // VIP ก่อน แม้ priority มากกว่า
 });
+
+test('packOrders: ล็อกเครื่องรายขั้นตอนต่างกัน → ไม่ถูกมัดรวม · เหมือนกัน → รวมได้', () => {
+  const om = new OrderManager(true, { pack_window_days: 30 });
+  const lock = { WIP_FlowIndex: 1, WIP_FlowLocked: true };
+  const [finals] = om.processOrders([
+    order({ Batch: 'P', dueDate: '2026-08-01', ...lock, WIP_StepMachines: { FIN: 'MC-B' } }),
+    order({ Batch: 'Q', dueDate: '2026-08-02', ...lock, WIP_StepMachines: { FIN: 'MC-A' } }),
+    order({ Batch: 'R', dueDate: '2026-08-03', ...lock, WIP_StepMachines: { FIN: 'MC-B' } }),
+    order({ Batch: 'S', dueDate: '2026-08-04', ...lock }),
+  ]);
+  const groups = finals.map((o) => (o.original_batches || []).map((s) => s.batch).sort().join(','));
+  assert.deepEqual(groups.sort(), ['P,R', 'Q', 'S']);
+});
+
+test('parseRawInput: WIP_StepMachines มี key เฉพาะเมื่อมีค่า', () => {
+  const om = new OrderManager(false);
+  assert.equal('WIP_StepMachines' in om.parseRawInput({ Batch: 'X' }), false);
+  assert.equal('WIP_StepMachines' in om.parseRawInput({ Batch: 'X', WIP_StepMachines: {} }), false);
+  assert.deepEqual(om.parseRawInput({ Batch: 'X', WIP_StepMachines: { FIN: 'MC-B' } }).WIP_StepMachines, { FIN: 'MC-B' });
+});
