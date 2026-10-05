@@ -4,7 +4,7 @@ const express = require('express');
 const { query } = require('../db/pool');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { sendError } = require('../middleware/errorHandler');
-const { buildPlanVsActual } = require('../services/planVsActual');
+const { buildPlanVsActual, normalizeActualDaily, earliestPlanDate } = require('../services/planVsActual');
 
 const router = express.Router();
 // MC (Material Control) อ่านได้ทุกหน้าที่ MFG อ่านได้ในกลุ่ม Orders/Planning
@@ -49,10 +49,29 @@ router.get('/plan-vs-actual', verifyToken, readRoles, async (req, res) => {
     actSql += ' GROUP BY batch, machine, process_step';
     const actualRows = await query(actSql, actParams);
 
+    // ยอดจริงรายวันโรงงาน (ใหม่ 2026-10-02) — วันโรงงาน = timestamp − 7 ชม. (กฎเดียวกับ Daily Result)
+    // คิดใน SQL: timestamp เก็บเวลาไทยอยู่แล้ว จึงไม่ขึ้นกับ useUTC ของ driver
+    // ไม่มี batch filter → ตัดยอดก่อนวันแผนแรกสุด ไม่งั้นงานที่ปิดไปนานแล้วกลายเป็นแถว "นอกแผน" เต็มจอ
+    const workDateExpr = 'CONVERT(NVARCHAR(10), DATEADD(HOUR, -7, timestamp), 23)';
+    let dailySql = `SELECT batch, machine, process_step, ${workDateExpr} AS work_date,
+                           SUM(qty_ok) AS ok, SUM(qty_ng) AS ng
+                    FROM production_records WHERE 1=1`;
+    const dailyParams = { ...actParams };
+    if (machine) dailySql += ' AND machine = @machine';
+    if (batch) dailySql += ' AND batch = @batch';
+    const minDate = batch ? null : earliestPlanDate(plans);
+    if (!batch && minDate) {
+      dailySql += ` AND ${workDateExpr} >= @minDate`;
+      dailyParams.minDate = minDate;
+    }
+    dailySql += ` GROUP BY batch, machine, process_step, ${workDateExpr}`;
+    const dailyRows = !batch && !minDate ? [] : await query(dailySql, dailyParams);
+
     // start/end_time: Date → ISO string โดย res.json (เดิม naive local ISO) — UI ไม่ render ฟิลด์นี้
     res.json({
       status: 'success',
       data: buildPlanVsActual({ plans, orderRows, actualRows }),
+      actual_daily: normalizeActualDaily(dailyRows, minDate),
     });
   } catch (err) {
     sendError(req, res, err);

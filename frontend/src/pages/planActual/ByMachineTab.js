@@ -48,9 +48,10 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
     setLoading(true);
     try {
       const res = await apiCall(`/visualization/plan-vs-actual?machine=${encodeURIComponent(m)}`);
-      if (seq === reqSeq.current) setData(res.data || []);
+      // เก็บทั้ง response — actual_daily ใช้ลงยอดตามวันผลิตจริง (planActual.js)
+      if (seq === reqSeq.current) setData({ data: res.data || [], actualDaily: res.actual_daily });
     } catch {
-      if (seq === reqSeq.current) setData([]);
+      if (seq === reqSeq.current) setData({ data: [] });
     } finally {
       if (seq === reqSeq.current) setLoading(false);
     }
@@ -65,8 +66,8 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
     }
   }, [machine, fetchPlanVsActual]);
 
-  const all = useMemo(() => transformByMachine(data ?? []), [data]);
-  // ช่วงวัน: ตัดคอลัมน์วัน และแสดงเฉพาะแถวที่มีแผนในช่วง
+  const all = useMemo(() => transformByMachine(data?.data ?? [], data?.actualDaily), [data]);
+  // ช่วงวัน: ตัดคอลัมน์วัน และแสดงเฉพาะแถวที่มีแผนหรือยอดผลิตในช่วง
   const dates = all.dates.filter((d) => inRange(d, range.from, range.to));
   const rows = useMemo(
     () => all.rows.filter((r) => Object.keys(r.dates).some((d) => inRange(d, range.from, range.to))),
@@ -87,6 +88,7 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
       header: [
         { key: 'sub_batches', label: 'Batch' }, { key: 'parent_batch', label: 'Parent' }, { key: 'model', label: 'Model' },
         { key: 'step', label: 'Step' }, { key: 'lot', label: 'Lot', value: (r) => trunc(lotQty(r)) },
+        { key: 'off_plan', label: 'Off plan', value: (r) => (r.off_plan ? 'Y' : '') },
         { key: 'total_actual_ok', label: 'OK (total)', value: (r) => trunc(r.total_actual_ok) },
         { key: 'planToDate', label: 'Plan to date', value: (r) => rowProgress(r, today).planToDate },
         { key: 'pct', label: '% attainment', value: (r) => rowProgress(r, today).pct ?? '' },
@@ -143,7 +145,7 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
         <>
           <PrintHeader title={title} filters={rangeText} asOf={today} />
           <KpiStrip items={kpiItems(summary)} />
-          <div className="rpt-note no-print">ช่องวัน = ได้ / แผน ของวันนั้น · OK สะสม = ยอด OK ทั้งหมดของ batch/step บนเครื่องนี้</div>
+          <div className="rpt-note no-print">ช่องวัน = ได้ / แผน ของวันนั้น (ยอดได้ลงตามวันผลิตจริง) · นอกแผน = ผลิตบนเครื่องนี้แต่ไม่มีแผน · OK สะสม = ยอด OK ทั้งหมดของ batch/step บนเครื่องนี้</div>
           <div className="rpt-wrap">
             <table className="rpt-table">
               <thead>
@@ -167,13 +169,13 @@ const ByMachineTab = ({ today, machine, onMachineChange }) => {
                 {rows.map((row, idx) => {
                   const p = rowProgress(row, today);
                   return (
-                    <tr key={`${row.parent_batch}|${row.sub_batches}|${row.step}`}>
+                    <tr key={`${row.parent_batch}|${row.sub_batches}|${row.step}${row.off_plan ? '|OFF' : ''}`}>
                       <td className="frozen text-center text-muted" style={frozenStyle(0)}>{idx + 1}</td>
                       <td className="frozen num fw-bold text-truncate" style={frozenStyle(1)} title={`${row.sub_batches} (${row.description})`}>
                         {row.sub_batches ?? row.parent_batch}
                       </td>
                       <td className="frozen text-truncate" style={frozenStyle(2)} title={row.model}>{row.model}</td>
-                      <td className="frozen text-truncate" style={frozenStyle(3)} title={row.step}>{row.step}</td>
+                      <td className="frozen text-truncate" style={frozenStyle(3)} title={row.step}>{row.step}{row.off_plan && <span className="chip chip-warn ms-1" title="ผลิตจริงแต่ไม่มีแผนของ batch/step นี้บนเครื่องนี้ (ทำคนละเครื่อง หรือไม่อยู่ในแผน)">นอกแผน</span>}</td>
                       <td className="frozen text-end num" style={frozenStyle(4)}>{trunc(lotQty(row))}</td>
                       <td
                         className={`frozen frozen-last text-end num fw-bold tone-${p.planToDate > 0 ? attainmentTone(p.pct) : 'muted'}`}

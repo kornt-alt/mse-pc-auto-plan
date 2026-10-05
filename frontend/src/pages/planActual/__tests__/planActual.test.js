@@ -82,3 +82,66 @@ describe('attainment', () => {
     expect(flat[0]).toEqual({ batch: 'B1', step: 'TURN', date: '2026-09-24', plan: 50, ok: 50, ng: 2 });
   });
 });
+
+// ===== actual_daily: ลงยอดตามวันผลิตจริง + แถวนอกแผน (2026-10-02) =====
+describe('actual_daily', () => {
+  // แผน: B1 TURN บน NL9 วันที่ 25 (30) และ 26 (20) · B2 TURN บน NL9 วันที่ 30 (40)
+  const PLAN = [
+    item({ plan_detail: { date_plan: '2026-09-25', qty_plan: 30 }, actual_detail: { qty_ok: 30, qty_ng: 0 } }),
+    item({ plan_detail: { date_plan: '2026-09-26', qty_plan: 20 }, actual_detail: { qty_ok: 0, qty_ng: 0 } }),
+    item({ batch: 'B2', sub_batches: 'B2', plan_detail: { date_plan: '2026-09-30', qty_plan: 40 }, actual_detail: { qty_ok: 40, qty_ng: 0 } }),
+  ];
+  const DAILY = [
+    // B1 ผลิตบนเครื่องอื่น (MC5) แทน NL9
+    { batch: 'B1', machine: 'MC5', step: 'TURN', date: '2026-09-25', ok: 30, ng: 1 },
+    // B2 ถูกหยิบมาทำก่อนวันแผน (แผนวันที่ 30 ทำวันที่ 25)
+    { batch: 'B2', machine: 'NL9', step: 'TURN', date: '2026-09-25', ok: 40, ng: 0 },
+    { batch: 'B2', machine: 'NL9', step: 'SETUP-TURN', date: '2026-09-25', ok: 1, ng: 0 },
+  ];
+
+  test('ไม่ส่ง actualDaily = พฤติกรรมเดิม (ยอดลงวันแผน)', () => {
+    const { rows } = transformByMachine(PLAN);
+    const b2 = rows.find((r) => r.sub_batches === 'B2');
+    expect(b2.dates['2026-09-30']).toEqual({ plan: 40, ok: 40, ng: 0 });
+  });
+
+  test('ผลิตก่อนวันแผน: ยอดลงวันผลิตจริง ไม่ลงวันแผน', () => {
+    const { rows, dates } = transformByMachine(PLAN, DAILY);
+    const b2 = rows.find((r) => r.sub_batches === 'B2' && r.machine === 'NL9');
+    expect(b2.off_plan).toBeUndefined();
+    expect(b2.dates['2026-09-25']).toEqual({ plan: 0, ok: 40, ng: 0 });
+    expect(b2.dates['2026-09-30']).toEqual({ plan: 40, ok: 0, ng: 0 });
+    expect(dates).toContain('2026-09-25');
+  });
+
+  test('ผลิตคนละเครื่อง: แถวนอกแผนบนเครื่องที่ทำจริง · แถวแผนเดิมยังตามหลัง', () => {
+    const { rows } = transformByMachine(PLAN, DAILY);
+    const off = rows.find((r) => r.machine === 'MC5');
+    expect(off).toMatchObject({ off_plan: true, sub_batches: 'B1', parent_batch: 'B1', model: 'M1', step: 'TURN', total_qty: 0, total_actual_ok: 30 });
+    expect(off.dates['2026-09-25']).toEqual({ plan: 0, ok: 30, ng: 1 });
+    const planned = rows.find((r) => r.machine === 'NL9' && r.sub_batches === 'B1');
+    expect(rowProgress(planned, '2026-09-25')).toMatchObject({ planToDate: 30, ok: 0, behind: true });
+    // SETUP ไม่กลายเป็นแถว
+    expect(rows.some((r) => r.step.includes('SETUP'))).toBe(false);
+  });
+
+  test('By Batch: แถวนอกแผน + NG รวมจากรายวันจริง', () => {
+    const { rows } = transformByBatch(PLAN.slice(0, 2), DAILY.slice(0, 1));
+    expect(rows.map((r) => `${r.machine}|${r.off_plan ? 'OFF' : 'PLAN'}`)).toEqual(['NL9|PLAN', 'MC5|OFF']);
+    expect(rows[1]).toMatchObject({ total_actual_ok: 30, total_actual_ng: 1 });
+    expect(rows[0].total_actual_ng).toBe(0);
+  });
+
+  test('summarize: % ใช้ ok ที่ไม่เกินแผน — ของทำล่วงหน้าไม่กลบงานที่พลาด', () => {
+    const { rows } = transformByMachine(PLAN, DAILY);
+    const s = summarize(rows, '2026-09-25');
+    // แผนถึงวันนี้ 30 (B1@NL9) ทำได้ 0 → 0% แม้ OK รวมจะเป็น 70
+    expect(s).toMatchObject({ planToDate: 30, ok: 70, okInPlan: 0, extra: 70, offPlan: 1, pct: 0, behind: 1 });
+  });
+
+  test('machineSummary ส่ง actualDaily ต่อ', () => {
+    const rows = machineSummary(PLAN, '2026-09-25', DAILY);
+    expect(rows.find((r) => r.machine === 'MC5')).toMatchObject({ ok: 30, extra: 30, offPlan: 1, pct: null });
+    expect(rows.find((r) => r.machine === 'NL9')).toMatchObject({ planToDate: 30, ok: 40, okInPlan: 0, pct: 0 });
+  });
+});

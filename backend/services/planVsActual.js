@@ -133,4 +133,43 @@ const buildPlanVsActual = ({ plans, orderRows, actualRows }) => {
   return responseData;
 };
 
-module.exports = { buildPlanVsActual };
+/**
+ * ยอดผลิตจริงรายวันโรงงาน (ไม่มีใน Python — เพิ่ม 2026-10-02)
+ * buildPlanVsActual ลงยอดที่ "วันแผน" ของแถวแผนที่คีย์ batch_machine_step ตรงกันเท่านั้น →
+ * ผลิตก่อนวันแผนยอดไปโผล่วันอนาคต / ผลิตคนละเครื่องยอดหาย — หน้า Plan & Actual จึงใช้ชุดนี้ลงยอดตามวันจริง
+ * @param {Array} rows {batch, machine, process_step, work_date, ok, ng} (GROUP BY วันโรงงานใน SQL)
+ * @param {string|null} minDate ตัดยอดที่วันก่อนหน้านี้ทิ้ง (null = เอาทั้งหมด)
+ */
+const normalizeActualDaily = (rows, minDate = null) => {
+  const out = [];
+  for (const r of rows ?? []) {
+    const workDate = strip(r.work_date).slice(0, 10);
+    if (!workDate) continue;
+    if (minDate && workDate < minDate) continue;
+    const ok = Number(r.ok) || 0;
+    const ng = Number(r.ng) || 0;
+    if (ok === 0 && ng === 0) continue;
+    out.push({
+      batch: strip(r.batch),
+      machine: strip(r.machine),
+      step: strip(r.process_step),
+      date: workDate,
+      ok,
+      ng,
+    });
+  }
+  return out;
+};
+
+// วันแผนแรกสุดที่ใช้ได้ (ไม่นับ sentinel) — null ถ้าไม่มี
+const earliestPlanDate = (plans) => {
+  let min = null;
+  for (const p of plans ?? []) {
+    const d = strip(p.date_plan).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d === '9999-12-31') continue;
+    if (!min || d < min) min = d;
+  }
+  return min;
+};
+
+module.exports = { buildPlanVsActual, normalizeActualDaily, earliestPlanDate };
